@@ -155,6 +155,7 @@ auto main(int argc, char **argv) -> int {
           if (file.toi == toi) { 
             spdlog::info("{} (TOI {}) has been transmitted",
               file.location, file.toi);
+            free(file.buffer);
           }
         }
       });
