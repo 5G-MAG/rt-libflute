@@ -1,0 +1,6 @@
+LibFlute uses the following open source software:
+
+- base64.cpp and base64.h (in /utils)
+  https://renenyffenegger.ch/notes/development/Base64/Encoding-and-decoding-base-64-with-cpp
+  Copyright (C) 2004-2017, 2020, 2021 René Nyffenegger
+
