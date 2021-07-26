@@ -18,7 +18,7 @@ add_subdirectory(examples)
 
 include_directories(
     "${PROJECT_BINARY_DIR}"
-    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/include
 
     SYSTEM
     ${PROJECT_SOURCE_DIR}/utils
@@ -36,10 +36,10 @@ set(CMAKE_CXX_CLANG_TIDY clang-tidy --format-style=google --checks=clang-diagnos
 add_library(flute "")
 target_sources(flute
   PRIVATE
-    src/Receiver.cpp src/Transmitter.cpp src/Transmitter.h src/Receiver.h src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp
+    src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp
     utils/base64.cpp
   PUBLIC
-    src/Receiver.h src/File.h 
+    include/Receiver.h include/File.h 
   )
 target_include_directories(flute
   PUBLIC
