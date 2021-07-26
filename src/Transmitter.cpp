@@ -62,7 +62,8 @@ auto LibFlute::Transmitter::handle_send_to(const boost::system::error_code& erro
 auto LibFlute::Transmitter::seconds_since_epoch() -> uint64_t 
 {
   return std::chrono::duration_cast<std::chrono::seconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
+      std::chrono::system_clock::now().time_since_epoch()).count() +
+      2208988800; // use NTP epoch (1.1.1900 00:00:00)
 }
 
 auto LibFlute::Transmitter::send_fdt() -> void {

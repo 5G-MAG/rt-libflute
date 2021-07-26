@@ -50,8 +50,6 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
 
 LibFlute::Receiver::~Receiver()
 {
-  //spdlog::debug("Closing flute receiver for ALC session {}", _alc_session_id);
-  //fcl::set_flute_session_state(_alc_session_id, fcl::SExiting);
 }
 
 auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& error,
