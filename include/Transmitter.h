@@ -6,12 +6,12 @@
 // it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
-// 
+//
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU Affero General Public License for more details.
-// 
+//
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
@@ -37,6 +37,8 @@ namespace LibFlute {
           boost::asio::io_service& io_service);
 
       virtual ~Transmitter();
+
+      void enable_ipsec( uint32_t spi, const std::string& aes_key);
 
       uint64_t send(const std::string& content_location,
           const std::string& content_type,
@@ -75,5 +77,6 @@ namespace LibFlute {
       FecOti _fec_oti;
 
       completion_callback_t _completion_cb = nullptr;
+      std::string _mcast_address;
   };
 };

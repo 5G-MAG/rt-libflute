@@ -6,12 +6,12 @@
 // it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
-// 
+//
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU Affero General Public License for more details.
-// 
+//
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
@@ -34,6 +34,8 @@ namespace LibFlute {
 
       virtual ~Receiver();
 
+      void enable_ipsec( uint32_t spi, const std::string& aes_key);
+
       std::vector<std::shared_ptr<LibFlute::File>> file_list();
       void remove_expired_files(unsigned max_age);
     private:
@@ -49,5 +51,6 @@ namespace LibFlute {
       std::unique_ptr<LibFlute::FileDeliveryTable> _fdt;
       std::map<uint64_t, std::shared_ptr<LibFlute::File>> _files;
       std::mutex _files_mutex;
+      std::string _mcast_address;
   };
 };

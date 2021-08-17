@@ -15,7 +15,7 @@
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/syslog_sink.h"
 
-#include "Transmitter.h"
+#include "Receiver.h"
 
 
 using libconfig::Config;
@@ -29,13 +29,13 @@ using std::placeholders::_3;
 static void print_version(FILE *stream, struct argp_state *state);
 void (*argp_program_version_hook)(FILE *, struct argp_state *) = print_version;
 const char *argp_program_bug_address = "Austrian Broadcasting Services <obeca@ors.at>";
-static char doc[] = "FLUTE/ALC transmitter demo";  // NOLINT
+static char doc[] = "FLUTE/ALC receiver demo";  // NOLINT
 
 static struct argp_option options[] = {  // NOLINT
-    {"target", 'm', "IP", 0, "Target multicast address (default: 238.1.1.95)", 0},
-    {"port", 'p', "IP", 0, "Target port (default: 40085)", 0},
-    {"mtu", 't', "IP", 0, "Path MTU to size ALC packets for (default: 1500)", 0},
-    {"ipsec-key", 'k', "KEY", 0, "To enable IPSec/ESP encryption of packets, provide a hex-encoded AES key here", 0},
+    {"interface", 'i', "IF", 0, "IP address of the interface to bind flute receivers to (default: 0.0.0.0)", 0},
+    {"target", 'm', "IP", 0, "Multicast address to receive on (default: 238.1.1.95)", 0},
+    {"port", 'p', "IP", 0, "Multicast port (default: 40085)", 0},
+    {"ipsec-key", 'k', "KEY", 0, "To enable IPSec/ESP decryption of packets, provide a hex-encoded AES key here", 0},
     {"log-level", 'l', "LEVEL", 0,
      "Log verbosity: 0 = trace, 1 = debug, 2 = info, 3 = warn, 4 = error, 5 = "
      "critical, 6 = none. Default: 2.",
@@ -46,11 +46,11 @@ static struct argp_option options[] = {  // NOLINT
  * Holds all options passed on the command line
  */
 struct ft_arguments {
+  const char *flute_interface = {};  /**< file path of the config file. */
   const char *mcast_target = {};
   bool enable_ipsec = false;
   const char *aes_key = {};
   unsigned short mcast_port = 40085;
-  unsigned short mtu = 1500;
   unsigned log_level = 2;        /**< log level */
   char **files;
 };
@@ -64,6 +64,9 @@ static auto parse_opt(int key, char *arg, struct argp_state *state) -> error_t {
     case 'c':
       arguments->mcast_target = arg;
       break;
+    case 'i':
+      arguments->flute_interface = arg;
+      break;
     case 'k':
       arguments->aes_key = arg;
       arguments->enable_ipsec = true;
@@ -71,17 +74,8 @@ static auto parse_opt(int key, char *arg, struct argp_state *state) -> error_t {
     case 'p':
       arguments->mcast_port = static_cast<unsigned short>(strtoul(arg, nullptr, 10));
       break;
-    case 't':
-      arguments->mtu = static_cast<unsigned short>(strtoul(arg, nullptr, 10));
-      break;
     case 'l':
       arguments->log_level = static_cast<unsigned>(strtoul(arg, nullptr, 10));
-      break;
-    case ARGP_KEY_NO_ARGS:
-      argp_usage (state);
-    case ARGP_KEY_ARG:
-      arguments->files = &state->argv[state->next-1];
-      state->next = state->argc;
       break;
     default:
       return ARGP_ERR_UNKNOWN;
@@ -89,8 +83,7 @@ static auto parse_opt(int key, char *arg, struct argp_state *state) -> error_t {
   return 0;
 }
 
-static char args_doc[] = "[FILE...]";
-static struct argp argp = {options, parse_opt, args_doc, doc,
+static struct argp argp = {options, parse_opt, nullptr, doc,
                            nullptr, nullptr,   nullptr};
 
 /**
@@ -113,11 +106,12 @@ auto main(int argc, char **argv) -> int {
   struct ft_arguments arguments;
   /* Default values */
   arguments.mcast_target = "238.1.1.95";
+  arguments.flute_interface= "0.0.0.0";
 
   argp_parse(&argp, argc, argv, 0, nullptr, &arguments);
 
   // Set up logging
-  std::string ident = "flute-transmitter";
+  std::string ident = "flute-receiver";
   auto syslog_logger = spdlog::syslog_logger_mt("syslog", ident, LOG_PID | LOG_PERROR | LOG_CONS );
 
   spdlog::set_level(
@@ -125,61 +119,20 @@ auto main(int argc, char **argv) -> int {
   spdlog::set_pattern("[%H:%M:%S.%f %z] [%^%l%$] [thr %t] %v");
 
   spdlog::set_default_logger(syslog_logger);
-  spdlog::info("FLTUE transmitter demo starting up");
+  spdlog::info("FLTUE receiver demo starting up");
 
-
-  struct FsFile {
-    std::string location;
-    char* buffer;
-    size_t len;
-    uint32_t toi;
-  };
-  std::vector<FsFile> files;
-
-  // read the file contents into buffers
-  for (int j = 0; arguments.files[j]; j++) {
-    std::string location = arguments.files[j];
-    std::ifstream file(arguments.files[j], std::ios::binary | std::ios::ate);
-    std::streamsize size = file.tellg();
-    file.seekg(0, std::ios::beg);
-
-    char* buffer = (char*)malloc(size);
-    file.read(buffer, size);
-    files.push_back(FsFile{ arguments.files[j], buffer, (size_t)size});
-  }
 
   boost::asio::io_service io;
-  LibFlute::Transmitter transmitter(
+  LibFlute::Receiver receiver(
+      arguments.flute_interface,
       arguments.mcast_target,
       arguments.mcast_port,
       0,
-      arguments.mtu,
       io);
 
   if (arguments.enable_ipsec) 
   {
-    transmitter.enable_ipsec(1, arguments.aes_key);
-  }
-
-  transmitter.register_completion_callback(
-      [&files](uint32_t toi) {
-        for (auto& file : files) {
-          if (file.toi == toi) { 
-            spdlog::info("{} (TOI {}) has been transmitted",
-              file.location, file.toi);
-          }
-        }
-      });
-
-  for (auto& file : files) {
-    file.toi = transmitter.send( file.location,
-        "application/octet-stream",
-        transmitter.seconds_since_epoch() + 60, // 1 minute from now
-        file.buffer,
-        file.len
-        );
-    spdlog::info("Queued {} ({} bytes) for transmission, TOI is {}",
-        file.location, file.len, file.toi);
+    receiver.enable_ipsec(1, arguments.aes_key);
   }
 
   io.run();

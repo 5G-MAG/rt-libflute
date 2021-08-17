@@ -16,23 +16,9 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 #pragma once
+#include <string>
 
-namespace LibFlute {
-  enum class ContentEncoding {
-    NONE,
-    ZLIB,
-    DEFLATE,
-    GZIP
-  };
-
-  enum class FecScheme {
-    CompactNoCode
-  };
-
-  struct FecOti {
-    FecScheme encoding_id;
-    uint64_t transfer_length;
-    uint32_t encoding_symbol_length;
-    uint32_t max_source_block_length;
-  };
+namespace LibFlute::IpSec {
+  enum class Direction { In, Out };
+  void enable_esp(uint32_t spi, const std::string& dest_address, Direction direction, const std::string& key);
 };

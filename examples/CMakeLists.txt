@@ -24,8 +24,16 @@ include_directories(
 set(CMAKE_CXX_CLANG_TIDY clang-tidy --format-style=google --checks=clang-diagnostic-*,clang-analyzer-*,-*,bugprone*,modernize*,performance*)
 
 add_executable(flute-transmitter flute-transmitter.cpp)
+add_executable(flute-receiver flute-receiver.cpp)
 
 target_link_libraries( flute-transmitter
+    LINK_PUBLIC
+    spdlog::spdlog
+    config++
+    flute
+    pthread
+)
+target_link_libraries( flute-receiver
     LINK_PUBLIC
     spdlog::spdlog
     config++

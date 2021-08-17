@@ -6,12 +6,12 @@
 // it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
-// 
+//
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU Affero General Public License for more details.
-// 
+//
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
@@ -21,6 +21,7 @@
 #include <iostream>
 #include <string>
 #include "spdlog/spdlog.h"
+#include "IpSec.h"
 
 
 LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& address,
@@ -28,6 +29,7 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
     boost::asio::io_service& io_service)
     : _socket(io_service)
     , _tsi(tsi)
+    , _mcast_address(address)
 {
     boost::asio::ip::udp::endpoint listen_endpoint(
         boost::asio::ip::address::from_string(iface), port);
@@ -50,6 +52,13 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
 
 LibFlute::Receiver::~Receiver()
 {
+  //spdlog::debug("Closing flute receiver for ALC session {}", _alc_session_id);
+  //fcl::set_flute_session_state(_alc_session_id, fcl::SExiting);
+}
+
+auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key) -> void 
+{
+  LibFlute::IpSec::enable_esp(spi, _mcast_address, LibFlute::IpSec::Direction::In, key);
 }
 
 auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& error,

@@ -6,12 +6,12 @@
 // it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
-// 
+//
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU Affero General Public License for more details.
-// 
+//
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
@@ -22,7 +22,7 @@
 #include <string>
 #include "spdlog/spdlog.h"
 #include "Transmitter.h"
-
+#include "IpSec.h"
 
 LibFlute::Transmitter::Transmitter ( const std::string& address,
     short port, uint64_t tsi, unsigned short mtu,
@@ -34,6 +34,7 @@ LibFlute::Transmitter::Transmitter ( const std::string& address,
     , _io_service(io_service)
     , _tsi(tsi)
     , _mtu(mtu)
+    , _mcast_address(address)
 {
   _max_payload = mtu -
     20 - // IPv4 header
@@ -41,6 +42,9 @@ LibFlute::Transmitter::Transmitter ( const std::string& address,
     32 - // ALC Header with EXT_FDT and EXT_FTI
      4;  // SBN and ESI for compact no-code FEC
   uint32_t max_source_block_length = 64;
+
+  _socket.set_option(boost::asio::ip::multicast::enable_loopback(true));
+  _socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
 
   _fec_oti = FecOti{FecScheme::CompactNoCode, 0, _max_payload, max_source_block_length};
   _fdt = std::make_unique<FileDeliveryTable>(1, _fec_oti);
@@ -53,6 +57,11 @@ LibFlute::Transmitter::Transmitter ( const std::string& address,
 
 LibFlute::Transmitter::~Transmitter() = default;
 
+auto LibFlute::Transmitter::enable_ipsec(uint32_t spi, const std::string& key) -> void 
+{
+  LibFlute::IpSec::enable_esp(spi, _mcast_address, LibFlute::IpSec::Direction::Out, key);
+}
+
 auto LibFlute::Transmitter::handle_send_to(const boost::system::error_code& error) -> void
 {
   if (!error) {
@@ -62,8 +71,7 @@ auto LibFlute::Transmitter::handle_send_to(const boost::system::error_code& erro
 auto LibFlute::Transmitter::seconds_since_epoch() -> uint64_t 
 {
   return std::chrono::duration_cast<std::chrono::seconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count() +
-      2208988800; // use NTP epoch (1.1.1900 00:00:00)
+      std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
 auto LibFlute::Transmitter::send_fdt() -> void {
@@ -89,7 +97,8 @@ auto LibFlute::Transmitter::send(
     char* data,
     size_t length) -> uint64_t 
 {
-  auto toi = _toi++;
+  auto toi = _toi;
+  _toi++;
   if (_toi == 0) _toi = 1; // clamp to >= 1 in case it wraps
 
   auto file = std::make_shared<File>(

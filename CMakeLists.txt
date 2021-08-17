@@ -13,6 +13,7 @@ find_package(spdlog REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(OpenSSL REQUIRED)
 pkg_check_modules(TINYXML REQUIRED IMPORTED_TARGET tinyxml2)
+pkg_check_modules(NETLINK REQUIRED IMPORTED_TARGET libnl-3.0)
 
 add_subdirectory(examples)
 
@@ -23,7 +24,7 @@ include_directories(
     SYSTEM
     ${PROJECT_SOURCE_DIR}/utils
     ${SPDLOG_INCLUDEDIR}
-    PkgConfig::TINYXML
+    PkgConfig::NETLINK
     )
 
 configure_file("include/Version.h.in" "Version.h")
@@ -36,10 +37,10 @@ set(CMAKE_CXX_CLANG_TIDY clang-tidy --format-style=google --checks=clang-diagnos
 add_library(flute "")
 target_sources(flute
   PRIVATE
-    src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp
+  src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp src/IpSec.cpp
     utils/base64.cpp
   PUBLIC
-    include/Receiver.h include/File.h 
+    include/Receiver.h include/Transmitter.h include/File.h
   )
 target_include_directories(flute
   PUBLIC
@@ -55,5 +56,6 @@ target_link_libraries( flute
     pthread
     crypto
     PkgConfig::TINYXML
+    PkgConfig::NETLINK
 )
 
