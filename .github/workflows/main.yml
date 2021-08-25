@@ -36,4 +36,8 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         # Default Doxyfile build documentation to html directory.
         # Change the directory if changes in Doxyfile
-        publish_dir: ./html
+        publish_dir: ./html/
+        enable_jekyll: false
+        allow_empty_commit: false
+        force_orphan: true
+        publish_branch: gh-pages
