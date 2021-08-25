@@ -23,7 +23,6 @@
 #include "spdlog/spdlog.h"
 #include "Transmitter.h"
 #include "IpSec.h"
-
 LibFlute::Transmitter::Transmitter ( const std::string& address,
     short port, uint64_t tsi, unsigned short mtu,
     boost::asio::io_service& io_service)
@@ -95,7 +94,7 @@ auto LibFlute::Transmitter::send(
     const std::string& content_type,
     uint32_t expires,
     char* data,
-    size_t length) -> uint64_t 
+    size_t length) -> uint16_t 
 {
   auto toi = _toi;
   _toi++;
