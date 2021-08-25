@@ -23,24 +23,79 @@
 #include "EncodingSymbol.h"
 
 namespace LibFlute {
+  /**
+   *  A class for parsing and creating ALC packets
+   */
   class AlcPacket {
     public:
+     /**
+      *  Create an ALC packet from payload data
+      *
+      *  @param data Received data to be parsed
+      *  @param len Length of the buffer
+      */
       AlcPacket(char* data, size_t len);
+
+     /**
+      *  Create an ALC packet from encoding symbols 
+      *
+      *  @param tsi Transport Stream Identifier
+      *  @param toi Transport Object Identifier
+      *  @param fec_oti OTI values
+      *  @param symbols Vector of encoding symbols
+      *  @param max_size Maximum payload size
+      *  @param fdt_instance_id FDT instance ID (only relevant for FDT with TOI=0)
+      */
       AlcPacket(uint16_t tsi, uint16_t toi, FecOti fec_oti, const std::vector<EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id);
+
+     /**
+      *  Default destructor.
+      */
       ~AlcPacket();
 
+     /**
+      *  Get the TSI
+      */
       uint64_t tsi() const { return _tsi; };
+
+     /**
+      *  Get the TOI
+      */
       uint64_t toi() const { return _toi; };
 
-      FecScheme fec_scheme() const { return _fec_oti.encoding_id; };
+     /**
+      *  Get the FEC OTI values
+      */
       const FecOti& fec_oti() const { return _fec_oti; };
 
+     /**
+      *  Get the LCT header length
+      */
       size_t header_length() const  { return _lct_header.lct_header_len * 4; };
 
+     /**
+      *  Get the FDT instance ID 
+      */
       uint32_t fdt_instance_id() const { return _fdt_instance_id; };
+
+     /**
+      *  Get the FEC scheme
+      */
+      FecScheme fec_scheme() const { return _fec_oti.encoding_id; };
+
+     /**
+      *  Get the content encoding
+      */
       ContentEncoding content_encoding() const { return _content_encoding; };
 
+     /**
+      *  Get a pointer to the payload data of the constructed packet
+      */
       char* data() const { return _buffer; };
+
+     /**
+      *  Get the payload size
+      */
       size_t size() const { return _len; };
 
     private:

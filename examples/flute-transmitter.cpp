@@ -128,6 +128,8 @@ auto main(int argc, char **argv) -> int {
   spdlog::info("FLTUE transmitter demo starting up");
 
 
+  // We're responsible for buffer management, so create a vector of structs that
+  // are going to hold the data buffers
   struct FsFile {
     std::string location;
     char* buffer;
@@ -136,7 +138,7 @@ auto main(int argc, char **argv) -> int {
   };
   std::vector<FsFile> files;
 
-  // read the file contents into buffers
+  // read the file contents into the buffers
   for (int j = 0; arguments.files[j]; j++) {
     std::string location = arguments.files[j];
     std::ifstream file(arguments.files[j], std::ios::binary | std::ios::ate);
@@ -148,7 +150,10 @@ auto main(int argc, char **argv) -> int {
     files.push_back(FsFile{ arguments.files[j], buffer, (size_t)size});
   }
 
+  // Create a Boost io_service
   boost::asio::io_service io;
+
+  // Construct the transmitter class
   LibFlute::Transmitter transmitter(
       arguments.mcast_target,
       arguments.mcast_port,
@@ -156,21 +161,25 @@ auto main(int argc, char **argv) -> int {
       arguments.mtu,
       io);
 
+  // Configure IPSEC ESP, if enabled
   if (arguments.enable_ipsec) 
   {
     transmitter.enable_ipsec(1, arguments.aes_key);
   }
 
+  // Register a completion callback
   transmitter.register_completion_callback(
       [&files](uint32_t toi) {
         for (auto& file : files) {
           if (file.toi == toi) { 
             spdlog::info("{} (TOI {}) has been transmitted",
               file.location, file.toi);
+            // could free() the buffer here
           }
         }
       });
 
+  // Queue all the files 
   for (auto& file : files) {
     file.toi = transmitter.send( file.location,
         "application/octet-stream",
@@ -182,6 +191,7 @@ auto main(int argc, char **argv) -> int {
         file.location, file.len, file.toi);
   }
 
+  // Start the io_service, and thus sending data
   io.run();
 
 exit:

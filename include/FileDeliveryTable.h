@@ -23,14 +23,41 @@
 #include "flute_types.h"
 
 namespace LibFlute {
+  /**
+   *  A class for parsing and creating FLUTE FDTs (File Delivery Tables).
+   */
   class FileDeliveryTable {
     public:
+     /**
+      *  Create an empty FDT
+      *
+      *  @param instance_id FDT instance ID to set
+      *  @param fec_oti Global FEC OTI parameters
+      */
       FileDeliveryTable(uint32_t instance_id, FecOti fec_oti);
+
+     /**
+      *  Parse an XML string and create a FDT class from it
+      *
+      *  @param instance_id FDT instance ID (from ALC headers)
+      *  @param buffer String containing the FDT XML
+      *  @param len Length of the buffer
+      */
       FileDeliveryTable(uint32_t instance_id, char* buffer, size_t len);
+
+     /**
+      *  Default destructor.
+      */
       virtual ~FileDeliveryTable() {};
 
+     /**
+      *  Get the FDT instance ID
+      */
       uint32_t instance_id() { return _instance_id; };
 
+     /**
+      *  An entry for a file in the FDT
+      */
       struct FileEntry {
         uint32_t toi;
         std::string content_location;
@@ -41,11 +68,29 @@ namespace LibFlute {
         FecOti fec_oti;
       };
 
+     /**
+      *  Set the expiry value
+      */
       void set_expires(uint64_t exp) { _expires = exp; };
+
+     /**
+      *  Add a file entry
+      */
       void add(const FileEntry& entry);
+
+     /**
+      *  Remove a file entry
+      */
       void remove(uint32_t toi);
+
+     /**
+      *  Serialize the FDT to an XML string
+      */
       std::string to_string() const;
 
+     /**
+      *  Get all current file entries
+      */
       std::vector<FileEntry> file_entries() { return _file_entries; };
 
     private:

@@ -108,6 +108,7 @@ auto main(int argc, char **argv) -> int {
   arguments.mcast_target = "238.1.1.95";
   arguments.flute_interface= "0.0.0.0";
 
+  // Parse the arguments
   argp_parse(&argp, argc, argv, 0, nullptr, &arguments);
 
   // Set up logging
@@ -121,8 +122,10 @@ auto main(int argc, char **argv) -> int {
   spdlog::set_default_logger(syslog_logger);
   spdlog::info("FLTUE receiver demo starting up");
 
-
+  // Create a Boost io_service
   boost::asio::io_service io;
+
+  // Create the receiver
   LibFlute::Receiver receiver(
       arguments.flute_interface,
       arguments.mcast_target,
@@ -130,11 +133,13 @@ auto main(int argc, char **argv) -> int {
       0,
       io);
 
+  // Configure IPSEC, if enabled
   if (arguments.enable_ipsec) 
   {
     receiver.enable_ipsec(1, arguments.aes_key);
   }
 
+  // Start the IO service
   io.run();
 
 exit:

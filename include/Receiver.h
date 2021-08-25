@@ -26,17 +26,47 @@
 #include "FileDeliveryTable.h"
 
 namespace LibFlute {
+  /**
+   *  FLUTE receiver class. Construct an instance of this to receive files from a FLUTE/ALC session.
+   */
   class Receiver {
     public:
+     /**
+      *  Default constructor.
+      *
+      *  @param iface Address of the (local) interface to bind the receiving socket to. 0.0.0.0 = any.
+      *  @param address Multicast address
+      *  @param port Target port 
+      *  @param tsi TSI value of the session 
+      *  @param io_service Boost io_service to run the socket operations in (must be provided by the caller)
+      */
       Receiver( const std::string& iface, const std::string& address, 
           short port, uint64_t tsi,
           boost::asio::io_service& io_service);
 
+     /**
+      *  Default destructor.
+      */
       virtual ~Receiver();
 
+     /**
+      *  Enable IPSEC ESP decryption of FLUTE payloads.
+      *
+      *  @param spi Security Parameter Index value to use
+      *  @param key AES key as a hex string (without leading 0x). Must be an even number of characters long.
+      */
       void enable_ipsec( uint32_t spi, const std::string& aes_key);
 
+     /**
+      *  List all current files
+      *
+      *  @return Vector of all files currently in the FDT
+      */
       std::vector<std::shared_ptr<LibFlute::File>> file_list();
+
+     /**
+      *  Remove files from the list that are older than max_age seconds
+      */
       void remove_expired_files(unsigned max_age);
     private:
 

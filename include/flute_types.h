@@ -17,7 +17,22 @@
 //
 #pragma once
 
+/** \mainpage LibFlute - ALC/FLUTE library
+ *
+ * The library contains two simple **example applications** as a starting point:
+ * - examples/flute-transmitter.cpp for sending files
+ * - examples/flute-receiver.cpp for receiving files
+ *
+ * The relevant public headers for using this library are
+ * - LibFlute::Transmitter (in include/Transmitter.h), and
+ * - LibFlute::Receiver (in include/Receiver.h)
+ *
+ */
+
 namespace LibFlute {
+  /**
+   *  Content Encodings
+   */
   enum class ContentEncoding {
     NONE,
     ZLIB,
@@ -25,10 +40,16 @@ namespace LibFlute {
     GZIP
   };
 
+  /**
+   *  Error correction schemes 
+   */
   enum class FecScheme {
     CompactNoCode
   };
 
+  /**
+   *  OTI values struct
+   */
   struct FecOti {
     FecScheme encoding_id;
     uint64_t transfer_length;
