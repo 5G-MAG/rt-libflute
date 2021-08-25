@@ -120,7 +120,7 @@ auto main(int argc, char **argv) -> int {
   spdlog::set_pattern("[%H:%M:%S.%f %z] [%^%l%$] [thr %t] %v");
 
   spdlog::set_default_logger(syslog_logger);
-  spdlog::info("FLTUE receiver demo starting up");
+  spdlog::info("FLUTE receiver demo starting up");
 
   // Create a Boost io_service
   boost::asio::io_service io;
