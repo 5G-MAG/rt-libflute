@@ -16,6 +16,7 @@
 #include "spdlog/sinks/syslog_sink.h"
 
 #include "Receiver.h"
+#include "File.h"
 
 
 using libconfig::Config;
@@ -138,6 +139,15 @@ auto main(int argc, char **argv) -> int {
   {
     receiver.enable_ipsec(1, arguments.aes_key);
   }
+
+  receiver.register_completion_callback(
+      [](std::shared_ptr<LibFlute::File> file) {
+        spdlog::info("{} (TOI {}) has been received",
+          file->meta().content_location, file->meta().toi);
+        FILE* fd = fopen(file->meta().content_location.c_str(), "wb");
+        fwrite(file->buffer(), 1, file->length(), fd);
+        fclose(fd);
+      });
 
   // Start the IO service
   io.run();
