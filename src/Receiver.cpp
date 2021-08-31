@@ -109,6 +109,10 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
           }
 
           spdlog::debug("File with TOI {} completed", alc.toi());
+          if (alc.toi() != 0 && _completion_cb) {
+            _completion_cb(_files[alc.toi()]);
+          }
+
           if (alc.toi() == 0) { // parse complete FDT
             _fdt = std::make_unique<LibFlute::FileDeliveryTable>(
                 alc.fdt_instance_id(), _files[alc.toi()]->buffer(), _files[alc.toi()]->length());

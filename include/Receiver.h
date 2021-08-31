@@ -32,6 +32,13 @@ namespace LibFlute {
   class Receiver {
     public:
      /**
+      *  Definition of a file reception completion callback function that can be
+      *  registered through ::register_completion_callback.
+      *
+      *  @returns shared_ptr to the received file
+      */
+      typedef std::function<void(std::shared_ptr<LibFlute::File>)> completion_callback_t;
+     /**
       *  Default constructor.
       *
       *  @param iface Address of the (local) interface to bind the receiving socket to. 0.0.0.0 = any.
@@ -68,6 +75,13 @@ namespace LibFlute {
       *  Remove files from the list that are older than max_age seconds
       */
       void remove_expired_files(unsigned max_age);
+
+     /**
+      *  Register a callback for file reception notifications
+      *
+      *  @param cb Function to call on file completion
+      */
+      void register_completion_callback(completion_callback_t cb) { _completion_cb = cb; };
     private:
 
       void handle_receive_from(const boost::system::error_code& error,
@@ -82,5 +96,7 @@ namespace LibFlute {
       std::map<uint64_t, std::shared_ptr<LibFlute::File>> _files;
       std::mutex _files_mutex;
       std::string _mcast_address;
+
+      completion_callback_t _completion_cb = nullptr;
   };
 };
