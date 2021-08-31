@@ -33,8 +33,9 @@ static char doc[] = "FLUTE/ALC transmitter demo";  // NOLINT
 
 static struct argp_option options[] = {  // NOLINT
     {"target", 'm', "IP", 0, "Target multicast address (default: 238.1.1.95)", 0},
-    {"port", 'p', "IP", 0, "Target port (default: 40085)", 0},
-    {"mtu", 't', "IP", 0, "Path MTU to size ALC packets for (default: 1500)", 0},
+    {"port", 'p', "PORT", 0, "Target port (default: 40085)", 0},
+    {"mtu", 't', "BYTES", 0, "Path MTU to size ALC packets for (default: 1500)", 0},
+    {"rate-limit", 'r', "KBPS", 0, "Transmit rate limit (kbps), 0 = no limit, default: 1000 (1 Mbps)", 0},
     {"ipsec-key", 'k', "KEY", 0, "To enable IPSec/ESP encryption of packets, provide a hex-encoded AES key here", 0},
     {"log-level", 'l', "LEVEL", 0,
      "Log verbosity: 0 = trace, 1 = debug, 2 = info, 3 = warn, 4 = error, 5 = "
@@ -51,6 +52,7 @@ struct ft_arguments {
   const char *aes_key = {};
   unsigned short mcast_port = 40085;
   unsigned short mtu = 1500;
+  uint32_t rate_limit = 1000;
   unsigned log_level = 2;        /**< log level */
   char **files;
 };
@@ -73,6 +75,9 @@ static auto parse_opt(int key, char *arg, struct argp_state *state) -> error_t {
       break;
     case 't':
       arguments->mtu = static_cast<unsigned short>(strtoul(arg, nullptr, 10));
+      break;
+    case 'r':
+      arguments->rate_limit = static_cast<uint32_t>(strtoul(arg, nullptr, 10));
       break;
     case 'l':
       arguments->log_level = static_cast<unsigned>(strtoul(arg, nullptr, 10));
@@ -159,6 +164,7 @@ auto main(int argc, char **argv) -> int {
       arguments.mcast_port,
       0,
       arguments.mtu,
+      arguments.rate_limit,
       io);
 
   // Configure IPSEC ESP, if enabled
