@@ -36,6 +36,7 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
     _socket.open(listen_endpoint.protocol());
     _socket.set_option(boost::asio::ip::multicast::enable_loopback(true));
     _socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
+    _socket.set_option(boost::asio::socket_base::receive_buffer_size(16*1024*1024));
     _socket.bind(listen_endpoint);
 
     // Join the multicast group.
