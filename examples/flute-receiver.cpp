@@ -35,7 +35,7 @@ static char doc[] = "FLUTE/ALC receiver demo";  // NOLINT
 static struct argp_option options[] = {  // NOLINT
     {"interface", 'i', "IF", 0, "IP address of the interface to bind flute receivers to (default: 0.0.0.0)", 0},
     {"target", 'm', "IP", 0, "Multicast address to receive on (default: 238.1.1.95)", 0},
-    {"port", 'p', "IP", 0, "Multicast port (default: 40085)", 0},
+    {"port", 'p', "PORT", 0, "Multicast port (default: 40085)", 0},
     {"ipsec-key", 'k', "KEY", 0, "To enable IPSec/ESP decryption of packets, provide a hex-encoded AES key here", 0},
     {"log-level", 'l', "LEVEL", 0,
      "Log verbosity: 0 = trace, 1 = debug, 2 = info, 3 = warn, 4 = error, 5 = "
@@ -62,7 +62,7 @@ struct ft_arguments {
 static auto parse_opt(int key, char *arg, struct argp_state *state) -> error_t {
   auto arguments = static_cast<struct ft_arguments *>(state->input);
   switch (key) {
-    case 'c':
+    case 'm':
       arguments->mcast_target = arg;
       break;
     case 'i':

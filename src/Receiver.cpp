@@ -36,6 +36,7 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
     _socket.open(listen_endpoint.protocol());
     _socket.set_option(boost::asio::ip::multicast::enable_loopback(true));
     _socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
+    _socket.set_option(boost::asio::socket_base::receive_buffer_size(16*1024*1024));
     _socket.bind(listen_endpoint);
 
     // Join the multicast group.
@@ -66,10 +67,12 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
 {
   if (!error)
   {
+    spdlog::debug("Received {} bytes", bytes_recvd);
     try {
       auto alc = LibFlute::AlcPacket(_data, bytes_recvd);
 
       if (alc.tsi() != _tsi) {
+        spdlog::warn("Discarding packet for unknown TSI {}", alc.tsi());
         return;
       }
 
@@ -90,6 +93,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
             alc.content_encoding());
 
         for (const auto& symbol : encoding_symbols) {
+          spdlog::debug("received TOI {} SBN {} ID {}", alc.toi(), symbol.source_block_number(), symbol.id() );
           _files[alc.toi()]->put_symbol(symbol);
         }
 
@@ -127,9 +131,11 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
             }
           }
         }
+      } else {
+        spdlog::debug("Discarding packet for unknown or already completed file with TOI {}", alc.toi());
       }
     } catch (std::exception ex) {
-      spdlog::error("Failed to decode ALC/FLUTE packet: {}", ex.what());
+      spdlog::warn("Failed to decode ALC/FLUTE packet: {}", ex.what());
     }
 
     _socket.async_receive_from(
@@ -137,6 +143,10 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
         boost::bind(&LibFlute::Receiver::handle_receive_from, this,
           boost::asio::placeholders::error,
           boost::asio::placeholders::bytes_transferred));
+  }
+  else 
+  {
+    spdlog::error("receive_from error: {}", error.message());
   }
 }
 

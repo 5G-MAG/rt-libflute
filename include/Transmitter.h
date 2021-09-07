@@ -48,10 +48,12 @@ namespace LibFlute {
       *  @param port Target port 
       *  @param tsi TSI value for the session 
       *  @param mtu Path MTU to size FLUTE packets for 
+      *  @param rate_limit Transmit rate limit (in kbps)
       *  @param io_service Boost io_service to run the socket operations in (must be provided by the caller)
       */
       Transmitter( const std::string& address, 
           short port, uint64_t tsi, unsigned short mtu,
+          uint32_t rate_limit,
           boost::asio::io_service& io_service);
 
      /**
@@ -129,5 +131,7 @@ namespace LibFlute {
 
       completion_callback_t _completion_cb = nullptr;
       std::string _mcast_address;
+
+      uint32_t _rate_limit = 0;
   };
 };

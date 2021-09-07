@@ -24,7 +24,7 @@
 #include "Transmitter.h"
 #include "IpSec.h"
 LibFlute::Transmitter::Transmitter ( const std::string& address,
-    short port, uint64_t tsi, unsigned short mtu,
+    short port, uint64_t tsi, unsigned short mtu, uint32_t rate_limit,
     boost::asio::io_service& io_service)
     : _endpoint(boost::asio::ip::address::from_string(address), port)
     , _socket(io_service, _endpoint.protocol())
@@ -33,6 +33,7 @@ LibFlute::Transmitter::Transmitter ( const std::string& address,
     , _io_service(io_service)
     , _tsi(tsi)
     , _mtu(mtu)
+    , _rate_limit(rate_limit)
     , _mcast_address(address)
 {
   _max_payload = mtu -
@@ -137,7 +138,8 @@ auto LibFlute::Transmitter::file_transmitted(uint32_t toi) -> void
 
 auto LibFlute::Transmitter::send_next_packet() -> void
 {
-  bool packet_queued = false;
+  uint32_t bytes_queued = 0;
+
   if (_files.size()) {
     for (auto& file_m : _files) {
       auto file = file_m.second;
@@ -146,8 +148,11 @@ auto LibFlute::Transmitter::send_next_packet() -> void
         auto symbols = file->get_next_symbols(_max_payload);
 
         if (symbols.size()) {
+          for(const auto& symbol : symbols) {
+            spdlog::debug("sending TOI {} SBN {} ID {}", file->meta().toi, symbol.source_block_number(), symbol.id() );
+          }
           auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id());
-          packet_queued = true;
+          bytes_queued += packet->size();
 
           _socket.async_send_to(
               boost::asio::buffer(packet->data(), packet->size()), _endpoint,
@@ -155,19 +160,33 @@ auto LibFlute::Transmitter::send_next_packet() -> void
                 const boost::system::error_code& error,
                 std::size_t bytes_transferred)
               {
-                file->mark_completed(symbols, !error);
-                if (file->complete()) {
-                  file_transmitted(file->meta().toi);
+                if (error) {
+                  spdlog::debug("sent_to error: {}", error.message());
+                } else {
+                  file->mark_completed(symbols, !error);
+                  if (file->complete()) {
+                    file_transmitted(file->meta().toi);
+                  }
                 }
-                _io_service.post(boost::bind(&Transmitter::send_next_packet, this));
               });
         } 
         break;
       }
     }
   } 
-  if (!packet_queued) {
+  if (!bytes_queued) {
     _send_timer.expires_from_now(boost::posix_time::milliseconds(10));
     _send_timer.async_wait( boost::bind(&Transmitter::send_next_packet, this));
+  } else {
+    if (_rate_limit == 0) {
+      _io_service.post(boost::bind(&Transmitter::send_next_packet, this));
+    } else {
+      auto send_duration = ((bytes_queued * 8.0) / (double)_rate_limit/1000.0) * 1000.0 * 1000.0;
+      spdlog::debug("Rate limiter: queued {} bytes, limit {} kbps, next send in {} us", 
+          bytes_queued, _rate_limit, send_duration);
+      _send_timer.expires_from_now(boost::posix_time::microseconds(
+            static_cast<int>(ceil(send_duration))));
+      _send_timer.async_wait( boost::bind(&Transmitter::send_next_packet, this));
+    }
   }
 }
