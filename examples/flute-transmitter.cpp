@@ -63,7 +63,7 @@ struct ft_arguments {
 static auto parse_opt(int key, char *arg, struct argp_state *state) -> error_t {
   auto arguments = static_cast<struct ft_arguments *>(state->input);
   switch (key) {
-    case 'c':
+    case 'm':
       arguments->mcast_target = arg;
       break;
     case 'k':
@@ -130,7 +130,7 @@ auto main(int argc, char **argv) -> int {
   spdlog::set_pattern("[%H:%M:%S.%f %z] [%^%l%$] [thr %t] %v");
 
   spdlog::set_default_logger(syslog_logger);
-  spdlog::info("FLTUE transmitter demo starting up");
+  spdlog::info("FLUTE transmitter demo starting up");
 
 
   // We're responsible for buffer management, so create a vector of structs that
