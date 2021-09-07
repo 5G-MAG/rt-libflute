@@ -35,7 +35,7 @@ When installing libflute, it comes with two demo applications, a receiver and a 
 To start the Flute receiver type in
 
 ````
-sudo ./flute-receiver
+./flute-receiver
 ````
 
 The application will listen at the multicast address 238.1.1.95 by default. Check the help page for additional options (``./flute-receiver --help``).
@@ -45,7 +45,7 @@ The application will listen at the multicast address 238.1.1.95 by default. Chec
 To start the Flute transmitter type in
 
 ````
-sudo ./flute-transmitter -r 100000 file
+./flute-transmitter -r 100000 file
 ````
 
 For file enter a file that shall be transmitted.
@@ -76,7 +76,16 @@ sudo ip xfrm policy list
 sudo ./flute-transmitter -r 100000 -k fdce8eaf81e3da02fa67e07df975c0111ecfa906561e762e5f3e78dfe106498e file
 ````
 Outgoing packages with a specific destination address (can be set with -m) will be encrypted with the specified IPSec key.
-  
+
+* Optional: Setting superuser rights
+
+To allow the application to set policy entries without superuser privileges for IPSec, set its capabilites 
+accordingly. Alternatively, you can run it with superuser rights (``sudo ...``).
+````
+sudo setcap 'cap_net_admin=eip' ./flute-transmitter
+sudo setcap 'cap_net_admin=eip' ./flute-receiver
+````
+
 ## Documentation
 
 Documentation of the source code can be found at: https://austrian-broadcasting-services.github.io/libflute/
