@@ -12,7 +12,8 @@ Installation of libflute consits of 3 simple steps:
 
 ### Step 1: Getting the source code
 ````
-git clone https://github.com/Austrian-Broadcasting-Services/libflute.git
+cd ~
+git clone https://github.com/5G-MAG/libflute.git
 ````
 
 ### Step 2: Build setup
@@ -89,4 +90,3 @@ sudo setcap 'cap_net_admin=eip' ./flute-receiver
 ## Documentation
 
 Documentation of the source code can be found at: https://austrian-broadcasting-services.github.io/libflute/
-
