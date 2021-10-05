@@ -44,7 +44,7 @@ target_sources(flute
   )
 target_include_directories(flute
   PUBLIC
-    ${CMAKE_CURRENT_LIST_DIR}/src/
+    ${CMAKE_CURRENT_LIST_DIR}/include/
   )
 
 #add_library(flute src/Receiver.cpp src/Receiver.h src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp)

@@ -29,6 +29,7 @@
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/syslog_sink.h"
 
+#include "Version.h"
 #include "Receiver.h"
 #include "File.h"
 
@@ -105,7 +106,9 @@ static struct argp argp = {options, parse_opt, nullptr, doc,
  * Print the program version in MAJOR.MINOR.PATCH format.
  */
 void print_version(FILE *stream, struct argp_state * /*state*/) {
-  fprintf(stream, "1.0.0\n");
+  fprintf(stream, "%s.%s.%s\n", std::to_string(VERSION_MAJOR).c_str(),
+          std::to_string(VERSION_MINOR).c_str(),
+          std::to_string(VERSION_PATCH).c_str());
 }
 
 
@@ -137,34 +140,38 @@ auto main(int argc, char **argv) -> int {
   spdlog::set_default_logger(syslog_logger);
   spdlog::info("FLUTE receiver demo starting up");
 
-  // Create a Boost io_service
-  boost::asio::io_service io;
+  try {
+    // Create a Boost io_service
+    boost::asio::io_service io;
 
-  // Create the receiver
-  LibFlute::Receiver receiver(
-      arguments.flute_interface,
-      arguments.mcast_target,
-      arguments.mcast_port,
-      0,
-      io);
+    // Create the receiver
+    LibFlute::Receiver receiver(
+        arguments.flute_interface,
+        arguments.mcast_target,
+        (short)arguments.mcast_port,
+        0,
+        io);
 
-  // Configure IPSEC, if enabled
-  if (arguments.enable_ipsec) 
-  {
-    receiver.enable_ipsec(1, arguments.aes_key);
-  }
+    // Configure IPSEC, if enabled
+    if (arguments.enable_ipsec) 
+    {
+      receiver.enable_ipsec(1, arguments.aes_key);
+    }
 
-  receiver.register_completion_callback(
-      [](std::shared_ptr<LibFlute::File> file) {
+    receiver.register_completion_callback(
+        [](std::shared_ptr<LibFlute::File> file) { //NOLINT
         spdlog::info("{} (TOI {}) has been received",
-          file->meta().content_location, file->meta().toi);
+            file->meta().content_location, file->meta().toi);
         FILE* fd = fopen(file->meta().content_location.c_str(), "wb");
         fwrite(file->buffer(), 1, file->length(), fd);
         fclose(fd);
-      });
+        });
 
-  // Start the IO service
-  io.run();
+    // Start the IO service
+    io.run();
+  } catch (std::exception ex ) {
+    spdlog::error("Exiting on unhandled exception: %s", ex.what());
+  }
 
 exit:
   return 0;

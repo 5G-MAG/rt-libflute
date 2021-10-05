@@ -48,12 +48,6 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
           boost::asio::placeholders::bytes_transferred));
 }
 
-LibFlute::Receiver::~Receiver()
-{
-  //spdlog::debug("Closing flute receiver for ALC session {}", _alc_session_id);
-  //fcl::set_flute_session_state(_alc_session_id, fcl::SExiting);
-}
-
 auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key) -> void 
 {
   LibFlute::IpSec::enable_esp(spi, _mcast_address, LibFlute::IpSec::Direction::In, key);

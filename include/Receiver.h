@@ -51,7 +51,7 @@ namespace LibFlute {
      /**
       *  Default destructor.
       */
-      virtual ~Receiver();
+      virtual ~Receiver() = default;
 
      /**
       *  Enable IPSEC ESP decryption of FLUTE payloads.

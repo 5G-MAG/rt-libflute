@@ -13,6 +13,6 @@
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#define VERSION_MAJOR @gw_VERSION_MAJOR@
-#define VERSION_MINOR @gw_VERSION_MINOR@
-#define VERSION_PATCH @gw_VERSION_PATCH@
+#define VERSION_MAJOR @libflute_VERSION_MAJOR@
+#define VERSION_MINOR @libflute_VERSION_MINOR@
+#define VERSION_PATCH @libflute_VERSION_PATCH@

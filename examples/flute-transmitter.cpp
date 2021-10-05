@@ -29,6 +29,7 @@
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/syslog_sink.h"
 
+#include "Version.h"
 #include "Transmitter.h"
 
 
@@ -108,7 +109,7 @@ static auto parse_opt(int key, char *arg, struct argp_state *state) -> error_t {
   return 0;
 }
 
-static char args_doc[] = "[FILE...]";
+static char args_doc[] = "[FILE...]"; //NOLINT
 static struct argp argp = {options, parse_opt, args_doc, doc,
                            nullptr, nullptr,   nullptr};
 
@@ -116,10 +117,10 @@ static struct argp argp = {options, parse_opt, args_doc, doc,
  * Print the program version in MAJOR.MINOR.PATCH format.
  */
 void print_version(FILE *stream, struct argp_state * /*state*/) {
-  fprintf(stream, "1.0.0\n");
+  fprintf(stream, "%s.%s.%s\n", std::to_string(VERSION_MAJOR).c_str(),
+          std::to_string(VERSION_MINOR).c_str(),
+          std::to_string(VERSION_PATCH).c_str());
 }
-
-
 
 /**
  *  Main entry point for the program.
@@ -146,73 +147,76 @@ auto main(int argc, char **argv) -> int {
   spdlog::set_default_logger(syslog_logger);
   spdlog::info("FLUTE transmitter demo starting up");
 
+  try {
+    // We're responsible for buffer management, so create a vector of structs that
+    // are going to hold the data buffers
+    struct FsFile {
+      std::string location;
+      char* buffer;
+      size_t len;
+      uint32_t toi;
+    };
+    std::vector<FsFile> files;
 
-  // We're responsible for buffer management, so create a vector of structs that
-  // are going to hold the data buffers
-  struct FsFile {
-    std::string location;
-    char* buffer;
-    size_t len;
-    uint32_t toi;
-  };
-  std::vector<FsFile> files;
+    // read the file contents into the buffers
+    for (int j = 0; arguments.files[j]; j++) {
+      std::string location = arguments.files[j];
+      std::ifstream file(arguments.files[j], std::ios::binary | std::ios::ate);
+      std::streamsize size = file.tellg();
+      file.seekg(0, std::ios::beg);
 
-  // read the file contents into the buffers
-  for (int j = 0; arguments.files[j]; j++) {
-    std::string location = arguments.files[j];
-    std::ifstream file(arguments.files[j], std::ios::binary | std::ios::ate);
-    std::streamsize size = file.tellg();
-    file.seekg(0, std::ios::beg);
+      char* buffer = (char*)malloc(size);
+      file.read(buffer, size);
+      files.push_back(FsFile{ arguments.files[j], buffer, (size_t)size});
+    }
 
-    char* buffer = (char*)malloc(size);
-    file.read(buffer, size);
-    files.push_back(FsFile{ arguments.files[j], buffer, (size_t)size});
-  }
+    // Create a Boost io_service
+    boost::asio::io_service io;
 
-  // Create a Boost io_service
-  boost::asio::io_service io;
+    // Construct the transmitter class
+    LibFlute::Transmitter transmitter(
+        arguments.mcast_target,
+        (short)arguments.mcast_port,
+        0,
+        arguments.mtu,
+        arguments.rate_limit,
+        io);
 
-  // Construct the transmitter class
-  LibFlute::Transmitter transmitter(
-      arguments.mcast_target,
-      arguments.mcast_port,
-      0,
-      arguments.mtu,
-      arguments.rate_limit,
-      io);
+    // Configure IPSEC ESP, if enabled
+    if (arguments.enable_ipsec) 
+    {
+      transmitter.enable_ipsec(1, arguments.aes_key);
+    }
 
-  // Configure IPSEC ESP, if enabled
-  if (arguments.enable_ipsec) 
-  {
-    transmitter.enable_ipsec(1, arguments.aes_key);
-  }
-
-  // Register a completion callback
-  transmitter.register_completion_callback(
-      [&files](uint32_t toi) {
+    // Register a completion callback
+    transmitter.register_completion_callback(
+        [&files](uint32_t toi) {
         for (auto& file : files) {
-          if (file.toi == toi) { 
-            spdlog::info("{} (TOI {}) has been transmitted",
-              file.location, file.toi);
-            // could free() the buffer here
-          }
+        if (file.toi == toi) { 
+        spdlog::info("{} (TOI {}) has been transmitted",
+            file.location, file.toi);
+        // could free() the buffer here
         }
-      });
+        }
+        });
 
-  // Queue all the files 
-  for (auto& file : files) {
-    file.toi = transmitter.send( file.location,
-        "application/octet-stream",
-        transmitter.seconds_since_epoch() + 60, // 1 minute from now
-        file.buffer,
-        file.len
-        );
-    spdlog::info("Queued {} ({} bytes) for transmission, TOI is {}",
-        file.location, file.len, file.toi);
+    // Queue all the files 
+    for (auto& file : files) {
+      file.toi = transmitter.send( file.location,
+          "application/octet-stream",
+          transmitter.seconds_since_epoch() + 60, // 1 minute from now
+          file.buffer,
+          file.len
+          );
+      spdlog::info("Queued {} ({} bytes) for transmission, TOI is {}",
+          file.location, file.len, file.toi);
+    }
+
+    // Start the io_service, and thus sending data
+    io.run();
+  } catch (std::exception ex ) {
+    spdlog::error("Exiting on unhandled exception: %s", ex.what());
   }
-
-  // Start the io_service, and thus sending data
-  io.run();
 
 exit:
   return 0;
