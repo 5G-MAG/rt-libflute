@@ -34,7 +34,7 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
   auto fdt_instance = doc.FirstChildElement("FDT-Instance");
   _expires = std::stoull(fdt_instance->Attribute("Expires"));
 
-  spdlog::debug("Received new FDT with instance ID {}", instance_id);
+  spdlog::debug("Received new FDT with instance ID {}: {}", instance_id, buffer);
 
   uint8_t def_fec_encoding_id = 0;
   auto val = fdt_instance->Attribute("FEC-OTI-FEC-Encoding-ID");

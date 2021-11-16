@@ -74,6 +74,11 @@ namespace LibFlute {
       void remove_expired_files(unsigned max_age);
 
      /**
+      *  Remove a file from the list that matches the passed content location
+      */
+      void remove_file_with_content_location(std::string cl);
+
+     /**
       *  Register a callback for file reception notifications
       *
       *  @param cb Function to call on file completion
