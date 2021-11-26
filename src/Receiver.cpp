@@ -56,6 +56,8 @@ auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key) -> v
 auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& error,
     size_t bytes_recvd) -> void
 {
+  if (!_running) return;
+
   if (!error)
   {
     spdlog::trace("Received {} bytes", bytes_recvd);
@@ -106,6 +108,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
           spdlog::debug("File with TOI {} completed", alc.toi());
           if (alc.toi() != 0 && _completion_cb) {
             _completion_cb(_files[alc.toi()]);
+            _files.erase(alc.toi());
           }
 
           if (alc.toi() == 0) { // parse complete FDT
@@ -165,7 +168,7 @@ auto LibFlute::Receiver::remove_expired_files(unsigned max_age) -> void
   }
 }
 
-auto LibFlute::Receiver::remove_file_with_content_location(std::string cl) -> void
+auto LibFlute::Receiver::remove_file_with_content_location(const std::string& cl) -> void
 {
   const std::lock_guard<std::mutex> lock(_files_mutex);
   for (auto it = _files.cbegin(); it != _files.cend();)
