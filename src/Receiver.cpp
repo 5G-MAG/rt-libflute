@@ -56,9 +56,11 @@ auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key) -> v
 auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& error,
     size_t bytes_recvd) -> void
 {
+  if (!_running) return;
+
   if (!error)
   {
-    spdlog::debug("Received {} bytes", bytes_recvd);
+    spdlog::trace("Received {} bytes", bytes_recvd);
     try {
       auto alc = LibFlute::AlcPacket(_data, bytes_recvd);
 
@@ -106,6 +108,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
           spdlog::debug("File with TOI {} completed", alc.toi());
           if (alc.toi() != 0 && _completion_cb) {
             _completion_cb(_files[alc.toi()]);
+            _files.erase(alc.toi());
           }
 
           if (alc.toi() == 0) { // parse complete FDT
@@ -116,14 +119,15 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
             for (const auto& file_entry : _fdt->file_entries()) {
               // automatically receive all files in the FDT
               if (_files.find(file_entry.toi) == _files.end()) {
-                spdlog::debug("Starting reception for file with TOI {}", file_entry.toi);
+                spdlog::debug("Starting reception for file with TOI {}: {} ({})", file_entry.toi,
+                    file_entry.content_location, file_entry.content_type);
                 _files.emplace(file_entry.toi, std::make_shared<LibFlute::File>(file_entry));
               }
             }
           }
         }
       } else {
-        spdlog::debug("Discarding packet for unknown or already completed file with TOI {}", alc.toi());
+        spdlog::trace("Discarding packet for unknown or already completed file with TOI {}", alc.toi());
       }
     } catch (std::exception ex) {
       spdlog::warn("Failed to decode ALC/FLUTE packet: {}", ex.what());
@@ -157,6 +161,19 @@ auto LibFlute::Receiver::remove_expired_files(unsigned max_age) -> void
   {
     auto age = time(nullptr) - it->second->received_at();
     if ( it->second->meta().content_location != "bootstrap.multipart"  && age > max_age) {
+      it = _files.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+auto LibFlute::Receiver::remove_file_with_content_location(const std::string& cl) -> void
+{
+  const std::lock_guard<std::mutex> lock(_files_mutex);
+  for (auto it = _files.cbegin(); it != _files.cend();)
+  {
+    if ( it->second->meta().content_location == cl) {
       it = _files.erase(it);
     } else {
       ++it;

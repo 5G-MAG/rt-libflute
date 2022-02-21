@@ -74,11 +74,18 @@ namespace LibFlute {
       void remove_expired_files(unsigned max_age);
 
      /**
+      *  Remove a file from the list that matches the passed content location
+      */
+      void remove_file_with_content_location(const std::string& cl);
+
+     /**
       *  Register a callback for file reception notifications
       *
       *  @param cb Function to call on file completion
       */
       void register_completion_callback(completion_callback_t cb) { _completion_cb = cb; };
+
+      void stop() { _running = false; }
     private:
 
       void handle_receive_from(const boost::system::error_code& error,
@@ -95,5 +102,7 @@ namespace LibFlute {
       std::string _mcast_address;
 
       completion_callback_t _completion_cb = nullptr;
+
+      bool _running = true;
   };
 };

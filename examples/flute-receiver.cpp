@@ -149,7 +149,7 @@ auto main(int argc, char **argv) -> int {
         arguments.flute_interface,
         arguments.mcast_target,
         (short)arguments.mcast_port,
-        0,
+        16,
         io);
 
     // Configure IPSEC, if enabled
