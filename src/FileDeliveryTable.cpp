@@ -79,6 +79,8 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     val = file->Attribute("Transfer-Length");
     if (val != nullptr) {
       transfer_length = strtoull(val, nullptr, 0);
+    } else {
+      transfer_length = content_length;
     }
 
     auto content_md5 = file->Attribute("Content-MD5");
