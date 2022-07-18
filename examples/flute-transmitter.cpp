@@ -37,10 +37,6 @@ using libconfig::Config;
 using libconfig::FileIOException;
 using libconfig::ParseException;
 
-using std::placeholders::_1;
-using std::placeholders::_2;
-using std::placeholders::_3;
-
 static void print_version(FILE *stream, struct argp_state *state);
 void (*argp_program_version_hook)(FILE *, struct argp_state *) = print_version;
 const char *argp_program_bug_address = "Austrian Broadcasting Services <obeca@ors.at>";

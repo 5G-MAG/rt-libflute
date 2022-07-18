@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project (libflute VERSION 0.10.0)
+project (libflute VERSION 0.11.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -32,7 +32,7 @@ configure_file("include/Version.h.in" "Version.h")
 link_directories(
     )
 
-set(CMAKE_CXX_CLANG_TIDY clang-tidy --format-style=google --checks=clang-diagnostic-*,clang-analyzer-*,-*,bugprone*,modernize*,performance*,-modernize-use-trailing-return-type,-modernize-avoid-c-arrays,-modernize-avoid-bind)
+set(CMAKE_CXX_CLANG_TIDY clang-tidy)
 
 add_library(flute "")
 target_sources(flute
