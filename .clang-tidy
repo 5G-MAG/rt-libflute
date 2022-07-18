@@ -1,0 +1,8 @@
+---
+Checks: 'clang-diagnostic-*,clang-analyzer-*,-*,bugprone*,-bugprone-narrowing-conversions,-bugprone-implicit-widening-of-multiplication-result,-bugprone-easily-swappable-parameters,-modernize*,performance*,-modernize-use-trailing-return-type,-modernize-avoid-c-arrays,-modernize-avoid-bind'
+WarningsAsErrors: ''
+HeaderFilterRegex: ''
+AnalyzeTemporaryDtors: false
+FormatStyle: google
+...
+

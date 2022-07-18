@@ -5,7 +5,7 @@
 
 ## Installation guide
 
-Installation of libflute consits of 3 simple steps:
+Installation of libflute consists of 3 simple steps:
 1. Getting the source code
 2. Build setup
 3. Building
@@ -80,7 +80,7 @@ Outgoing packages with a specific destination address (can be set with -m) will 
 
 * Optional: Setting superuser rights
 
-To allow the application to set policy entries without superuser privileges for IPSec, set its capabilites 
+To allow the application to set policy entries without superuser privileges for IPSec, set its capabilities 
 accordingly. Alternatively, you can run it with superuser rights (``sudo ...``).
 ````
 sudo setcap 'cap_net_admin=eip' ./flute-transmitter
@@ -89,4 +89,4 @@ sudo setcap 'cap_net_admin=eip' ./flute-receiver
 
 ## Documentation
 
-Documentation of the source code can be found at: https://austrian-broadcasting-services.github.io/libflute/
+Documentation of the source code can be found at: https://5g-mag.github.io/rt-libflute/
