@@ -13,7 +13,7 @@ Installation of libflute consists of 3 simple steps:
 ### Step 1: Getting the source code
 ````
 cd ~
-git clone https://github.com/5G-MAG/libflute.git
+git clone https://github.com/5G-MAG/rt-libflute.git
 ````
 
 ### Step 2: Build setup
