@@ -173,7 +173,7 @@ auto main(int argc, char **argv) -> int {
     LibFlute::Transmitter transmitter(
         arguments.mcast_target,
         (short)arguments.mcast_port,
-        0,
+        16,
         arguments.mtu,
         arguments.rate_limit,
         io);
