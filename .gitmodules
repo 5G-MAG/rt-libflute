@@ -1,3 +1,4 @@
 [submodule "freeRaptor"]
 	path = freeRaptor
 	url = https://github.com/Etua/freeRaptor.git
+	branch = dev

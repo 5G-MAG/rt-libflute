@@ -10,9 +10,18 @@ Installation of libflute consists of 2 simple steps:
 2. Building
 
 ### Step 1: Getting the source code
+
+This repository uses git submodules so it must be cloned with the following command
+
 ````
 git clone --recurse-submodules https://github.com/5G-MAG/rt-libflute.git
 ````
+
+If you had checked it out before the submodules were added or ran git clone withouth the argument then initialise and update the submodules by running
+
+```
+git submodule update --init
+```
 
 ### Step 2: Building
 ````
