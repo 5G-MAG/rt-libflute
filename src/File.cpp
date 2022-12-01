@@ -23,6 +23,7 @@
 #include <sstream>
 #include <iomanip>
 #include <openssl/md5.h>
+#include <openssl/evp.h>
 #include "base64.h"
 #include "spdlog/spdlog.h"
 
@@ -67,8 +68,8 @@ LibFlute::File::File(uint32_t toi,
     _buffer = data;
   }
 
-  unsigned char md5[MD5_DIGEST_LENGTH];
-  MD5((const unsigned char*)data, length, md5);
+  unsigned char md5[EVP_MAX_MD_SIZE];
+  calculate_md5(data, length, &md5[0]);
 
   _meta.toi = toi;
   _meta.content_location = std::move(content_location);
@@ -141,8 +142,8 @@ auto LibFlute::File::check_file_completion() -> void
 
   if (_complete && !_meta.content_md5.empty()) {
     //check MD5 sum
-    unsigned char md5[MD5_DIGEST_LENGTH];
-    MD5((const unsigned char*)buffer(), length(), md5);
+    unsigned char md5[EVP_MAX_MD_SIZE];
+    calculate_md5(buffer(),length(),&md5[0]);
 
     auto content_md5 = base64_decode(_meta.content_md5);
     if (memcmp(md5, content_md5.c_str(), MD5_DIGEST_LENGTH) != 0) {
@@ -237,4 +238,24 @@ auto LibFlute::File::mark_completed(const std::vector<EncodingSymbol>& symbols, 
       check_file_completion();
     }
   }
+}
+
+int LibFlute::calculate_md5(char *data, int length, unsigned char *return_sum)
+{
+  EVP_MD_CTX*   context = EVP_MD_CTX_new();
+  const EVP_MD* md = EVP_md5();
+  unsigned int  md_len;
+
+  EVP_DigestInit_ex2(context, md, NULL);
+  EVP_DigestUpdate(context, data, length);
+  EVP_DigestFinal_ex(context, return_sum, &md_len);
+  EVP_MD_CTX_free(context);
+
+  char buf [EVP_MAX_MD_SIZE * 2] = {{0}};
+  for (unsigned int i = 0 ; i < md_len ; ++i){
+    sprintf(&buf[i*2],  "%02x", return_sum[i]);
+  }
+  spdlog::debug("MD5 Digest is {}", buf);
+
+  return md_len;
 }

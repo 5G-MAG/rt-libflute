@@ -163,4 +163,6 @@ namespace LibFlute {
 
       uint16_t _fdt_instance_id = 0;
   };
+
+  int calculate_md5(char *data, int length, unsigned char *return_sum);
 };
