@@ -16,7 +16,6 @@ include_directories(
     "${PROJECT_BINARY_DIR}"
     ${PROJECT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/src
-    ${PROJECT_SOURCE_DIR}/freeRaptor
 
     SYSTEM
     ${SPDLOG_INCLUDEDIR}
