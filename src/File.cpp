@@ -84,6 +84,7 @@ LibFlute::File::File(uint32_t toi,
       break;
     case FecScheme::Raptor:
       //TODO
+      spdlog::warn("File.cpp - Raptor FEC scheme is not done yet");
       throw "Raptor FEC scheme is not done yet";
       break;
     default:

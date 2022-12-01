@@ -21,9 +21,9 @@
 #include "spdlog/spdlog.h"
 #include "Transmitter.h"
 #include "IpSec.h"
-LibFlute::Transmitter::Transmitter ( const std::string& address,
-    short port, uint64_t tsi, unsigned short mtu, uint32_t rate_limit,
-    boost::asio::io_service& io_service)
+LibFlute::Transmitter::Transmitter ( const std::string& address, short port,
+uint64_t tsi, unsigned short mtu, uint32_t rate_limit, FecScheme fec_scheme,
+boost::asio::io_service& io_service)
     : _endpoint(boost::asio::ip::address::from_string(address), port)
     , _socket(io_service, _endpoint.protocol())
     , _fdt_timer(io_service)
@@ -33,6 +33,7 @@ LibFlute::Transmitter::Transmitter ( const std::string& address,
     , _mtu(mtu)
     , _rate_limit(rate_limit)
     , _mcast_address(address)
+    ,_fec_scheme(fec_scheme)
 {
   _max_payload = mtu -
     20 - // IPv4 header
@@ -44,7 +45,8 @@ LibFlute::Transmitter::Transmitter ( const std::string& address,
   _socket.set_option(boost::asio::ip::multicast::enable_loopback(true));
   _socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
 
-  _fec_oti = FecOti{FecScheme::CompactNoCode, 0, _max_payload, max_source_block_length};
+  //TODO: calculate max payload and max source block length properly based on FEC scheme
+  _fec_oti = FecOti{_fec_scheme, 0, _max_payload, max_source_block_length};
   _fdt = std::make_unique<FileDeliveryTable>(1, _fec_oti);
 
   _fdt_timer.expires_from_now(boost::posix_time::seconds(_fdt_repeat_interval));

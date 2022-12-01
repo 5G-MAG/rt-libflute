@@ -31,6 +31,7 @@
 
 #include "Version.h"
 #include "Transmitter.h"
+#include "flute_types.h"
 
 
 using libconfig::Config;
@@ -44,6 +45,7 @@ static char doc[] = "FLUTE/ALC transmitter demo";  // NOLINT
 
 static struct argp_option options[] = {  // NOLINT
     {"target", 'm', "IP", 0, "Target multicast address (default: 238.1.1.95)", 0},
+    {"fec", 'f', "FEC Scheme", 0, "Choose a scheme for Forward Error Correction. Compact No Code = 0, Raptor = 1 (default is 0)", 0},
     {"port", 'p', "PORT", 0, "Target port (default: 40085)", 0},
     {"mtu", 't', "BYTES", 0, "Path MTU to size ALC packets for (default: 1500)", 0},
     {"rate-limit", 'r', "KBPS", 0, "Transmit rate limit (kbps), 0 = no limit, default: 1000 (1 Mbps)", 0},
@@ -65,6 +67,7 @@ struct ft_arguments {
   unsigned short mtu = 1500;
   uint32_t rate_limit = 1000;
   unsigned log_level = 2;        /**< log level */
+  unsigned fec = 0;        /**< log level */
   char **files;
 };
 
@@ -92,6 +95,13 @@ static auto parse_opt(int key, char *arg, struct argp_state *state) -> error_t {
       break;
     case 'l':
       arguments->log_level = static_cast<unsigned>(strtoul(arg, nullptr, 10));
+      break;
+    case 'f':
+      arguments->fec = static_cast<unsigned>(strtoul(arg, nullptr, 10));
+      if ( (arguments->fec | 1) != 1 ) {
+        spdlog::error("Invalid FEC scheme ! Please pick either 0 (Compact No Code) or 1 (Raptor)");
+        return ARGP_ERR_UNKNOWN;
+      }
       break;
     case ARGP_KEY_NO_ARGS:
       argp_usage (state);
@@ -176,6 +186,7 @@ auto main(int argc, char **argv) -> int {
         16,
         arguments.mtu,
         arguments.rate_limit,
+        LibFlute::FecScheme(arguments.fec),
         io);
 
     // Configure IPSEC ESP, if enabled

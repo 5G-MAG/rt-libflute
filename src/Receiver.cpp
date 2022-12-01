@@ -22,10 +22,11 @@
 
 
 LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& address,
-    short port, uint64_t tsi, 
+    short port, uint64_t tsi, FecScheme fec_scheme,
     boost::asio::io_service& io_service)
     : _socket(io_service)
     , _tsi(tsi)
+    , _fec_scheme(fec_scheme)
     , _mcast_address(address)
 {
     boost::asio::ip::udp::endpoint listen_endpoint(

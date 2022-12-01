@@ -17,6 +17,7 @@
 #include <iostream>
 #include <arpa/inet.h>
 #include "AlcPacket.h"
+#include "spdlog/spdlog.h"
 
 LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
 {
@@ -127,6 +128,7 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                           break;
                         case FecScheme::Raptor:
                           //TODO
+                          spdlog::warn("Raptor FEC support is still in progress");
                           throw "Raptor FEC support is still in progress";
                           break;
                         default:

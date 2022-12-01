@@ -23,6 +23,7 @@
 #include "File.h"
 #include "AlcPacket.h"
 #include "FileDeliveryTable.h"
+#include "flute_types.h"
 
 namespace LibFlute {
   /**
@@ -51,6 +52,7 @@ namespace LibFlute {
       Transmitter( const std::string& address, 
           short port, uint64_t tsi, unsigned short mtu,
           uint32_t rate_limit,
+          FecScheme _fec_scheme,
           boost::asio::io_service& io_service);
 
      /**
@@ -124,6 +126,7 @@ namespace LibFlute {
       uint16_t _toi = 1;
 
       uint32_t _max_payload;
+      FecScheme _fec_scheme;
       FecOti _fec_oti;
 
       completion_callback_t _completion_cb = nullptr;

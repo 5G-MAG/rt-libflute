@@ -21,6 +21,7 @@
 #include <mutex>
 #include "File.h"
 #include "FileDeliveryTable.h"
+#include "flute_types.h"
 
 namespace LibFlute {
   /**
@@ -45,7 +46,7 @@ namespace LibFlute {
       *  @param io_service Boost io_service to run the socket operations in (must be provided by the caller)
       */
       Receiver( const std::string& iface, const std::string& address, 
-          short port, uint64_t tsi,
+          short port, uint64_t tsi, FecScheme fec_scheme,
           boost::asio::io_service& io_service);
 
      /**
@@ -104,5 +105,7 @@ namespace LibFlute {
       completion_callback_t _completion_cb = nullptr;
 
       bool _running = true;
+
+      FecScheme _fec_scheme;
   };
 };

@@ -32,6 +32,8 @@
 #include "Version.h"
 #include "Receiver.h"
 #include "File.h"
+#include "flute_types.h"
+
 
 
 using libconfig::Config;
@@ -52,6 +54,7 @@ static struct argp_option options[] = {  // NOLINT
      "Log verbosity: 0 = trace, 1 = debug, 2 = info, 3 = warn, 4 = error, 5 = "
      "critical, 6 = none. Default: 2.",
      0},
+    {"fec", 'f', "FEC Scheme", 0, "Choose a scheme for Forward Error Correction. Compact No Code = 0, Raptor = 1 (default is 0)", 0},
     {nullptr, 0, nullptr, 0, nullptr, 0}};
 
 /**
@@ -64,6 +67,7 @@ struct ft_arguments {
   const char *aes_key = {};
   unsigned short mcast_port = 40085;
   unsigned log_level = 2;        /**< log level */
+  unsigned fec = 0;        /**< log level */
   char **files;
 };
 
@@ -88,6 +92,13 @@ static auto parse_opt(int key, char *arg, struct argp_state *state) -> error_t {
       break;
     case 'l':
       arguments->log_level = static_cast<unsigned>(strtoul(arg, nullptr, 10));
+      break;
+    case 'f':
+      arguments->fec = static_cast<unsigned>(strtoul(arg, nullptr, 10));
+      if ( (arguments->fec | 1) != 1 ) {
+        spdlog::error("Invalid FEC scheme! Please pick either 0 (Compact No Code) or 1 (Raptor)");
+        return ARGP_ERR_UNKNOWN;
+      }
       break;
     default:
       return ARGP_ERR_UNKNOWN;
@@ -146,6 +157,7 @@ auto main(int argc, char **argv) -> int {
         arguments.mcast_target,
         (short)arguments.mcast_port,
         16,
+        LibFlute::FecScheme(arguments.fec),
         io);
 
     // Configure IPSEC, if enabled
