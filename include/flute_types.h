@@ -39,10 +39,11 @@ namespace LibFlute {
   };
 
   /**
-   *  Error correction schemes 
+   *  Error correction schemes. From the registry for FEC schemes http://www.iana.org/assignments/rmt-fec-parameters (RFC 5052)
    */
   enum class FecScheme {
-    CompactNoCode
+    CompactNoCode,
+    Raptor
   };
 
   /**

@@ -78,11 +78,17 @@ LibFlute::File::File(uint32_t toi,
   _meta.expires = expires;
   _meta.fec_oti = fec_oti;
 
-  // for no-code
-  if (_meta.fec_oti.encoding_id == FecScheme::CompactNoCode) { 
-    _meta.fec_oti.transfer_length = length;
-  } else {
-    throw "Unsupported FEC scheme";
+  switch (_meta.fec_oti.encoding_id) {
+    case FecScheme::CompactNoCode:
+      _meta.fec_oti.transfer_length = length;
+      break;
+    case FecScheme::Raptor:
+      //TODO
+      throw "Raptor FEC scheme is not done yet";
+      break;
+    default:
+      throw "FEC scheme not supported or not yet implemented";
+      break;
   }
 
   calculate_partitioning();

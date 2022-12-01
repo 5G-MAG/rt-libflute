@@ -110,19 +110,28 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                         break; // ignored
                       }
       case EXT_FTI: {
-                      if (_fec_oti.encoding_id == FecScheme::CompactNoCode) {
-                        if (hel != 4) {
-                          throw "Invalid length for EXT_FTI header extension";
-                        }
-                        _fec_oti.transfer_length = (uint64_t)(ntohs(*(uint16_t*)hdr_ptr)) << 32;
-                        hdr_ptr += 2;
-                        _fec_oti.transfer_length |= (uint64_t)(ntohl(*(uint32_t*)hdr_ptr));
-                        hdr_ptr += 4;
-                        hdr_ptr += 2; // reserved
-                        _fec_oti.encoding_symbol_length = ntohs(*(uint16_t*)hdr_ptr);
-                        hdr_ptr += 2;
-                        _fec_oti.max_source_block_length = ntohl(*(uint32_t*)hdr_ptr);
-                        hdr_ptr += 4;
+                      switch (_fec_oti.encoding_id) {
+                        case FecScheme::CompactNoCode:
+                          if (hel != 4) {
+                            throw "Invalid length for EXT_FTI header extension for Compact No Code FEC scheme";
+                          }
+                          _fec_oti.transfer_length = (uint64_t)(ntohs(*(uint16_t*)hdr_ptr)) << 32;
+                          hdr_ptr += 2;
+                          _fec_oti.transfer_length |= (uint64_t)(ntohl(*(uint32_t*)hdr_ptr));
+                          hdr_ptr += 4;
+                          hdr_ptr += 2; // reserved
+                          _fec_oti.encoding_symbol_length = ntohs(*(uint16_t*)hdr_ptr);
+                          hdr_ptr += 2;
+                          _fec_oti.max_source_block_length = ntohl(*(uint32_t*)hdr_ptr);
+                          hdr_ptr += 4;
+                          break;
+                        case FecScheme::Raptor:
+                          //TODO
+                          throw "Raptor FEC support is still in progress";
+                          break;
+                        default:
+                          throw "Unsupported FEC scheme";
+                          break;
                       }
                       break; 
                     }
