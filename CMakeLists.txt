@@ -1,12 +1,16 @@
 cmake_minimum_required(VERSION 3.16)
 
-project (libflute VERSION 0.11.0)
+project (libflute VERSION 0.11.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
+set(CMAKE_C_STANDARD_REQUIRED True)
 
 set(CMAKE_CXX_FLAGS_DEBUG_INIT "-Wall -Wextra -Werror -g3")
+set(CMAKE_C_FLAGS_DEBUG_INIT "-Wall -Wextra -Werror -g3")
 set(CMAKE_CXX_FLAGS_RELEASE_INIT "-Wall -O3")
+set(CMAKE_C_FLAGS_RELEASE_INIT "-Wall -O3")
 
 find_package(Boost REQUIRED)
 find_package(spdlog REQUIRED)
@@ -20,6 +24,7 @@ add_subdirectory(examples)
 include_directories(
     "${PROJECT_BINARY_DIR}"
     ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/freeRaptor
 
     SYSTEM
     ${PROJECT_SOURCE_DIR}/utils
@@ -29,34 +34,39 @@ include_directories(
 
 configure_file("include/Version.h.in" "Version.h")
 
-link_directories(
-    )
-
 set(CMAKE_CXX_CLANG_TIDY clang-tidy)
+
+add_library(freeRaptor STATIC)
+target_sources(freeRaptor
+	PRIVATE
+		freeRaptor/gf2matrix.c freeRaptor/raptor10.c freeRaptor/raptor_consts.c
+	PUBLIC
+    	freeRaptor/gf2matrix.h freeRaptor/raptor10.h freeRaptor/raptor_consts.h
+)
+target_link_libraries(freeRaptor LINK_PUBLIC m)
 
 add_library(flute "")
 target_sources(flute
   PRIVATE
-    src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp src/IpSec.cpp src/RaptorFEC.cpp src/gf2matrix.cpp src/raptor10.cpp src/raptor_consts.cpp
-    utils/base64.cpp 
+    src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp src/IpSec.cpp utils/base64.cpp src/RaptorFEC.cpp
+
   PUBLIC
-    include/Receiver.h include/Transmitter.h include/File.h include/RaptorFEC.h include/gf2matrix.h include/raptor10.h include/raptor_consts.h
+    include/Receiver.h include/Transmitter.h include/File.h include/RaptorFEC.h
+
   )
 target_include_directories(flute
   PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/include/
+    ${CMAKE_CURRENT_LIST_DIR}/freeRaptor/
   )
-
-#add_library(flute src/Receiver.cpp src/Receiver.h src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp freeRaptor/gf2matrix.c freeRaptor/raptor10.c freeRaptor/raptor_consts.c)
-
 target_link_libraries( flute
     LINK_PUBLIC
+	  freeRaptor
     spdlog::spdlog
     z
     pthread
     crypto
     PkgConfig::TINYXML
     PkgConfig::NETLINK
-    m
 )
 
