@@ -1,7 +1,9 @@
+
 #include "RaptorFEC.h"
 
 void test_raptor()
 {
+#ifdef RAPTOR_ENABLED
   printf("Testing gf2matrix\n");
 
   // Create a Raptor10 object and fill it w/ all known needed params
@@ -34,6 +36,7 @@ void test_raptor()
   print_matrix(&A);
 
   return;
+#endif
 }
 
 // TODO: implement encode function

@@ -19,6 +19,8 @@ find_package(OpenSSL REQUIRED)
 pkg_check_modules(TINYXML REQUIRED IMPORTED_TARGET tinyxml2)
 pkg_check_modules(NETLINK REQUIRED IMPORTED_TARGET libnl-3.0)
 
+option(ENABLE_RAPTOR "Enable support for Raptor FEC" ON)
+
 add_subdirectory(examples)
 
 include_directories(
@@ -36,6 +38,12 @@ configure_file("include/Version.h.in" "Version.h")
 
 set(CMAKE_CXX_CLANG_TIDY clang-tidy)
 
+if( ENABLE_RAPTOR)
+
+message(STATUS "Compiling freeRaptor library for Raptor FEC support. To disable support build with -DENABLE_RAPTOR=OFF")
+
+add_compile_definitions(RAPTOR_ENABLED)
+
 add_library(freeRaptor STATIC)
 target_sources(freeRaptor
 	PRIVATE
@@ -44,6 +52,12 @@ target_sources(freeRaptor
     	freeRaptor/gf2matrix.h freeRaptor/raptor10.h freeRaptor/raptor_consts.h
 )
 target_link_libraries(freeRaptor LINK_PUBLIC m)
+
+else()
+
+message(STATUS "Skipping freeRaptor library for Raptor FEC support. To enable support build with -DENABLE_RAPTOR=ON")
+
+endif()
 
 add_library(flute "")
 target_sources(flute
@@ -59,9 +73,13 @@ target_include_directories(flute
     ${CMAKE_CURRENT_LIST_DIR}/include/
     ${CMAKE_CURRENT_LIST_DIR}/freeRaptor/
   )
-target_link_libraries( flute
+
+if(ENABLE_RAPTOR)
+  target_link_libraries(flute LINK_PUBLIC freeRaptor)
+endif()
+
+  target_link_libraries( flute
     LINK_PUBLIC
-	  freeRaptor
     spdlog::spdlog
     z
     pthread
