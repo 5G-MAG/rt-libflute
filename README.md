@@ -5,27 +5,19 @@
 
 ## Installation guide
 
-Installation of libflute consists of 3 simple steps:
+Installation of libflute consists of 2 simple steps:
 1. Getting the source code
-2. Build setup
-3. Building
+2. Building
 
 ### Step 1: Getting the source code
 ````
-cd ~
 git clone https://github.com/5G-MAG/rt-libflute.git
 ````
 
-### Step 2: Build setup
+### Step 2: Building
 ````
-cd libflute/
-mkdir build && cd build
-cmake -GNinja ..
-````
-
-### Step 3: Building
-````
-ninja
+cd rt-libflute/
+./build.sh
 ````
 
 ## Usage
