@@ -16,6 +16,7 @@ include_directories(
     "${PROJECT_BINARY_DIR}"
     ${PROJECT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/freeRaptor
 
     SYSTEM
     ${SPDLOG_INCLUDEDIR}
@@ -32,6 +33,7 @@ target_link_libraries( flute-transmitter
     config++
     flute
     pthread
+    m
 )
 target_link_libraries( flute-receiver
     LINK_PUBLIC
@@ -39,4 +41,5 @@ target_link_libraries( flute-receiver
     config++
     flute
     pthread
+    m
 )

@@ -32,6 +32,7 @@
 #include "Version.h"
 #include "Transmitter.h"
 #include "flute_types.h"
+#include "RaptorFEC.h"
 
 
 using libconfig::Config;
@@ -142,6 +143,7 @@ auto main(int argc, char **argv) -> int {
 
   argp_parse(&argp, argc, argv, 0, nullptr, &arguments);
 
+  test_raptor();
   // Set up logging
   std::string ident = "flute-transmitter";
   auto syslog_logger = spdlog::syslog_logger_mt("syslog", ident, LOG_PID | LOG_PERROR | LOG_CONS );
