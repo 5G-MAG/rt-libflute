@@ -20,6 +20,7 @@ add_subdirectory(examples)
 include_directories(
     "${PROJECT_BINARY_DIR}"
     ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/freeRaptor
 
     SYSTEM
     ${PROJECT_SOURCE_DIR}/utils
@@ -37,14 +38,17 @@ set(CMAKE_CXX_CLANG_TIDY clang-tidy)
 add_library(flute "")
 target_sources(flute
   PRIVATE
-  src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp src/IpSec.cpp
-    utils/base64.cpp
+    src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp src/IpSec.cpp src/RaptorFEC.cpp
+    freeRaptor/gf2matrix.c freeRaptor/raptor10.c freeRaptor/raptor_consts.c
+    utils/base64.cpp 
   PUBLIC
-    include/Receiver.h include/Transmitter.h include/File.h
+    include/Receiver.h include/Transmitter.h include/File.h include/RaptorFEC.h
+    freeRaptor/gf2matrix.h freeRaptor/raptor10.h freeRaptor/raptor_consts.h
   )
 target_include_directories(flute
   PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/include/
+    ${CMAKE_CURRENT_LIST_DIR}/freeRaptor
   )
 
 #add_library(flute src/Receiver.cpp src/Receiver.h src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp)
@@ -57,5 +61,6 @@ target_link_libraries( flute
     crypto
     PkgConfig::TINYXML
     PkgConfig::NETLINK
+    m
 )
 
