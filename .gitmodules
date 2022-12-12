@@ -4,4 +4,4 @@
 	branch = dev
 [submodule "raptor"]
 	path = raptor
-	url = ./raptor/
+	url = https://github.com/yeliqseu/raptor.git
