@@ -147,7 +147,7 @@ auto LibFlute::File::check_file_completion() -> void
 
     auto content_md5 = base64_decode(_meta.content_md5);
     if (memcmp(md5, content_md5.c_str(), MD5_DIGEST_LENGTH) != 0) {
-      spdlog::debug("MD5 mismatch for TOI {}, discarding", _meta.toi);
+      spdlog::warn("MD5 mismatch for TOI {}, discarding", _meta.toi);
  
       // MD5 mismatch, try again
       for (auto& block : _source_blocks) {

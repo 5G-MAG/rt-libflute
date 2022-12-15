@@ -2,5 +2,5 @@
 
 rm -rf build
 mkdir build && cd build
-cmake -GNinja ..
-ninja
+cmake -DCMAKE_BUILD_TYPE=Debug -GNinja ..
+ninja -j`nproc`

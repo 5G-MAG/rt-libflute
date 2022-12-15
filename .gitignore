@@ -34,3 +34,5 @@
 build/
 .idea
 cmake-build-debug/
+html/
+.vscode/

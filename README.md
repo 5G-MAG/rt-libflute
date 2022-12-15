@@ -17,7 +17,7 @@ This repository uses git submodules so it must be cloned with the following comm
 git clone --recurse-submodules https://github.com/5G-MAG/rt-libflute.git
 ````
 
-If you had checked it out before the submodules were added or ran git clone withouth the argument then initialise and update the submodules by running
+If you had checked it out before the submodules were added or ran git clone withou the `--recurse-submodules` argument then initialise and update the submodules by running
 
 ```
 git submodule update --init
@@ -91,3 +91,6 @@ sudo setcap 'cap_net_admin=eip' ./flute-receiver
 ## Documentation
 
 Documentation of the source code can be found at: https://5g-mag.github.io/rt-libflute/
+
+To generate it locally via doxygen run `doxygen` in the project root.
+Then to view it open the local file `html/index.html` in a browser

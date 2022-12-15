@@ -201,11 +201,10 @@ auto main(int argc, char **argv) -> int {
     transmitter.register_completion_callback(
         [&files](uint32_t toi) {
         for (auto& file : files) {
-        if (file.toi == toi) { 
-        spdlog::info("{} (TOI {}) has been transmitted",
-            file.location, file.toi);
-        // could free() the buffer here
-        }
+          if (file.toi == toi) { 
+            spdlog::info("{} (TOI {}) has been transmitted", file.location,file.toi);
+            // could free() the buffer here
+          }
         }
         });
 

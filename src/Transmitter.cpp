@@ -153,6 +153,7 @@ auto LibFlute::Transmitter::send_next_packet() -> void
           }
           auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id());
           bytes_queued += packet->size();
+          spdlog::debug("Queued ALC packet of {} bytes, containing {} symbols, for TOI {} , for transmission", packet->size(), symbols.size(), file->meta().toi );
 
           _socket.async_send_to(
               boost::asio::buffer(packet->data(), packet->size()), _endpoint,
@@ -161,7 +162,7 @@ auto LibFlute::Transmitter::send_next_packet() -> void
                 std::size_t bytes_transferred)
               {
                 if (error) {
-                  spdlog::debug("sent_to error: {}", error.message());
+                  spdlog::debug("send_to error: {}", error.message());
                 } else {
                   file->mark_completed(symbols, !error);
                   if (file->complete()) {

@@ -171,9 +171,21 @@ auto main(int argc, char **argv) -> int {
         [](std::shared_ptr<LibFlute::File> file) { //NOLINT
         spdlog::info("{} (TOI {}) has been received",
             file->meta().content_location, file->meta().toi);
-        FILE* fd = fopen(file->meta().content_location.c_str(), "wb");
+        char *buf = (char*) calloc(256,1);
+        char *fname = (char*) strrchr(file->meta().content_location.c_str(),'/');
+        if(!fname){
+          fname = (char*) file->meta().content_location.c_str();
+        } else {
+          fname++;
+        }
+        snprintf(buf,256,"flute_download_%d-%s",file->meta().toi, fname);
+        FILE* fd = fopen(buf, "wb");
+        if (!fd) {
+          spdlog::error("Error opening file {} to store received object",buf);
+        }
         fwrite(file->buffer(), 1, file->length(), fd);
         fclose(fd);
+        free(buf);
         });
 
     // Start the IO service
