@@ -54,6 +54,7 @@ static struct argp_option options[] = {  // NOLINT
      "Log verbosity: 0 = trace, 1 = debug, 2 = info, 3 = warn, 4 = error, 5 = "
      "critical, 6 = none. Default: 2.",
      0},
+    {"download-dir", 'd', "Download directory", 0 , "Directory in which to store downloaded files, defaults to the current directory otherwise", 0},
     {"fec", 'f', "FEC Scheme", 0, "Choose a scheme for Forward Error Correction. Compact No Code = 0, Raptor = 1 (default is 0)", 0},
     {nullptr, 0, nullptr, 0, nullptr, 0}};
 
@@ -67,6 +68,7 @@ struct ft_arguments {
   const char *aes_key = {};
   unsigned short mcast_port = 40085;
   unsigned log_level = 2;        /**< log level */
+  char *download_dir = nullptr;
   unsigned fec = 0;        /**< log level */
   char **files;
 };
@@ -99,6 +101,9 @@ static auto parse_opt(int key, char *arg, struct argp_state *state) -> error_t {
         spdlog::error("Invalid FEC scheme! Please pick either 0 (Compact No Code) or 1 (Raptor)");
         return ARGP_ERR_UNKNOWN;
       }
+      break;
+    case 'd':
+      arguments->download_dir = arg;
       break;
     default:
       return ARGP_ERR_UNKNOWN;
@@ -168,7 +173,7 @@ auto main(int argc, char **argv) -> int {
     }
 
     receiver.register_completion_callback(
-        [](std::shared_ptr<LibFlute::File> file) { //NOLINT
+        [=](std::shared_ptr<LibFlute::File> file) { //NOLINT
         spdlog::info("{} (TOI {}) has been received",
             file->meta().content_location, file->meta().toi);
         char *buf = (char*) calloc(256,1);
@@ -178,13 +183,18 @@ auto main(int argc, char **argv) -> int {
         } else {
           fname++;
         }
-        snprintf(buf,256,"flute_download_%d-%s",file->meta().toi, fname);
+        if (arguments.download_dir) {
+          snprintf(buf,256,"%s/%s",arguments.download_dir, fname);
+        } else {
+          snprintf(buf,256,"flute_download_%d-%s",file->meta().toi, fname);
+        }
         FILE* fd = fopen(buf, "wb");
-        if (!fd) {
+        if (fd) {
+          fwrite(file->buffer(), 1, file->length(), fd);
+          fclose(fd);
+        } else {
           spdlog::error("Error opening file {} to store received object",buf);
         }
-        fwrite(file->buffer(), 1, file->length(), fd);
-        fclose(fd);
         free(buf);
         });
 
