@@ -94,7 +94,7 @@ auto LibFlute::EncodingSymbol::to_payload(const std::vector<EncodingSymbol>& sym
     if (symbol.len() <= data_len) {
       auto symbol_len = symbol.encode_to(ptr, data_len);
       data_len -= symbol_len;
-      encoded_data += symbol_len;
+      ptr += symbol_len;
       len += symbol_len;
     }
   }

@@ -98,17 +98,23 @@ auto LibFlute::Transmitter::send(
     size_t length) -> uint16_t 
 {
   auto toi = _toi;
+  std::shared_ptr<File> file;
+  try {
+      file = std::make_shared<File>(
+          toi,
+          _fec_oti,
+          content_location,
+          content_type,
+          expires,
+          data,
+          length);
+  } catch (const char *e) {
+    spdlog::error("Failed to create File object for file {} : {}", content_location, e);
+    return -1;
+  }
+
   _toi++;
   if (_toi == 0) _toi = 1; // clamp to >= 1 in case it wraps
-
-  auto file = std::make_shared<File>(
-        toi,
-        _fec_oti,
-        content_location,
-        content_type,
-        expires,
-        data,
-        length);
 
   _fdt->add(file->meta());
   send_fdt();

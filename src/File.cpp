@@ -54,7 +54,13 @@ LibFlute::File::File(uint32_t toi,
     size_t length,
     bool copy_data) 
 {
+  if (!data) {
+    spdlog::error("File pointer is null");
+    throw "Invalid file";
+  }
+
   spdlog::debug("Creating File from data");
+
   if (copy_data) {
     spdlog::debug("Allocating buffer");
     _buffer = (char*)malloc(length);
@@ -69,7 +75,9 @@ LibFlute::File::File(uint32_t toi,
   }
 
   unsigned char md5[EVP_MAX_MD_SIZE];
-  calculate_md5(data, length, md5);
+  if ( calculate_md5(data, length, md5) < 0 ){
+    throw "Failed to calculate md5";
+  }
 
   _meta.toi = toi;
   _meta.content_location = std::move(content_location);
@@ -243,6 +251,11 @@ auto LibFlute::File::mark_completed(const std::vector<EncodingSymbol>& symbols, 
   int LibFlute::calculate_md5(char *input, int length, unsigned char *result)
 {
   // simple implementation based on openssl docs (https://www.openssl.org/docs/man3.0/man3/EVP_DigestInit_ex.html) 
+  if (!input || ! length) {
+    spdlog::debug("MD5 called for empty input (input {}, length {})", input, length);
+    return -1;
+  }
+
   EVP_MD_CTX*   context = EVP_MD_CTX_new();
   const EVP_MD* md = EVP_md5();
   unsigned int  md_len;

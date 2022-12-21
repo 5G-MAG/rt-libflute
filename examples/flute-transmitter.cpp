@@ -172,10 +172,11 @@ auto main(int argc, char **argv) -> int {
       std::ifstream file(arguments.files[j], std::ios::binary | std::ios::ate);
       std::streamsize size = file.tellg();
       file.seekg(0, std::ios::beg);
-
-      char* buffer = (char*)malloc(size);
-      file.read(buffer, size);
-      files.push_back(FsFile{ arguments.files[j], buffer, (size_t)size});
+      if (size > 0) {
+        char* buffer = (char*)malloc(size);
+        file.read(buffer, size);
+        files.push_back(FsFile{ arguments.files[j], buffer, (size_t)size});
+      }
     }
 
     // Create a Boost io_service
@@ -216,8 +217,10 @@ auto main(int argc, char **argv) -> int {
           file.buffer,
           file.len
           );
-      spdlog::info("Queued {} ({} bytes) for transmission, TOI is {}",
+      if (file.toi > 0) {
+        spdlog::info("Queued {} ({} bytes) for transmission, TOI is {}",
           file.location, file.len, file.toi);
+      }
     }
 
     // Start the io_service, and thus sending data
