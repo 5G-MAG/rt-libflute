@@ -47,12 +47,57 @@ namespace LibFlute {
   };
 
   /**
-   *  OTI values struct
+   *  abstract class for FEC Object En/De-coding
    */
-  struct FecOti {
+  class FecOti {
+    public:
+
     FecScheme encoding_id;
     uint64_t transfer_length;
     uint32_t encoding_symbol_length;
     uint32_t max_source_block_length;
+
+    /**
+     * @brief Attempt to decode a source block
+     *
+     * @param srcblk the source block that should be decoded
+     * @return whether or not the decoding was successful
+     */
+    virtual bool check_source_block_completion(SourceBlock& srcblk);
+
+    /**
+     * @brief Encode a source block into multiple symbols
+     *
+     * @param buffer a pointer to the buffer containing the data
+     * @param bytes_read a pointer to an integer to store the number of bytes read out of buffer
+     * @return a map of source blocks that the object has been encoded to
+     */
+    virtual std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read);
+
+
+    virtual void calculate_partioning();
+
+    private:
+
+
   };
+
+  class CompactNoCode : FecOti {
+
+
+
+  }
+
+  class RaptorFEC : FecOti {
+
+    unsigned int F; // object size in bytes
+    unsigned int Al; // symbol alignment: 4
+    unsigned int T; // symbol size in bytes
+    unsigned int Z; // number of source blocks
+    unsigned int N; // number of sub-blocks per source block
+    unsigned int K; // number of symbols in a source block
+    unsigned int P; // maximum payload size: 1420 for ipv4 over 802.3
+
+  }
+
 };

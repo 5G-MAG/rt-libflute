@@ -1,5 +1,7 @@
 
 #include "RaptorFEC.h"
+#include "flute_types.h"
+#include "spdlog/spdlog.h"
 
 void test_raptor()
 {
@@ -39,5 +41,17 @@ void test_raptor()
 #endif
 }
 
-// TODO: implement encode function
-// TODO: implement decode function
+
+ void LibFlute::RaptorFEC::void calculate_partioning() {
+  // TODO
+  return;
+ }
+
+
+ bool LibFlute::RaptorFEC::check_source_block_completion(SourceBlock& srcblk) {
+  // TODO: try to decode srcblk using the symbols it contains...
+ }
+
+ std::map<uint16_t, SourceBlock> LibFlute::RaptorFEC::create_blocks(char *buffer, int *bytes_read) {
+  // TODO: encode buffer into a number of symbols
+ }
