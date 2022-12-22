@@ -21,6 +21,7 @@
 #include "AlcPacket.h"
 #include "FileDeliveryTable.h"
 #include "EncodingSymbol.h"
+#include "flute_types.h"
 
 namespace LibFlute {
   /**
@@ -130,21 +131,10 @@ namespace LibFlute {
       void calculate_partitioning();
       void create_blocks();
 
-      struct SourceBlock {
-        bool complete = false;
-        struct Symbol {
-          char* data;
-          size_t length;
-          bool complete = false;
-          bool queued = false;
-        };
-        std::map<uint16_t, Symbol> symbols; 
-      };
-
       void check_source_block_completion(SourceBlock& block);
       void check_file_completion();
 
-      std::map<uint16_t, SourceBlock> _source_blocks; 
+      std::map<uint16_t, LibFlute::SourceBlock> _source_blocks; 
 
       bool _complete = false;;
 

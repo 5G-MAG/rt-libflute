@@ -127,7 +127,7 @@ auto LibFlute::File::put_symbol( const LibFlute::EncodingSymbol& symbol ) -> voi
     throw "Encoding Symbol ID too high";
   } 
 
-  SourceBlock::Symbol& target_symbol = source_block.symbols[symbol.id()];
+  LibFlute::Symbol& target_symbol = source_block.symbols[symbol.id()];
 
   if (!target_symbol.complete) {
     symbol.decode_to(target_symbol.data, target_symbol.length);
@@ -186,7 +186,7 @@ auto LibFlute::File::create_blocks() -> void
   size_t remaining_size = _meta.fec_oti.transfer_length;
   auto number = 0;
   while (remaining_size > 0) {
-    SourceBlock block;
+    LibFlute::SourceBlock block;
     auto symbol_id = 0;
     auto block_length = ( number < _nof_large_source_blocks ) ? _large_source_block_length : _small_source_block_length;
 
@@ -194,7 +194,7 @@ auto LibFlute::File::create_blocks() -> void
       auto symbol_length = std::min(remaining_size, (size_t)_meta.fec_oti.encoding_symbol_length);
       assert(buffer_ptr + symbol_length <= _buffer + _meta.fec_oti.transfer_length);
 
-      SourceBlock::Symbol symbol{.data = buffer_ptr, .length = symbol_length, .complete = false};
+      LibFlute::Symbol symbol{.data = buffer_ptr, .length = symbol_length, .complete = false};
       block.symbols[ symbol_id++ ] = symbol;
       
       remaining_size -= symbol_length;

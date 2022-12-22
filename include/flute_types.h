@@ -13,8 +13,10 @@
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
+#include <stddef.h>
+#include <stdint.h>
+#include <map>
 #pragma once
-
 /** \mainpage LibFlute - ALC/FLUTE library
  *
  * The library contains two simple **example applications** as a starting point:
@@ -46,16 +48,30 @@ namespace LibFlute {
     Raptor
   };
 
-  /**
-   *  abstract class for FEC Object En/De-coding
-   */
-  class FecOti {
-    public:
+  struct Symbol {
+    char* data;
+    size_t length;
+    bool complete = false;
+    bool queued = false;
+  };
 
+  struct SourceBlock {
+    bool complete = false;
+    std::map<uint16_t, Symbol> symbols; 
+  };
+
+  struct FecOti {
     FecScheme encoding_id;
     uint64_t transfer_length;
     uint32_t encoding_symbol_length;
     uint32_t max_source_block_length;
+  };
+
+  /**
+   *  abstract class for FEC Object En/De-coding
+   */
+  class FecTransformer {
+    public:
 
     /**
      * @brief Attempt to decode a source block
@@ -63,7 +79,7 @@ namespace LibFlute {
      * @param srcblk the source block that should be decoded
      * @return whether or not the decoding was successful
      */
-    virtual bool check_source_block_completion(SourceBlock& srcblk);
+    virtual bool check_source_block_completion(SourceBlock& srcblk) = 0;
 
     /**
      * @brief Encode a source block into multiple symbols
@@ -72,23 +88,43 @@ namespace LibFlute {
      * @param bytes_read a pointer to an integer to store the number of bytes read out of buffer
      * @return a map of source blocks that the object has been encoded to
      */
-    virtual std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read);
+    virtual std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read) = 0;
 
 
-    virtual void calculate_partioning();
-
-    private:
-
+    virtual void calculate_partioning() = 0;
 
   };
 
-  class CompactNoCode : FecOti {
+  class CompactNoCodeFEC : public FecTransformer {
+    
+    public: 
+    
+    CompactNoCodeFEC();
 
+    virtual ~CompactNoCodeFEC();
 
+    bool check_source_block_completion(SourceBlock& srcblk);
 
-  }
+    std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read);
 
-  class RaptorFEC : FecOti {
+    void calculate_partioning();
+
+  };
+
+  class RaptorFEC : public FecTransformer {
+    
+    public: 
+
+    RaptorFEC();
+
+    virtual ~RaptorFEC();
+
+    bool check_source_block_completion(SourceBlock& srcblk);
+
+    std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read);
+
+    void calculate_partioning();
+
 
     unsigned int F; // object size in bytes
     unsigned int Al; // symbol alignment: 4
@@ -98,6 +134,6 @@ namespace LibFlute {
     unsigned int K; // number of symbols in a source block
     unsigned int P; // maximum payload size: 1420 for ipv4 over 802.3
 
-  }
+  };
 
 };

@@ -56,7 +56,7 @@ endif()
 add_library(flute "")
 target_sources(flute
   PRIVATE
-    src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp src/IpSec.cpp utils/base64.cpp src/RaptorFEC.cpp
+    src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp src/IpSec.cpp utils/base64.cpp src/RaptorFEC.cpp src/CompactNoCode.cpp
 
   PUBLIC
     include/Receiver.h include/Transmitter.h include/File.h include/RaptorFEC.h

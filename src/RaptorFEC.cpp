@@ -41,17 +41,28 @@ void test_raptor()
 #endif
 }
 
+#ifdef RAPTOR_ENABLED
 
- void LibFlute::RaptorFEC::void calculate_partioning() {
+LibFlute::RaptorFEC::RaptorFEC() {
+  // this->encoding_id = LibFlute::FecScheme::Raptor;
   // TODO
-  return;
- }
+}
 
+LibFlute::RaptorFEC::~RaptorFEC() = default;
 
- bool LibFlute::RaptorFEC::check_source_block_completion(SourceBlock& srcblk) {
+void LibFlute::RaptorFEC::calculate_partioning() {
+  // TODO
+}
+
+bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& srcblk) {
   // TODO: try to decode srcblk using the symbols it contains...
- }
+  return true;
+}
 
- std::map<uint16_t, SourceBlock> LibFlute::RaptorFEC::create_blocks(char *buffer, int *bytes_read) {
+std::map<uint16_t, LibFlute::SourceBlock> LibFlute::RaptorFEC::create_blocks(char *buffer, int *bytes_read) {
   // TODO: encode buffer into a number of symbols
- }
+  std::map<uint16_t, LibFlute::SourceBlock> m;
+  return m;
+}
+
+#endif
