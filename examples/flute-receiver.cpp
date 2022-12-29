@@ -163,7 +163,7 @@ auto main(int argc, char **argv) -> int {
         arguments.mcast_target,
         (short)arguments.mcast_port,
         16,
-        LibFlute::FecScheme(arguments.fec),
+        // LibFlute::FecScheme(arguments.fec),
         io);
 
     // Configure IPSEC, if enabled

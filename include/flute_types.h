@@ -16,6 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <map>
+#include "tinyxml2.h"
 #pragma once
 /** \mainpage LibFlute - ALC/FLUTE library
  *
@@ -93,6 +94,10 @@ namespace LibFlute {
 
     virtual void calculate_partioning() = 0;
 
+    virtual bool parse_fdt_info(tinyxml2::XMLElement *file) = 0;
+
+    virtual bool add_fdt_info(tinyxml2::XMLElement *file) = 0;
+
   };
 
   class CompactNoCodeFEC : public FecTransformer {
@@ -108,6 +113,10 @@ namespace LibFlute {
     std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read);
 
     void calculate_partioning();
+
+    bool parse_fdt_info(tinyxml2::XMLElement *file);
+
+    bool add_fdt_info(tinyxml2::XMLElement *file);
 
   };
 
@@ -125,6 +134,9 @@ namespace LibFlute {
 
     void calculate_partioning();
 
+    bool parse_fdt_info(tinyxml2::XMLElement *file);
+
+    bool add_fdt_info(tinyxml2::XMLElement *file);
 
     unsigned int F; // object size in bytes
     unsigned int Al; // symbol alignment: 4

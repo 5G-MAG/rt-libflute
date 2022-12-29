@@ -90,8 +90,10 @@ LibFlute::File::File(uint32_t toi,
   switch (_meta.fec_oti.encoding_id) {
     case FecScheme::CompactNoCode:
       _meta.fec_oti.transfer_length = length;
+      _meta.fec_transformer = 0;
       break;
     case FecScheme::Raptor:
+      _meta.fec_transformer = new RaptorFEC(); // corresponding delete in FileDeliveryTable.cpp:remove()
       //TODO
       spdlog::warn("File.cpp - Raptor FEC scheme is not done yet");
       throw "Raptor FEC scheme is not done yet";

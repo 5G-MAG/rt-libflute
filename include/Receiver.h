@@ -46,8 +46,7 @@ namespace LibFlute {
       *  @param io_service Boost io_service to run the socket operations in (must be provided by the caller)
       */
       Receiver( const std::string& iface, const std::string& address, 
-          short port, uint64_t tsi, FecScheme fec_scheme,
-          boost::asio::io_service& io_service);
+          short port, uint64_t tsi, boost::asio::io_service& io_service);
 
      /**
       *  Default destructor.
@@ -106,6 +105,6 @@ namespace LibFlute {
 
       bool _running = true;
 
-      FecScheme _fec_scheme;
+      // FecScheme _fec_scheme;
   };
 };

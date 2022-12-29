@@ -77,9 +77,11 @@ auto LibFlute::Transmitter::seconds_since_epoch() -> uint64_t
 auto LibFlute::Transmitter::send_fdt() -> void {
   _fdt->set_expires(seconds_since_epoch() + _fdt_repeat_interval * 2);
   auto fdt = _fdt->to_string();
+  auto fdt_fec_oti = _fec_oti;
+  fdt_fec_oti.encoding_id = FecScheme::CompactNoCode; // always send the FDT in "plaintext"
   auto file = std::make_shared<File>(
         0,
-        _fec_oti,
+        fdt_fec_oti,
         "",
         "",
         seconds_since_epoch() + _fdt_repeat_interval * 2,

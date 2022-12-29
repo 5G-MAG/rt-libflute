@@ -85,12 +85,12 @@ namespace LibFlute {
      /**
       *  Get the FEC OTI values
       */
-      const FecOti& fec_oti() const { return _meta.fec_oti; };
+      FecOti& fec_oti() { return _meta.fec_oti; };
 
      /**
       *  Get the file metadata from its FDT entry
       */
-      const LibFlute::FileDeliveryTable::FileEntry& meta() const { return _meta; };
+      LibFlute::FileDeliveryTable::FileEntry& meta() { return _meta; };
 
      /**
       *  Timestamp of file reception

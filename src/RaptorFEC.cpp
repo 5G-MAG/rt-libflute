@@ -65,4 +65,15 @@ std::map<uint16_t, LibFlute::SourceBlock> LibFlute::RaptorFEC::create_blocks(cha
   return m;
 }
 
+
+bool LibFlute::RaptorFEC::parse_fdt_info(tinyxml2::XMLElement *file) {
+  // TODO
+  return true;
+}
+
+bool LibFlute::RaptorFEC::add_fdt_info(tinyxml2::XMLElement *file) {
+  // TODO
+  return true;
+}
+
 #endif
