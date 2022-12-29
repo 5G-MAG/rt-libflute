@@ -93,10 +93,14 @@ LibFlute::File::File(uint32_t toi,
       _meta.fec_transformer = 0;
       break;
     case FecScheme::Raptor:
-      _meta.fec_transformer = new RaptorFEC(); // corresponding delete in FileDeliveryTable.cpp:remove()
-      //TODO
+      _meta.fec_oti.transfer_length = length;
+      _meta.fec_transformer = new RaptorFEC(length, fec_oti.encoding_symbol_length, 1024*1024); // corresponding delete in FileDeliveryTable.cpp:remove()
+      // set W (target on the sub block size, to be fairly large - 1 MB for now)
+      
       spdlog::warn("File.cpp - Raptor FEC scheme is not done yet");
-      throw "Raptor FEC scheme is not done yet";
+      
+      // TODO... what else is missing here?
+      
       break;
     default:
       throw "FEC scheme not supported or not yet implemented";
@@ -173,6 +177,14 @@ auto LibFlute::File::check_file_completion() -> void
 
 auto LibFlute::File::calculate_partitioning() -> void
 {
+  if (0 && _meta.fec_transformer && _meta.fec_transformer->calculate_partitioning()){
+    _nof_source_symbols = _meta.fec_transformer->nof_source_symbols;
+    _nof_source_blocks = _meta.fec_transformer->nof_source_blocks;
+    _large_source_block_length = _meta.fec_transformer->large_source_block_length;
+    _small_source_block_length = _meta.fec_transformer->small_source_block_length;
+    _nof_large_source_blocks = _meta.fec_transformer->nof_large_source_blocks;
+    return;
+  }
   // Calculate source block partitioning (RFC5052 9.1) 
   _nof_source_symbols = ceil((double)_meta.fec_oti.transfer_length / (double)_meta.fec_oti.encoding_symbol_length);
   _nof_source_blocks = ceil((double)_nof_source_symbols / (double)_meta.fec_oti.max_source_block_length);

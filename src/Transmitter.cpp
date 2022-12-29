@@ -42,6 +42,16 @@ boost::asio::io_service& io_service)
      4;  // SBN and ESI for compact no-code FEC
   uint32_t max_source_block_length = 64;
 
+  switch(_fec_scheme) {
+    case FecScheme::Raptor:
+      if (_max_payload % 4) {
+        _max_payload -= (_max_payload % 4); // must be divisible by Al = 4
+      }
+      break;
+    default:
+      break;
+  }
+
   _socket.set_option(boost::asio::ip::multicast::enable_loopback(true));
   _socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
 
@@ -79,6 +89,12 @@ auto LibFlute::Transmitter::send_fdt() -> void {
   auto fdt = _fdt->to_string();
   auto fdt_fec_oti = _fec_oti;
   fdt_fec_oti.encoding_id = FecScheme::CompactNoCode; // always send the FDT in "plaintext"
+  fdt_fec_oti.encoding_symbol_length = _mtu -
+    20 - // IPv4 header
+     8 - // UDP header
+    32 - // ALC Header with EXT_FDT and EXT_FTI
+     4;  // SBN and ESI for compact no-code FEC
+  fdt_fec_oti.max_source_block_length = 64;
   auto file = std::make_shared<File>(
         0,
         fdt_fec_oti,

@@ -92,11 +92,18 @@ namespace LibFlute {
     virtual std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read) = 0;
 
 
-    virtual void calculate_partioning() = 0;
+    virtual bool calculate_partitioning() = 0;
 
     virtual bool parse_fdt_info(tinyxml2::XMLElement *file) = 0;
 
     virtual bool add_fdt_info(tinyxml2::XMLElement *file) = 0;
+
+    uint32_t nof_source_symbols = 0;
+    uint32_t nof_source_blocks = 0;
+    uint32_t large_source_block_length = 0;
+    uint32_t small_source_block_length = 0;
+    uint32_t nof_large_source_blocks = 0;
+    
 
   };
 
@@ -112,17 +119,25 @@ namespace LibFlute {
 
     std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read);
 
-    void calculate_partioning();
+    bool calculate_partitioning();
 
     bool parse_fdt_info(tinyxml2::XMLElement *file);
 
     bool add_fdt_info(tinyxml2::XMLElement *file);
+
+    uint32_t nof_source_symbols = 0;
+    uint32_t nof_source_blocks = 0;
+    uint32_t large_source_block_length = 0;
+    uint32_t small_source_block_length = 0;
+    uint32_t nof_large_source_blocks = 0;
 
   };
 
   class RaptorFEC : public FecTransformer {
     
     public: 
+
+    RaptorFEC(unsigned int transfer_length, unsigned int max_payload, unsigned long target_sub_block_size);
 
     RaptorFEC();
 
@@ -132,19 +147,27 @@ namespace LibFlute {
 
     std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read);
 
-    void calculate_partioning();
+    bool calculate_partitioning();
 
     bool parse_fdt_info(tinyxml2::XMLElement *file);
 
     bool add_fdt_info(tinyxml2::XMLElement *file);
 
+
+    uint32_t nof_source_symbols = 0;
+    uint32_t nof_source_blocks = 0;
+    uint32_t large_source_block_length = 0;
+    uint32_t small_source_block_length = 0;
+    uint32_t nof_large_source_blocks = 0;
+
     unsigned int F; // object size in bytes
-    unsigned int Al; // symbol alignment: 4
+    unsigned int Al = 4; // symbol alignment: 4
     unsigned int T; // symbol size in bytes
+    unsigned long W = 1024*1024; // target on sub block size (arbitrarily set default to 1 MB)
     unsigned int Z; // number of source blocks
     unsigned int N; // number of sub-blocks per source block
     unsigned int K; // number of symbols in a source block
-    unsigned int P; // maximum payload size: 1420 for ipv4 over 802.3
+    unsigned int P; // maximum payload size: e.g. 1436 for ipv4 over 802.3
 
   };
 

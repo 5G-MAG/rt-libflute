@@ -185,6 +185,7 @@ LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_
   lct_header->version = 1;
   lct_header->half_word_flag = 1;
   lct_header->lct_header_len = lct_header_len;
+  lct_header->codepoint = (uint8_t) fec_oti.encoding_id;
   auto hdr_ptr = _buffer + 4;
   auto payload_ptr = _buffer + 4 * lct_header_len;
 

@@ -24,8 +24,8 @@ std::map<uint16_t, LibFlute::SourceBlock> LibFlute::CompactNoCodeFEC::create_blo
   return m;
 }
 
-void LibFlute::CompactNoCodeFEC::calculate_partioning(){
-
+bool LibFlute::CompactNoCodeFEC::calculate_partitioning(){
+  return false;
 }
 
 bool LibFlute::CompactNoCodeFEC::parse_fdt_info(tinyxml2::XMLElement *file) {
