@@ -94,7 +94,7 @@ LibFlute::File::File(uint32_t toi,
       break;
     case FecScheme::Raptor:
       _meta.fec_oti.transfer_length = length;
-      _meta.fec_transformer = new RaptorFEC(length, fec_oti.encoding_symbol_length, 1024*1024); // corresponding delete in FileDeliveryTable.cpp:remove()
+      _meta.fec_transformer = new RaptorFEC(length, fec_oti.encoding_symbol_length, 256*1024); // corresponding delete in FileDeliveryTable.cpp:remove()
       // set W (target on the sub block size, to be fairly large - 1 MB for now)
       
       spdlog::warn("File.cpp - Raptor FEC scheme is not done yet");

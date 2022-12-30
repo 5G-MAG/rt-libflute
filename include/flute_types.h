@@ -163,7 +163,7 @@ namespace LibFlute {
     unsigned int F; // object size in bytes
     unsigned int Al = 4; // symbol alignment: 4
     unsigned int T; // symbol size in bytes
-    unsigned long W = 1024*1024; // target on sub block size (arbitrarily set default to 1 MB)
+    unsigned long W = 256*1024; // target on sub block size (arbitrarily set to maximum recommended value of 256 kB)
     unsigned int Z; // number of source blocks
     unsigned int N; // number of sub-blocks per source block
     unsigned int K; // number of symbols in a source block

@@ -33,16 +33,12 @@ auto LibFlute::EncodingSymbol::from_payload(char* encoded_data, size_t data_len,
   
   switch (fec_oti.encoding_id) {
     case FecScheme::CompactNoCode:
+    case FecScheme::Raptor:
       source_block_number = ntohs(*(uint16_t*)encoded_data);
       encoded_data += 2;
       encoding_symbol_id = ntohs(*(uint16_t*)encoded_data);
       encoded_data += 2;
       data_len -= 4;
-      break;
-    case FecScheme::Raptor:
-      //TODO
-      spdlog::warn("EncodingSymbol::from_payload: Raptor FEC encoding implementation is still in progress");
-      throw "EncodingSymbol::from_payload Raptor FEC is not done yet";
       break;
     default:
       throw "Invalid FEC encoding ID. Only 2 FEC types are currently supported: compact no-code or raptor";
