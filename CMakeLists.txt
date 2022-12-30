@@ -26,7 +26,7 @@ add_subdirectory(examples)
 include_directories(
     "${PROJECT_BINARY_DIR}"
     ${PROJECT_SOURCE_DIR}/include
-    ${PROJECT_SOURCE_DIR}/freeRaptor
+    ${PROJECT_SOURCE_DIR}/raptor
 
     SYSTEM
     ${PROJECT_SOURCE_DIR}/utils
@@ -38,19 +38,19 @@ configure_file("include/Version.h.in" "Version.h")
 
 set(CMAKE_CXX_CLANG_TIDY clang-tidy)
 
-if( ENABLE_RAPTOR)
-  message(STATUS "Compiling freeRaptor library for Raptor FEC support. To disable support build with -DENABLE_RAPTOR=OFF")
+if(ENABLE_RAPTOR)
+  message(STATUS "Compiling raptor library for Raptor FEC support. To disable support build with -DENABLE_RAPTOR=OFF")
   add_compile_definitions(RAPTOR_ENABLED)
-  add_library(freeRaptor STATIC)
-  target_sources(freeRaptor
+  add_library(raptor STATIC)
+  target_sources(raptor
     PRIVATE
-      freeRaptor/gf2matrix.c freeRaptor/raptor10.c freeRaptor/raptor_consts.c
-    PUBLIC
-        freeRaptor/gf2matrix.h freeRaptor/raptor10.h freeRaptor/raptor_consts.h
+          raptor/bipartite.c raptor/decoder.c raptor/encoder.c raptor/galois.c raptor/gaussian.c raptor/pivoting.c
+          PUBLIC
+          raptor/raptor.h
   )
-  target_link_libraries(freeRaptor LINK_PUBLIC m)
+  target_link_libraries(raptor LINK_PUBLIC m)
 else()
-  message(STATUS "Skipping freeRaptor library for Raptor FEC support. To enable support build with -DENABLE_RAPTOR=ON")
+  message(STATUS "Skipping raptor library for Raptor FEC support. To enable support build with -DENABLE_RAPTOR=ON")
 endif()
 
 add_library(flute "")
@@ -59,15 +59,15 @@ target_sources(flute
     src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp src/IpSec.cpp utils/base64.cpp src/RaptorFEC.cpp src/CompactNoCode.cpp
 
   PUBLIC
-    include/Receiver.h include/Transmitter.h include/File.h include/RaptorFEC.h
+    include/Receiver.h include/Transmitter.h include/File.h
 
   )
 target_include_directories(flute PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include/)
 
-if(ENABLE_RAPTOR)
-  target_include_directories(flute PUBLIC ${CMAKE_CURRENT_LIST_DIR}/freeRaptor/)
-  target_link_libraries(flute LINK_PUBLIC freeRaptor)
-endif()
+#if(ENABLE_RAPTOR)
+#  target_include_directories(flute PUBLIC ${CMAKE_CURRENT_LIST_DIR}/raptor/)
+#  target_link_libraries(flute LINK_PUBLIC raptor)
+#endif()
 
 target_link_libraries( flute
     LINK_PUBLIC

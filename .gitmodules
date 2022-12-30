@@ -1,7 +1,3 @@
-[submodule "freeRaptor"]
-	path = freeRaptor
-	url = https://github.com/Etua/freeRaptor.git
-	branch = dev
 [submodule "raptor"]
 	path = raptor
 	url = https://github.com/SteezyE/raptor.git
