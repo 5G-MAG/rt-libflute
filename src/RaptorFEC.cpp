@@ -1,10 +1,8 @@
-#include "flute_types.h"
-#include "spdlog/spdlog.h"
+#include "RaptorFEC.h"
 
 #ifdef RAPTOR_ENABLED
 
 LibFlute::RaptorFEC::RaptorFEC(){}
-
 
 LibFlute::RaptorFEC::RaptorFEC(unsigned int transfer_length, unsigned int max_payload, unsigned long target_sub_block_size) 
     : F(transfer_length)
@@ -15,7 +13,10 @@ LibFlute::RaptorFEC::RaptorFEC(unsigned int transfer_length, unsigned int max_pa
   calculate_partitioning();
 }
 
-LibFlute::RaptorFEC::~RaptorFEC() = default;
+LibFlute::RaptorFEC::~RaptorFEC() {
+  free_decoder_context(dc);  
+  free_encoder_context(sc);
+}
 
 bool LibFlute::RaptorFEC::calculate_partitioning() {
   // TODO: print debug statements and test
@@ -49,7 +50,21 @@ bool LibFlute::RaptorFEC::calculate_partitioning() {
 
 bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& srcblk) {
   // TODO: try to decode srcblk using the symbols it contains...
-  return true;
+  // sc needs to have: snum, psize, cnum, graph
+  // graph for precoding is problematic: generated based on some randomness
+  //   solution 1: transfer some (ideally slim) representation of graph from sndr to rcvr
+  //   solution 2: transfer random seed from sndr to rcvr reproduce randomness and create exact graph
+  if(!sc)
+  {
+	// TODO: create slim version of encoder_context: only snum, psize, cnum and graph
+	sc = create_encoder_context(NULL, Z, T); 
+  }
+  if(!dc) dc = create_decoder_context(sc);
+  // TODO: implement transform_srcblk_to_lt (LibFlute::SourcBlock -> LT_packet)
+  struct LT_packet * pkt; // = transform_srcblk_to_lt(srcblk);
+  process_LT_packet(dc, pkt);
+  free_LT_packet(pkt);
+  return dc->finished;
 }
 
 unsigned int LibFlute::RaptorFEC::target_K() { return K * surplus_packet_ratio; }

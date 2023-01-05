@@ -44,7 +44,7 @@ if(ENABLE_RAPTOR)
   add_library(raptor STATIC)
   target_sources(raptor
     PRIVATE
-          raptor/bipartite.c raptor/decoder.c raptor/encoder.c raptor/galois.c raptor/gaussian.c raptor/pivoting.c
+          raptor/bipartite.c raptor/decoder.c raptor/encoder.c raptor/galois.c raptor/gaussian.c raptor/pivoting.c raptor/random.c
           PUBLIC
           raptor/raptor.h
   )
