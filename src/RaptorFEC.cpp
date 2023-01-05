@@ -1,9 +1,5 @@
 #include "RaptorFEC.h"
 
-#ifdef RAPTOR_ENABLED
-
-LibFlute::RaptorFEC::RaptorFEC(){}
-
 LibFlute::RaptorFEC::RaptorFEC(unsigned int transfer_length, unsigned int max_payload) 
     : F(transfer_length)
     , P(max_payload)
@@ -62,6 +58,10 @@ bool LibFlute::RaptorFEC::calculate_partitioning() {
 }
 
 bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& srcblk) {
+  if (!dc || !transformers.size()) {
+    // check source block completion for the ENcoder
+    return std::all_of(srcblk.symbols.begin(), srcblk.symbols.end(), [](const auto& symbol){ return symbol.second.complete; });
+  }
   // TODO: try to decode srcblk using the symbols it contains...
   // sc needs to have: snum, psize, cnum, graph
   // graph for precoding is problematic: generated based on some randomness
@@ -93,22 +93,22 @@ LibFlute::Symbol LibFlute::RaptorFEC::translate_symbol(struct enc_context *encod
     return symbol;
 }
 
-LibFlute::SourceBlock LibFlute::RaptorFEC::create_block(unsigned char *buffer, int *bytes_read) {
+LibFlute::SourceBlock LibFlute::RaptorFEC::create_block(char *buffer, int *bytes_read) {
     struct SourceBlock source_block;
-    struct enc_context *encoder_ctx = create_encoder_context(buffer, K, T);
+    struct enc_context *encoder_ctx = create_encoder_context((unsigned char *)buffer, K, T);
+    *bytes_read += K * T;
     unsigned int symbols_to_read = target_K();
 
     for(unsigned int symbol_id = 1; symbol_id < symbols_to_read + 1; symbol_id++) {
         source_block.symbols[symbol_id] = translate_symbol(encoder_ctx);
     }
-    *bytes_read += K * T;
 
     free_encoder_context(encoder_ctx);
     return source_block;
 }
 
 
-std::map<uint16_t, LibFlute::SourceBlock> LibFlute::RaptorFEC::create_blocks(unsigned char *buffer, int *bytes_read) {
+std::map<uint16_t, LibFlute::SourceBlock> LibFlute::RaptorFEC::create_blocks(char *buffer, int *bytes_read) {
     if(!bytes_read)
         throw std::invalid_argument("bytes_read pointer shouldn't be null");
     if(N != 1)
@@ -163,6 +163,10 @@ bool LibFlute::RaptorFEC::parse_fdt_info(tinyxml2::XMLElement *file) {
     throw "Required field \"FEC-OTI-Symbol-Alignment-Parameter\" is missing for an object in the FDT";
   }
 
+  if (T % Al) {
+    throw "Symbol size T is not a multiple of Al. Invalid configuration from sender";
+  }
+
   // Set the values that are missing that we or the File class may need, follows the same logic as in calculate_partitioning()
   nof_source_symbols = ceil((double)F / (double)T);
   K = (nof_source_symbols > 8192) ? 8192 : nof_source_symbols;
@@ -186,5 +190,3 @@ bool LibFlute::RaptorFEC::add_fdt_info(tinyxml2::XMLElement *file) {
 
   return true;
 }
-
-#endif

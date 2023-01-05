@@ -70,16 +70,12 @@ auto LibFlute::EncodingSymbol::to_payload(const std::vector<EncodingSymbol>& sym
   auto first_symbol = symbols.begin();
   switch (fec_oti.encoding_id) {
     case FecScheme::CompactNoCode:
+    case FecScheme::Raptor:
       *((uint16_t*)ptr) = htons(first_symbol->source_block_number());
       ptr += 2;
       *((uint16_t*)ptr) = htons(first_symbol->id());
       ptr += 2;
       len += 4;
-      break;
-    case FecScheme::Raptor:
-      //TODO
-      spdlog::warn("EncodingSymbol::to_payload: Raptor FEC encoding implementation is still in progress");
-      throw "EncodingSymbol::to_payload Raptor FEC is not done yet";
       break;
     default:
       throw "Invalid FEC encoding ID. Only 2 FEC types are currently supported: compact no-code or raptor";
@@ -115,15 +111,11 @@ auto LibFlute::EncodingSymbol::decode_to(char* buffer, size_t max_length) const 
 auto LibFlute::EncodingSymbol::encode_to(char* buffer, size_t max_length) const -> size_t {
   switch (_fec_scheme) {
     case FecScheme::CompactNoCode:
+    case FecScheme::Raptor:
       if (_data_len <= max_length) {
         memcpy(buffer, _encoded_data, _data_len);
         return _data_len;
       }
-      break;
-    case FecScheme::Raptor:
-      //TODO
-      spdlog::warn("EncodingSymbol::encode_to Raptor FEC encoding implementation is still in progress");
-      throw "EncodingSymbol::encode_to Raptor FEC is not done yet";
       break;
   }
   return 0;

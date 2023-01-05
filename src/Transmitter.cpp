@@ -36,10 +36,10 @@ boost::asio::io_service& io_service)
     ,_fec_scheme(fec_scheme)
 {
   _max_payload = mtu -
-    20 - // IPv4 header
+    ( _endpoint.address().is_v6() ? 40 : 20) - // IP header
      8 - // UDP header
     32 - // ALC Header with EXT_FDT and EXT_FTI
-     4;  // SBN and ESI for compact no-code FEC
+     4;  // SBN and ESI for compact no-code or raptor FEC
   uint32_t max_source_block_length = 64;
 
   switch(_fec_scheme) {
@@ -55,7 +55,6 @@ boost::asio::io_service& io_service)
   _socket.set_option(boost::asio::ip::multicast::enable_loopback(true));
   _socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
 
-  //TODO: calculate max payload and max source block length properly based on FEC scheme
   _fec_oti = FecOti{_fec_scheme, 0, _max_payload, max_source_block_length};
   _fdt = std::make_unique<FileDeliveryTable>(1, _fec_oti);
 

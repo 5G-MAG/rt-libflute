@@ -17,7 +17,9 @@
 #include <stdint.h>
 #include <map>
 #include "tinyxml2.h"
+#ifdef RAPTOR_ENABLED
 #include "raptor.h"
+#endif
 
 #pragma once
 /** \mainpage LibFlute - ALC/FLUTE library
@@ -97,13 +99,23 @@ namespace LibFlute {
      * @param bytes_read a pointer to an integer to store the number of bytes read out of buffer
      * @return a map of source blocks that the object has been encoded to
      */
-    virtual std::map<uint16_t, SourceBlock> create_blocks(unsigned char *buffer, int *bytes_read) = 0;
+    virtual std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read) = 0;
 
 
     virtual bool calculate_partitioning() = 0;
 
+    /**
+     * @brief Attempt to parse relevent information for decoding from the FDT
+     *
+     * @return success status
+     */
     virtual bool parse_fdt_info(tinyxml2::XMLElement *file) = 0;
 
+    /**
+     * @brief Add relevant information about the FEC Scheme which the decoder may need, to the FDT
+     * 
+     * @return success status
+     */
     virtual bool add_fdt_info(tinyxml2::XMLElement *file) = 0;
 
     uint32_t nof_source_symbols = 0;
@@ -112,58 +124,31 @@ namespace LibFlute {
     uint32_t small_source_block_length = 0;
     uint32_t nof_large_source_blocks = 0;
     
-
-  };
-
-  class CompactNoCodeFEC : public FecTransformer {
-    
-    public: 
-    
-    CompactNoCodeFEC();
-
-    virtual ~CompactNoCodeFEC();
-
-    bool check_source_block_completion(SourceBlock& srcblk);
-
-    std::map<uint16_t, SourceBlock> create_blocks(unsigned char *buffer, int *bytes_read);
-
-    bool calculate_partitioning();
-
-    bool parse_fdt_info(tinyxml2::XMLElement *file);
-
-    bool add_fdt_info(tinyxml2::XMLElement *file);
-
-    uint32_t nof_source_symbols = 0;
-    uint32_t nof_source_blocks = 0;
-    uint32_t large_source_block_length = 0;
-    uint32_t small_source_block_length = 0;
-    uint32_t nof_large_source_blocks = 0;
-
   };
 
   class RaptorFEC : public FecTransformer {
 
-  private:
+    private:
 
-      unsigned int target_K();
+    unsigned int target_K();
 
-      Symbol translate_symbol(struct enc_context *encoder_ctx);
+    Symbol translate_symbol(struct enc_context *encoder_ctx);
 
-      LibFlute::SourceBlock create_block(unsigned char *buffer, int *bytes_read);
+    LibFlute::SourceBlock create_block(char *buffer, int *bytes_read);
 
-      const float surplus_packet_ratio = 1.5;
+    const float surplus_packet_ratio = 1.5;
     
     public: 
 
     RaptorFEC(unsigned int transfer_length, unsigned int max_payload);
 
-    RaptorFEC();
+    RaptorFEC() {};
 
     virtual ~RaptorFEC();
 
     bool check_source_block_completion(SourceBlock& srcblk);
 
-    std::map<uint16_t, SourceBlock> create_blocks(unsigned char *buffer, int *bytes_read);
+    std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read);
 
     bool calculate_partitioning();
 
@@ -181,12 +166,6 @@ namespace LibFlute {
     uint32_t small_source_block_length = 0;
     uint32_t nof_large_source_blocks = 0;
     
-    private:
-
-    struct enc_context *sc = NULL;
-    struct dec_context *dc = NULL;
-    
-    unsigned int S; // seed for random generator
     unsigned int F; // object size in bytes
     unsigned int Al = 4; // symbol alignment: 4
     unsigned int T; // symbol size in bytes
@@ -197,6 +176,13 @@ namespace LibFlute {
     unsigned int K; // number of symbols in a source block
     unsigned int P; // maximum payload size: e.g. 1436 for ipv4 over 802.3
     
+    private:
+
+#ifdef RAPTOR_ENABLED
+    struct enc_context *sc = NULL;
+    struct dec_context *dc = NULL;
+#endif
+    unsigned int S; // seed for random generator
   };
 
 };

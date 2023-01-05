@@ -87,20 +87,24 @@ LibFlute::File::File(uint32_t toi,
   _meta.expires = expires;
   _meta.fec_oti = fec_oti;
 
+#ifdef RAPTOR_ENABLED
+  RaptorFEC *r = nullptr;
+#endif
+
   switch (_meta.fec_oti.encoding_id) {
     case FecScheme::CompactNoCode:
       _meta.fec_oti.transfer_length = length;
       _meta.fec_transformer = 0;
       break;
+#ifdef RAPTOR_ENABLED
     case FecScheme::Raptor:
       _meta.fec_oti.transfer_length = length;
-      _meta.fec_transformer = new RaptorFEC(length, fec_oti.encoding_symbol_length);
-      
-      spdlog::warn("File.cpp - Raptor FEC scheme is not done yet");
-      
-      // TODO... what else is missing here?
-      
+      r = new RaptorFEC(length, fec_oti.encoding_symbol_length);
+      _meta.fec_oti.encoding_symbol_length = r->T;
+      _meta.fec_oti.max_source_block_length = r->K * r->T;
+      _meta.fec_transformer = r; 
       break;
+#endif
     default:
       throw "FEC scheme not supported or not yet implemented";
       break;
@@ -180,7 +184,7 @@ auto LibFlute::File::check_file_completion() -> void
 
 auto LibFlute::File::calculate_partitioning() -> void
 {
-  if (0 && _meta.fec_transformer && _meta.fec_transformer->calculate_partitioning()){
+  if (_meta.fec_transformer && _meta.fec_transformer->calculate_partitioning()){
     _nof_source_symbols = _meta.fec_transformer->nof_source_symbols;
     _nof_source_blocks = _meta.fec_transformer->nof_source_blocks;
     _large_source_block_length = _meta.fec_transformer->large_source_block_length;
@@ -199,6 +203,17 @@ auto LibFlute::File::calculate_partitioning() -> void
 auto LibFlute::File::create_blocks() -> void
 {
   // Create the required source blocks and encoding symbols
+
+  if (_meta.fec_transformer){
+    int bytes_read = 0;
+    _source_blocks = _meta.fec_transformer->create_blocks(_buffer, &bytes_read);
+    if (bytes_read < length()) {
+      spdlog::error("FEC Transformer failed to create source blocks");
+      throw "FEC Transformer failed to create source blocks";
+    }
+    return;
+  }
+
   auto buffer_ptr = _buffer;
   size_t remaining_size = _meta.fec_oti.transfer_length;
   auto number = 0;
@@ -226,10 +241,10 @@ auto LibFlute::File::create_blocks() -> void
 auto LibFlute::File::get_next_symbols(size_t max_size) -> std::vector<EncodingSymbol> 
 {
   auto block = _source_blocks.begin();
-  int nof_symbols = std::ceil((float)(max_size - 4) / (float)_meta.fec_oti.encoding_symbol_length);
+  int nof_symbols = std::floor((float)max_size / (float)_meta.fec_oti.encoding_symbol_length);
   auto cnt = 0;
   std::vector<EncodingSymbol> symbols;
-  
+  spdlog::debug("Attempting to queue {} symbols",nof_symbols);
   for (auto& block : _source_blocks) {
     if (cnt >= nof_symbols) break;
 

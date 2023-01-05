@@ -40,12 +40,11 @@ set(CMAKE_CXX_CLANG_TIDY clang-tidy)
 
 if(ENABLE_RAPTOR)
   message(STATUS "Compiling raptor library for Raptor FEC support. To disable support build with -DENABLE_RAPTOR=OFF")
-  add_compile_definitions(RAPTOR_ENABLED)
   add_library(raptor STATIC)
   target_sources(raptor
     PRIVATE
           raptor/bipartite.c raptor/decoder.c raptor/encoder.c raptor/galois.c raptor/gaussian.c raptor/pivoting.c raptor/random.c
-          PUBLIC
+    PUBLIC
           raptor/raptor.h
   )
   target_link_libraries(raptor LINK_PUBLIC m)
@@ -56,16 +55,23 @@ endif()
 add_library(flute "")
 target_sources(flute
   PRIVATE
-    src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp src/IpSec.cpp utils/base64.cpp src/RaptorFEC.cpp src/CompactNoCode.cpp
+    src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp src/IpSec.cpp utils/base64.cpp
 
   PUBLIC
-    include/Receiver.h include/Transmitter.h include/File.h include/RaptorFEC.h
+    include/Receiver.h include/Transmitter.h include/File.h
 
   )
 target_include_directories(flute PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include/)
 
 if(ENABLE_RAPTOR)
+  add_compile_definitions(RAPTOR_ENABLED)
   target_include_directories(flute PUBLIC ${CMAKE_CURRENT_LIST_DIR}/raptor/)
+  target_sources(flute
+    PRIVATE
+	  src/RaptorFEC.cpp
+	PUBLIC
+	  include/RaptorFEC.h
+  )
   target_link_libraries(flute LINK_PUBLIC raptor)
 endif()
 
