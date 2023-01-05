@@ -81,8 +81,9 @@ LibFlute::SourceBlock LibFlute::RaptorFEC::create_block(unsigned char *buffer, i
 
 // TODO: Reformat to K and T
 std::map<uint16_t, LibFlute::SourceBlock> LibFlute::RaptorFEC::create_blocks(unsigned char *buffer, int *bytes_read) {
-  // TODO: encode buffer into a number of symbols
-  if(N != 1)
+    if(!bytes_read)
+        throw std::invalid_argument("bytes_read pointer shouldn't be null");
+    if(N != 1)
       throw std::invalid_argument("Currently the encoding only supports 1 sub-block per block");
   std::map<uint16_t, LibFlute::SourceBlock> block_map;
 
