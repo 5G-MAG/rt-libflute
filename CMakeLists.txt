@@ -59,15 +59,15 @@ target_sources(flute
     src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp src/IpSec.cpp utils/base64.cpp src/RaptorFEC.cpp src/CompactNoCode.cpp
 
   PUBLIC
-    include/Receiver.h include/Transmitter.h include/File.h
+    include/Receiver.h include/Transmitter.h include/File.h include/RaptorFEC.h
 
   )
 target_include_directories(flute PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include/)
 
-#if(ENABLE_RAPTOR)
-#  target_include_directories(flute PUBLIC ${CMAKE_CURRENT_LIST_DIR}/raptor/)
-#  target_link_libraries(flute LINK_PUBLIC raptor)
-#endif()
+if(ENABLE_RAPTOR)
+  target_include_directories(flute PUBLIC ${CMAKE_CURRENT_LIST_DIR}/raptor/)
+  target_link_libraries(flute LINK_PUBLIC raptor)
+endif()
 
 target_link_libraries( flute
     LINK_PUBLIC

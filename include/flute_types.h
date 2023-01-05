@@ -17,6 +17,8 @@
 #include <stdint.h>
 #include <map>
 #include "tinyxml2.h"
+#include "raptor.h"
+
 #pragma once
 /** \mainpage LibFlute - ALC/FLUTE library
  *
@@ -83,13 +85,13 @@ namespace LibFlute {
     virtual bool check_source_block_completion(SourceBlock& srcblk) = 0;
 
     /**
-     * @brief Encode a source block into multiple symbols
+     * @brief Encode a file into multiple source blocks
      *
      * @param buffer a pointer to the buffer containing the data
      * @param bytes_read a pointer to an integer to store the number of bytes read out of buffer
      * @return a map of source blocks that the object has been encoded to
      */
-    virtual std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read) = 0;
+    virtual std::map<uint16_t, SourceBlock> create_blocks(unsigned char *buffer, int *bytes_read) = 0;
 
 
     virtual bool calculate_partitioning() = 0;
@@ -117,7 +119,7 @@ namespace LibFlute {
 
     bool check_source_block_completion(SourceBlock& srcblk);
 
-    std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read);
+    std::map<uint16_t, SourceBlock> create_blocks(unsigned char *buffer, int *bytes_read);
 
     bool calculate_partitioning();
 
@@ -134,6 +136,16 @@ namespace LibFlute {
   };
 
   class RaptorFEC : public FecTransformer {
+
+  private:
+
+      unsigned int target_K();
+
+      Symbol translate_symbol(struct enc_context *encoder_ctx);
+
+      LibFlute::SourceBlock create_block(unsigned char *buffer, int *bytes_read);
+
+      const float surplus_packet_ratio = 1.5;
     
     public: 
 
@@ -145,7 +157,7 @@ namespace LibFlute {
 
     bool check_source_block_completion(SourceBlock& srcblk);
 
-    std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read);
+    std::map<uint16_t, SourceBlock> create_blocks(unsigned char *buffer, int *bytes_read);
 
     bool calculate_partitioning();
 

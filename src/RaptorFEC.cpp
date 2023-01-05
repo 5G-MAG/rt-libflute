@@ -52,10 +52,44 @@ bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& s
   return true;
 }
 
-std::map<uint16_t, LibFlute::SourceBlock> LibFlute::RaptorFEC::create_blocks(char *buffer, int *bytes_read) {
+unsigned int LibFlute::RaptorFEC::target_K() { return K * surplus_packet_ratio; }
+
+LibFlute::Symbol LibFlute::RaptorFEC::translate_symbol(struct enc_context *encoder_ctx) {
+    struct Symbol symbol { new char[T], T };
+    struct LT_packet *lt_packet = encode_LT_packet(encoder_ctx);
+
+    memcpy(symbol.data, &lt_packet->syms, T);
+
+    free_LT_packet(lt_packet);
+    return symbol;
+}
+
+LibFlute::SourceBlock LibFlute::RaptorFEC::create_block(unsigned char *buffer, int *bytes_read) {
+    struct SourceBlock source_block;
+    struct enc_context *encoder_ctx = create_encoder_context(buffer, K, T);
+    unsigned int symbols_to_read = target_K();
+
+    for(unsigned int symbol_id = 1; symbol_id < symbols_to_read; symbol_id++) {
+        source_block.symbols[symbol_id] = translate_symbol(encoder_ctx);
+        *bytes_read += T;
+    }
+
+    free_encoder_context(encoder_ctx);
+    return source_block;
+}
+
+
+// TODO: Reformat to K and T
+std::map<uint16_t, LibFlute::SourceBlock> LibFlute::RaptorFEC::create_blocks(unsigned char *buffer, int *bytes_read) {
   // TODO: encode buffer into a number of symbols
-  std::map<uint16_t, LibFlute::SourceBlock> m;
-  return m;
+  if(N != 1)
+      throw std::invalid_argument("Currently the encoding only supports 1 sub-block per block");
+  std::map<uint16_t, LibFlute::SourceBlock> block_map;
+
+  for(unsigned int src_blocks = 1; src_blocks < Z + 1; src_blocks++)
+      block_map[src_blocks] = create_block(&buffer[*bytes_read], bytes_read);
+
+  return block_map;
 }
 
 

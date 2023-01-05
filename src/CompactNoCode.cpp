@@ -19,7 +19,7 @@ bool LibFlute::CompactNoCodeFEC::check_source_block_completion(LibFlute::SourceB
   return true;
 }
 
-std::map<uint16_t, LibFlute::SourceBlock> LibFlute::CompactNoCodeFEC::create_blocks(char *buffer, int *bytes_read) {
+std::map<uint16_t, LibFlute::SourceBlock> LibFlute::CompactNoCodeFEC::create_blocks(unsigned char *buffer, int *bytes_read) {
   std::map<uint16_t, LibFlute::SourceBlock> m;
   return m;
 }
