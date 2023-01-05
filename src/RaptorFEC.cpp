@@ -55,6 +55,7 @@ bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& s
 unsigned int LibFlute::RaptorFEC::target_K() { return K * surplus_packet_ratio; }
 
 LibFlute::Symbol LibFlute::RaptorFEC::translate_symbol(struct enc_context *encoder_ctx) {
+    // TODO: Delete in the File destructor (or anywhere where applicable)
     struct Symbol symbol { new char[T], T };
     struct LT_packet *lt_packet = encode_LT_packet(encoder_ctx);
 
@@ -79,7 +80,6 @@ LibFlute::SourceBlock LibFlute::RaptorFEC::create_block(unsigned char *buffer, i
 }
 
 
-// TODO: Reformat to K and T
 std::map<uint16_t, LibFlute::SourceBlock> LibFlute::RaptorFEC::create_blocks(unsigned char *buffer, int *bytes_read) {
     if(!bytes_read)
         throw std::invalid_argument("bytes_read pointer shouldn't be null");
