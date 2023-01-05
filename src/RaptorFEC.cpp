@@ -61,7 +61,7 @@ bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& s
   }
   if(!dc) dc = create_decoder_context(sc);
   // TODO: implement transform_srcblk_to_lt (LibFlute::SourcBlock -> LT_packet)
-  struct LT_packet * pkt = transform_srcblk_to_lt(srcblk);
+  struct LT_packet * pkt; // = transform_srcblk_to_lt(srcblk);
   process_LT_packet(dc, pkt);
   free_LT_packet(pkt);
   return dc->finished;
