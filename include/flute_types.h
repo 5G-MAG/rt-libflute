@@ -59,6 +59,7 @@ namespace LibFlute {
   };
 
   struct SourceBlock {
+    uint16_t id = 0;
     bool complete = false;
     std::map<uint16_t, Symbol> symbols; 
   };
@@ -171,7 +172,13 @@ namespace LibFlute {
     uint32_t large_source_block_length = 0;
     uint32_t small_source_block_length = 0;
     uint32_t nof_large_source_blocks = 0;
+    
+    private:
 
+    struct enc_context *sc = NULL;
+    struct dec_context *dc = NULL;
+    
+    unsigned int S; // seed for random generator
     unsigned int F; // object size in bytes
     unsigned int Al = 4; // symbol alignment: 4
     unsigned int T; // symbol size in bytes
@@ -180,7 +187,7 @@ namespace LibFlute {
     unsigned int N; // number of sub-blocks per source block
     unsigned int K; // number of symbols in a source block
     unsigned int P; // maximum payload size: e.g. 1436 for ipv4 over 802.3
-
+    
   };
 
 };
