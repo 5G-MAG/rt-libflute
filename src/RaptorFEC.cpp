@@ -4,13 +4,52 @@
 
 LibFlute::RaptorFEC::RaptorFEC(){}
 
-LibFlute::RaptorFEC::RaptorFEC(unsigned int transfer_length, unsigned int max_payload, unsigned long target_sub_block_size) 
+LibFlute::RaptorFEC::RaptorFEC(unsigned int transfer_length, unsigned int max_payload) 
     : F(transfer_length)
     , P(max_payload)
-    , W(target_sub_block_size)
 {
-  Al = 4;
-  calculate_partitioning();
+  double g = fmin( fmin(ceil((double)P*1024/(double)F), (double)P/(double)Al), 10.0f);
+  spdlog::debug("double g = fmin( fmin(ceil((double)P*1024/F), (double)P/(double)Al), 10.0f");
+  spdlog::debug("G = {} = min( ceil({}*1024/{}), {}/{}, 10.0f)",g,P,F,P,Al);
+  G = (unsigned int) g;
+
+
+  T = (unsigned int) floor((double)P/(double)(Al*g)) * Al;
+  spdlog::debug("T = (unsigned int) floor((double)P/(double)(Al*g)) * Al");
+  spdlog::debug("T = {} = floor({}/({}*{})) * {}",T,P,Al,g,Al);
+
+  assert(T % Al == 0); // Symbol size T should be a multiple of symbol alignment parameter Al
+  
+  double Kt = ceil((double)F/(double)T); // total symbols
+  spdlog::debug("double Kt = ceil((double)F/(double)T)");
+  spdlog::debug("Kt = {} = ceil({}/{})",Kt,F,T);
+
+  Z = (unsigned int) ceil(Kt/8192);
+  spdlog::debug("Z = (unsigned int) ceil(Kt/8192)");
+  spdlog::debug("Z = {} = ceil({}/8192)",Z,Kt);
+
+  K = (Kt > 8192) ? 8192 : (unsigned int) Kt; // symbols per source block
+  spdlog::debug("K = {}",K);
+
+  N = fmin( ceil( ceil(Kt/(double)Z) * (double)T/(double)W ) , (double)T/(double)Al );
+  spdlog::warn("N = fmin( ceil( ceil(Kt/(double)Z) * (double)T/(double)W ) , (double)T/(double)Al )");
+  spdlog::warn("N = {} = min( ceil( ceil({}/{}) * {}/{} ) , {}/{} )",N,Kt,Z,T,W,T,Al);
+  
+  // Set the values that the File class may need:
+  nof_source_symbols = (unsigned int) Kt;
+  nof_source_blocks = Z;
+
+  small_source_block_length = (Z * K - nof_source_symbols) * T; // = (number of symbols in the final (small) source block, if nof_source_symbols isnt cleanly divisible by Z * K ) * symbol size
+
+  // open question as to how we define "large source blocks" because either none of the remaining "regular" blocks are large, or all of them are, since raptor has a fixed block size
+
+  /*
+  nof_large_source_blocks = K - (small_source_block_length != 0); // if we define a "large" source block as a normal one then its just the nof "regular" source blocks minus the nof small ones (which is either one or zero)
+  large_source_block_length = K * T;
+  */
+
+  nof_large_source_blocks = 0; //for now argue that there are no "large" blocks, only regular and small ones
+  large_source_block_length = 0;
 }
 
 LibFlute::RaptorFEC::~RaptorFEC() {
@@ -19,32 +58,6 @@ LibFlute::RaptorFEC::~RaptorFEC() {
 }
 
 bool LibFlute::RaptorFEC::calculate_partitioning() {
-  // TODO: print debug statements and test
-  double G = fmin( fmin(ceil((double)P*1024/(double)F), (double)P/(double)Al), 10.0f);
-  spdlog::debug("double G = fmin( fmin(ceil((double)P*1024/F), (double)P/(double)Al), 10.0f");
-  spdlog::debug("G = {} = min( ceil({}*1024/{}), {}/{}, 10.0f)",G,P,F,P,Al);
-
-  T = (unsigned int) floor((double)P/(double)(Al*G)) * Al;
-  spdlog::debug("T = (unsigned int) floor((double)P/(double)(Al*G)) * Al");
-  spdlog::debug("T = {} = floor({}/({}*{})) * {}",T,P,Al,G,Al);
-
-  assert(T % Al == 0); // Symbol size T should be a multiple of symbol alignment parameter Al
-  
-  double Kt = ceil((double)F/(double)T);
-  spdlog::debug("double Kt = ceil((double)F/(double)T)");
-  spdlog::debug("Kt = {} = ceil({}/{})",Kt,F,T);
-
-  Z = (unsigned int) ceil(Kt/8192);
-  spdlog::debug("Z = (unsigned int) ceil(Kt/8192)");
-  spdlog::debug("Z = {} = ceil({}/8192)",Z,Kt);
-
-
-  N = fmin( ceil( ceil(Kt/(double)Z) * (double)T/(double)W ) , (double)T/(double)Al );
-  spdlog::warn("N = fmin( ceil( ceil(Kt/(double)Z) * (double)T/(double)W ) , (double)T/(double)Al )");
-  spdlog::warn("N = {} = min( ceil( ceil({}/{}) * {}/{} ) , {}/{} )",N,Kt,Z,T,W,T,Al);
-  
-  //TODO set the values that the File class needs...
-
   return true;
 }
 
@@ -150,13 +163,20 @@ bool LibFlute::RaptorFEC::parse_fdt_info(tinyxml2::XMLElement *file) {
     throw "Required field \"FEC-OTI-Symbol-Alignment-Parameter\" is missing for an object in the FDT";
   }
 
-  //TODO: calculate other relevant values from these
+  // Set the values that are missing that we or the File class may need, follows the same logic as in calculate_partitioning()
+  nof_source_symbols = ceil((double)F / (double)T);
+  K = (nof_source_symbols > 8192) ? 8192 : nof_source_symbols;
+
+  nof_source_blocks = Z;
+  small_source_block_length = (Z * K - nof_source_symbols) * T;
+  nof_large_source_blocks = 0;
+  large_source_block_length = 0;
 
   return true;
 }
 
 bool LibFlute::RaptorFEC::add_fdt_info(tinyxml2::XMLElement *file) {
-  //TODO: do we need transfer length too? Does it change based on FecScheme?
+  //TODO: do we need to set transfer length too? I already gets set earlier. Does it change based on FecScheme?
   file->SetAttribute("FEC-OTI-FEC-Encoding-ID", (unsigned) FecScheme::Raptor);
   file->SetAttribute("FEC-OTI-Encoding-Symbol-Length", T);
   file->SetAttribute("FEC-OTI-Symbol-Alignment-Parameter", Al);

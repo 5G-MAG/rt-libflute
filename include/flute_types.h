@@ -48,7 +48,12 @@ namespace LibFlute {
    */
   enum class FecScheme {
     CompactNoCode,
-    Raptor
+    Raptor,
+    Reed_Solomon_GF_2_m,
+    LDPC_Staircase_Codes,
+    LDPC_Triangle_Codes,
+    Reed_Solomon_GF_2_8,
+    RaptorQ
   };
 
   struct Symbol {
@@ -150,7 +155,7 @@ namespace LibFlute {
     
     public: 
 
-    RaptorFEC(unsigned int transfer_length, unsigned int max_payload, unsigned long target_sub_block_size);
+    RaptorFEC(unsigned int transfer_length, unsigned int max_payload);
 
     RaptorFEC();
 
@@ -166,6 +171,9 @@ namespace LibFlute {
 
     bool add_fdt_info(tinyxml2::XMLElement *file);
 
+    std::map<uint16_t, void*> transformers; // en / de coders depending on if we are the Receiver or Transmitter
+    // std::map<uint16_t, struct enc_context*> encoders;
+    // std::map<uint16_t, struct dec_context*> decoders;
 
     uint32_t nof_source_symbols = 0;
     uint32_t nof_source_blocks = 0;
@@ -182,7 +190,8 @@ namespace LibFlute {
     unsigned int F; // object size in bytes
     unsigned int Al = 4; // symbol alignment: 4
     unsigned int T; // symbol size in bytes
-    unsigned long W = 256*1024; // target on sub block size (arbitrarily set to maximum recommended value of 256 kB)
+    unsigned long W = 16*1024*1024; // target on sub block size- set default to 16 MB, to keep the number of sub-blocks, N, = 1 (you probably only need W >= 11MB to achieve this, assuming an ethernet mtu of ~1500 bytes, but we round to the nearest power of 2)
+    unsigned int G; // number of symbols per packet
     unsigned int Z; // number of source blocks
     unsigned int N; // number of sub-blocks per source block
     unsigned int K; // number of symbols in a source block
