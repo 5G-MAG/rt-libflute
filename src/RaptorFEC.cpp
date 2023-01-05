@@ -69,10 +69,10 @@ LibFlute::SourceBlock LibFlute::RaptorFEC::create_block(unsigned char *buffer, i
     struct enc_context *encoder_ctx = create_encoder_context(buffer, K, T);
     unsigned int symbols_to_read = target_K();
 
-    for(unsigned int symbol_id = 1; symbol_id < symbols_to_read; symbol_id++) {
+    for(unsigned int symbol_id = 1; symbol_id < symbols_to_read + 1; symbol_id++) {
         source_block.symbols[symbol_id] = translate_symbol(encoder_ctx);
-        *bytes_read += T;
     }
+    *bytes_read += K * T;
 
     free_encoder_context(encoder_ctx);
     return source_block;
@@ -85,7 +85,9 @@ std::map<uint16_t, LibFlute::SourceBlock> LibFlute::RaptorFEC::create_blocks(uns
         throw std::invalid_argument("bytes_read pointer shouldn't be null");
     if(N != 1)
       throw std::invalid_argument("Currently the encoding only supports 1 sub-block per block");
-  std::map<uint16_t, LibFlute::SourceBlock> block_map;
+
+    std::map<uint16_t, LibFlute::SourceBlock> block_map;
+    *bytes_read = 0;
 
   for(unsigned int src_blocks = 1; src_blocks < Z + 1; src_blocks++)
       block_map[src_blocks] = create_block(&buffer[*bytes_read], bytes_read);
