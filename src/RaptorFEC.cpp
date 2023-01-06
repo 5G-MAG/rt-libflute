@@ -9,7 +9,6 @@ LibFlute::RaptorFEC::RaptorFEC(unsigned int transfer_length, unsigned int max_pa
   spdlog::debug("G = {} = min( ceil({}*1024/{}), {}/{}, 10.0f)",g,P,F,P,Al);
   G = (unsigned int) g;
 
-
   T = (unsigned int) floor((double)P/(double)(Al*g)) * Al;
   spdlog::debug("T = (unsigned int) floor((double)P/(double)(Al*g)) * Al");
   spdlog::debug("T = {} = floor({}/({}*{})) * {}",T,P,Al,g,Al);
@@ -58,36 +57,59 @@ bool LibFlute::RaptorFEC::calculate_partitioning() {
 }
 
 bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& srcblk) {
+// TODO: discuss / realize transformers idea
+#if 0 
   if (!dc || !transformers.size()) {
-    // check source block completion for the ENcoder
+    // check source block completion for the Encoder
     return std::all_of(srcblk.symbols.begin(), srcblk.symbols.end(), [](const auto& symbol){ return symbol.second.complete; });
   }
-  // TODO: try to decode srcblk using the symbols it contains...
-  // sc needs to have: snum, psize, cnum, graph
-  // graph for precoding is problematic: generated based on some randomness
-  //   solution 1: transfer some (ideally slim) representation of graph from sndr to rcvr
-  //   solution 2: transfer random seed from sndr to rcvr reproduce randomness and create exact graph
-  if(!sc)
+#endif
+  if(!srcblk.symbols.size()) 
+	return false;
+  if(sc)
+	free_encoder_context(sc);
+  if(dc)
+  	free_decoder_context(dc);
+
+  sc = create_encoder_context(NULL, K, T, srcblk.seed); 
+  dc = create_decoder_context(sc);
+
+  // std::map<uint16_t, Symbol>::iterator
+  for(auto iter = srcblk.symbols.begin(); iter != srcblk.symbols.end(); iter++)
   {
-	// TODO: create slim version of encoder_context: only snum, psize, cnum and graph
-	sc = create_encoder_context(NULL, Z, T); 
+   /**	struct LT_packet {
+     *	    int id;         	// packet id (number of packet e.g. id=2 <=> 2. packet)
+     *	    int deg;        	// packet degree (number of xored symbols)
+     *	    int *sid;       	// id of source packets in the packet 
+     *	    GF_ELEMENT *syms; 	// symbols of coded packet 
+     *	};
+     *
+     * 	symbol.data <=> LT_packet.syms
+     *	symbol.deg  <=> LT_packet.deg
+     *	symbol.sid  <=> LT_packet.sid
+     */
+	struct LT_packet * pkt = (struct LT_packet *) calloc(1, sizeof(struct LT_packet)); 
+	pkt->deg = iter->second.deg;
+	pkt->sid = (int *) calloc(pkt->deg, sizeof(int));
+	pkt->syms = (GF_ELEMENT *) calloc(iter->second.length, sizeof(char));
+	memcpy(pkt->sid, iter->second.sid, pkt->deg * sizeof(int));
+	memcpy(pkt->syms, iter->second.data, pkt->deg * sizeof(char));
+	
+  	process_LT_packet(dc, pkt);
+  	free_LT_packet(pkt);
   }
-  if(!dc) dc = create_decoder_context(sc);
-  // TODO: implement transform_srcblk_to_lt (LibFlute::SourcBlock -> LT_packet)
-  struct LT_packet * pkt; // = transform_srcblk_to_lt(srcblk);
-  process_LT_packet(dc, pkt);
-  free_LT_packet(pkt);
   return dc->finished;
 }
 
 unsigned int LibFlute::RaptorFEC::target_K() { return K * surplus_packet_ratio; }
 
-LibFlute::Symbol LibFlute::RaptorFEC::translate_symbol(struct enc_context *encoder_ctx) {
+LibFlute::Symbol LibFlute::RaptorFEC::translate_symbol(struct enc_context *encoder_ctx){	
     // TODO: Delete in the File destructor (or anywhere where applicable)
-    struct Symbol symbol { new char[T], T };
     struct LT_packet *lt_packet = encode_LT_packet(encoder_ctx);
+    struct Symbol symbol { new char[T], T, new int[lt_packet->deg], lt_packet->deg };
 
-    memcpy(symbol.data, &lt_packet->syms, T);
+    memcpy(symbol.data, lt_packet->syms, T);
+    memcpy(symbol.sid, lt_packet->sid, lt_packet->deg * sizeof(int));
 
     free_LT_packet(lt_packet);
     return symbol;
@@ -95,15 +117,15 @@ LibFlute::Symbol LibFlute::RaptorFEC::translate_symbol(struct enc_context *encod
 
 LibFlute::SourceBlock LibFlute::RaptorFEC::create_block(char *buffer, int *bytes_read) {
     struct SourceBlock source_block;
-    struct enc_context *encoder_ctx = create_encoder_context((unsigned char *)buffer, K, T);
-    *bytes_read += K * T;
+    source_block.seed = (uint32_t) rand();
+    struct enc_context *encoder_ctx = create_encoder_context((unsigned char *)buffer, K, T, source_block.seed); 
     unsigned int symbols_to_read = target_K();
 
     for(unsigned int symbol_id = 1; symbol_id < symbols_to_read + 1; symbol_id++) {
         source_block.symbols[symbol_id] = translate_symbol(encoder_ctx);
     }
+    *bytes_read += K * T;
 
-    free_encoder_context(encoder_ctx);
     return source_block;
 }
 

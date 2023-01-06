@@ -61,12 +61,19 @@ namespace LibFlute {
   struct Symbol {
     char* data;
     size_t length;
+#ifdef RAPTOR_ENABLED
+    int* sid;
+    int deg;
+#endif
     bool complete = false;
     bool queued = false;
   };
 
   struct SourceBlock {
     uint16_t id = 0;
+#ifdef RAPTOR_ENABLED
+    uint32_t seed; 
+#endif
     bool complete = false;
     std::map<uint16_t, Symbol> symbols; 
   };
@@ -137,6 +144,11 @@ namespace LibFlute {
     LibFlute::SourceBlock create_block(char *buffer, int *bytes_read);
 
     const float surplus_packet_ratio = 1.5;
+
+#ifdef RAPTOR_ENABLED
+    struct enc_context *sc = NULL;
+    struct dec_context *dc = NULL;
+#endif
     
     public: 
 
@@ -165,7 +177,7 @@ namespace LibFlute {
     uint32_t large_source_block_length = 0;
     uint32_t small_source_block_length = 0;
     uint32_t nof_large_source_blocks = 0;
-    
+
     unsigned int F; // object size in bytes
     unsigned int Al = 4; // symbol alignment: 4
     unsigned int T; // symbol size in bytes
@@ -175,14 +187,7 @@ namespace LibFlute {
     unsigned int N; // number of sub-blocks per source block
     unsigned int K; // number of symbols in a source block
     unsigned int P; // maximum payload size: e.g. 1436 for ipv4 over 802.3
-    
-    private:
 
-#ifdef RAPTOR_ENABLED
-    struct enc_context *sc = NULL;
-    struct dec_context *dc = NULL;
-#endif
-    unsigned int S; // seed for random generator
   };
 
 };
