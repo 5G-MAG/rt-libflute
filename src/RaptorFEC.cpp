@@ -48,55 +48,58 @@ LibFlute::RaptorFEC::RaptorFEC(unsigned int transfer_length, unsigned int max_pa
 }
 
 LibFlute::RaptorFEC::~RaptorFEC() {
-  free_decoder_context(dc);  
-  free_encoder_context(sc);
+  for(auto iter = decoders.begin(); iter != decoders.end(); iter++){
+    free_decoder_context(iter->second);
+  }
 }
 
 bool LibFlute::RaptorFEC::calculate_partitioning() {
   return true;
 }
 
+void LibFlute::RaptorFEC::extract_finished_block(LibFlute::SourceBlock& srcblk, struct dec_context *dc) {
+   for(auto iter = srcblk.symbols.begin(); iter != srcblk.symbols.end(); iter++) {
+    memcpy(iter->second.data,dc->pp[iter->first],T); // overwrite the encoded symbol with the source data;
+   }
+}
+
+bool LibFlute::RaptorFEC::process_symbol(LibFlute::SourceBlock& srcblk, LibFlute::Symbol& symbol, unsigned int id) {
+  assert(symbol.length == T); // symbol.length should always be T (the symbols size)
+  struct dec_context *dc = decoders[srcblk.id];
+  if (!dc) {
+    struct enc_context *sc = create_encoder_context(NULL, K, T, srcblk.id);
+    dc = create_decoder_context(sc);
+    decoders[srcblk.id] = dc;
+  }
+  struct LT_packet * pkt = (struct LT_packet *) calloc(1, sizeof(struct LT_packet));
+  pkt->id = id;
+  pkt->syms = (GF_ELEMENT *) calloc(symbol.length, sizeof(char));
+  memcpy(pkt->syms, symbol.data, symbol.length * sizeof(char));
+
+  process_LT_packet(dc, pkt);
+  free_LT_packet(pkt);
+  return true;
+}
+
+
 bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& srcblk) {
-// TODO: discuss / realize transformers idea
-#if 0 
-  if (!dc || !transformers.size()) {
+  if (!decoders.size()) {
     // check source block completion for the Encoder
     return std::all_of(srcblk.symbols.begin(), srcblk.symbols.end(), [](const auto& symbol){ return symbol.second.complete; });
   }
-#endif
-  if(!srcblk.symbols.size()) 
-	return false;
-  if(sc)
-	free_encoder_context(sc);
-  if(dc)
-  	free_decoder_context(dc);
+  // else case- we are the Decoder
+  if(!srcblk.symbols.size()){
+    spdlog::warn("Empty source block (size 0) SBN {}",srcblk.id);
+    return false;
+  }
 
-  sc = create_encoder_context(NULL, K, T, srcblk.seed); 
-  dc = create_decoder_context(sc);
-
-  // std::map<uint16_t, Symbol>::iterator
-  for(auto iter = srcblk.symbols.begin(); iter != srcblk.symbols.end(); iter++)
-  {
-   /**	struct LT_packet {
-     *	    int id;         	// packet id (number of packet e.g. id=2 <=> 2. packet)
-     *	    int deg;        	// packet degree (number of xored symbols)
-     *	    int *sid;       	// id of source packets in the packet 
-     *	    GF_ELEMENT *syms; 	// symbols of coded packet 
-     *	};
-     *
-     * 	symbol.data <=> LT_packet.syms
-     *	symbol.deg  <=> LT_packet.deg
-     *	symbol.sid  <=> LT_packet.sid
-     */
-	struct LT_packet * pkt = (struct LT_packet *) calloc(1, sizeof(struct LT_packet)); 
-	pkt->deg = iter->second.deg;
-	pkt->sid = (int *) calloc(pkt->deg, sizeof(int));
-	pkt->syms = (GF_ELEMENT *) calloc(iter->second.length, sizeof(char));
-	memcpy(pkt->sid, iter->second.sid, pkt->deg * sizeof(int));
-	memcpy(pkt->syms, iter->second.data, pkt->deg * sizeof(char));
-	
-  	process_LT_packet(dc, pkt);
-  	free_LT_packet(pkt);
+  struct dec_context *dc = decoders[srcblk.id];
+  if (!dc) {
+    spdlog::error("Couldnt find raptor decoder for source block {}",srcblk.id);
+    return false;
+  }
+  if (dc->finished) {
+    extract_finished_block(srcblk,dc);
   }
   return dc->finished;
 }
@@ -106,41 +109,43 @@ unsigned int LibFlute::RaptorFEC::target_K() { return K * surplus_packet_ratio; 
 LibFlute::Symbol LibFlute::RaptorFEC::translate_symbol(struct enc_context *encoder_ctx){	
     // TODO: Delete in the File destructor (or anywhere where applicable)
     struct LT_packet *lt_packet = encode_LT_packet(encoder_ctx);
-    struct Symbol symbol { new char[T], T, new int[lt_packet->deg], lt_packet->deg };
+    struct Symbol symbol { new char[T], T};
 
     memcpy(symbol.data, lt_packet->syms, T);
-    memcpy(symbol.sid, lt_packet->sid, lt_packet->deg * sizeof(int));
 
     free_LT_packet(lt_packet);
     return symbol;
 }
 
-LibFlute::SourceBlock LibFlute::RaptorFEC::create_block(char *buffer, int *bytes_read) {
+LibFlute::SourceBlock LibFlute::RaptorFEC::create_block(char *buffer, int *bytes_read, int blockid) {
     struct SourceBlock source_block;
-    source_block.seed = (uint32_t) rand();
-    struct enc_context *encoder_ctx = create_encoder_context((unsigned char *)buffer, K, T, source_block.seed); 
+    source_block.id = blockid;
+    int seed = blockid;
+    struct enc_context *encoder_ctx = create_encoder_context((unsigned char *)buffer, K, T, seed);
     unsigned int symbols_to_read = target_K();
 
-    for(unsigned int symbol_id = 1; symbol_id < symbols_to_read + 1; symbol_id++) {
+    for(unsigned int symbol_id = 0; symbol_id < symbols_to_read; symbol_id++) {
         source_block.symbols[symbol_id] = translate_symbol(encoder_ctx);
     }
     *bytes_read += K * T;
 
+    free_encoder_context(encoder_ctx);
     return source_block;
 }
 
 
 std::map<uint16_t, LibFlute::SourceBlock> LibFlute::RaptorFEC::create_blocks(char *buffer, int *bytes_read) {
-    if(!bytes_read)
-        throw std::invalid_argument("bytes_read pointer shouldn't be null");
-    if(N != 1)
-      throw std::invalid_argument("Currently the encoding only supports 1 sub-block per block");
+  if(!bytes_read)
+      throw std::invalid_argument("bytes_read pointer shouldn't be null");
+  if(N != 1)
+    throw std::invalid_argument("Currently the encoding only supports 1 sub-block per block");
 
-    std::map<uint16_t, LibFlute::SourceBlock> block_map;
-    *bytes_read = 0;
+  std::map<uint16_t, LibFlute::SourceBlock> block_map;
+  *bytes_read = 0;
 
-  for(unsigned int src_blocks = 1; src_blocks < Z + 1; src_blocks++)
-      block_map[src_blocks] = create_block(&buffer[*bytes_read], bytes_read);
+  for(unsigned int src_blocks = 0; src_blocks < Z; src_blocks++) {
+    block_map[src_blocks] = create_block(&buffer[*bytes_read], bytes_read, src_blocks);
+  }
 
   return block_map;
 }

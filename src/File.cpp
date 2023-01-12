@@ -141,7 +141,10 @@ auto LibFlute::File::put_symbol( const LibFlute::EncodingSymbol& symbol ) -> voi
   if (!target_symbol.complete) {
     symbol.decode_to(target_symbol.data, target_symbol.length);
     target_symbol.complete = true;
-
+    if (_meta.fec_transformer) {
+      _meta.fec_transformer->process_symbol(source_block,target_symbol,symbol.id());
+      return;
+    }
     check_source_block_completion(source_block);
     check_file_completion();
   }

@@ -61,19 +61,12 @@ namespace LibFlute {
   struct Symbol {
     char* data;
     size_t length;
-#ifdef RAPTOR_ENABLED
-    int* sid;
-    int deg;
-#endif
     bool complete = false;
     bool queued = false;
   };
 
   struct SourceBlock {
     uint16_t id = 0;
-#ifdef RAPTOR_ENABLED
-    uint32_t seed; 
-#endif
     bool complete = false;
     std::map<uint16_t, Symbol> symbols; 
   };
@@ -108,6 +101,15 @@ namespace LibFlute {
      */
     virtual std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read) = 0;
 
+    /**
+     * @brief Process a received symbol
+     *
+     * @param srcblk the source block this symbols corresponds to
+     * @param symb the received symbol
+     * @param id the symbols id
+     * @return success or failure
+     */
+    virtual bool process_symbol(LibFlute::SourceBlock& srcblk, LibFlute::Symbol& symb, unsigned int id) = 0;
 
     virtual bool calculate_partitioning() = 0;
 
@@ -141,15 +143,12 @@ namespace LibFlute {
 
     Symbol translate_symbol(struct enc_context *encoder_ctx);
 
-    LibFlute::SourceBlock create_block(char *buffer, int *bytes_read);
+    LibFlute::SourceBlock create_block(char *buffer, int *bytes_read, int blockid);
 
     const float surplus_packet_ratio = 1.5;
-
-#ifdef RAPTOR_ENABLED
-    struct enc_context *sc = NULL;
-    struct dec_context *dc = NULL;
-#endif
     
+    void extract_finished_block(LibFlute::SourceBlock& srcblk, struct dec_context *dc);
+
     public: 
 
     RaptorFEC(unsigned int transfer_length, unsigned int max_payload);
@@ -162,15 +161,17 @@ namespace LibFlute {
 
     std::map<uint16_t, SourceBlock> create_blocks(char *buffer, int *bytes_read);
 
+    bool process_symbol(LibFlute::SourceBlock& srcblk, LibFlute::Symbol& symb, unsigned int id);
+
     bool calculate_partitioning();
 
     bool parse_fdt_info(tinyxml2::XMLElement *file);
 
     bool add_fdt_info(tinyxml2::XMLElement *file);
 
-    std::map<uint16_t, void*> transformers; // en / de coders depending on if we are the Receiver or Transmitter
-    // std::map<uint16_t, struct enc_context*> encoders;
-    // std::map<uint16_t, struct dec_context*> decoders;
+#ifdef RAPTOR_ENABLED
+    std::map<uint16_t, struct dec_context* > decoders; // map of source block number to decoders
+#endif
 
     uint32_t nof_source_symbols = 0;
     uint32_t nof_source_blocks = 0;
