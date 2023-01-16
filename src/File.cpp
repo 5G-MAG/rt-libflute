@@ -126,6 +126,10 @@ LibFlute::File::~File()
 
 auto LibFlute::File::put_symbol( const LibFlute::EncodingSymbol& symbol ) -> void
 {
+  if(_complete) {
+    spdlog::debug("Skipped processing symbol {} , SBN {} since file is already complete",symbol.id(),symbol.source_block_number());
+    return;
+  }
   if (symbol.source_block_number() > _source_blocks.size()) {
     throw "Source Block number too high";
   } 
@@ -210,7 +214,7 @@ auto LibFlute::File::create_blocks() -> void
   if (_meta.fec_transformer){
     int bytes_read = 0;
     _source_blocks = _meta.fec_transformer->create_blocks(_buffer, &bytes_read);
-    if (bytes_read < length()) {
+    if (_source_blocks.size() <= 0) {
       spdlog::error("FEC Transformer failed to create source blocks");
       throw "FEC Transformer failed to create source blocks";
     }

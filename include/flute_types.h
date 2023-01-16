@@ -139,6 +139,8 @@ namespace LibFlute {
 
     private:
 
+    bool is_encoder = true;
+
     unsigned int target_K();
 
     Symbol translate_symbol(struct enc_context *encoder_ctx);

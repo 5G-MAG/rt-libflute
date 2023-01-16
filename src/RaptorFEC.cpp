@@ -64,12 +64,16 @@ void LibFlute::RaptorFEC::extract_finished_block(LibFlute::SourceBlock& srcblk, 
 }
 
 bool LibFlute::RaptorFEC::process_symbol(LibFlute::SourceBlock& srcblk, LibFlute::Symbol& symbol, unsigned int id) {
-  assert(symbol.length == T); // symbol.length should always be T (the symbols size)
+  assert(symbol.length == T); // symbol.length should always be T (the symbol's size)
   struct dec_context *dc = decoders[srcblk.id];
   if (!dc) {
     struct enc_context *sc = create_encoder_context(NULL, K, T, srcblk.id);
     dc = create_decoder_context(sc);
     decoders[srcblk.id] = dc;
+  }
+  if (dc->finished){
+    spdlog::warn("Skipped processing of symbol for finished block : SBN {}, ESI {}",srcblk.id,id);
+    return true;
   }
   struct LT_packet * pkt = (struct LT_packet *) calloc(1, sizeof(struct LT_packet));
   pkt->id = id;
@@ -83,11 +87,12 @@ bool LibFlute::RaptorFEC::process_symbol(LibFlute::SourceBlock& srcblk, LibFlute
 
 
 bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& srcblk) {
-  if (!decoders.size()) {
+  if (is_encoder) {
     // check source block completion for the Encoder
     return std::all_of(srcblk.symbols.begin(), srcblk.symbols.end(), [](const auto& symbol){ return symbol.second.complete; });
   }
   // else case- we are the Decoder
+
   if(!srcblk.symbols.size()){
     spdlog::warn("Empty source block (size 0) SBN {}",srcblk.id);
     return false;
@@ -98,6 +103,7 @@ bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& s
     spdlog::error("Couldnt find raptor decoder for source block {}",srcblk.id);
     return false;
   }
+  spdlog::debug("raptor is finished? : {}",dc->finished);
   if (dc->finished) {
     extract_finished_block(srcblk,dc);
   }
@@ -144,15 +150,26 @@ std::map<uint16_t, LibFlute::SourceBlock> LibFlute::RaptorFEC::create_blocks(cha
   *bytes_read = 0;
 
   for(unsigned int src_blocks = 0; src_blocks < Z; src_blocks++) {
-    block_map[src_blocks] = create_block(&buffer[*bytes_read], bytes_read, src_blocks);
+    if(!is_encoder) {
+      LibFlute::SourceBlock block;
+      unsigned int symbols_to_read = target_K();
+      for (int i = 0; i < symbols_to_read; i++) {
+        block.symbols[i] = Symbol {.data = buffer + T*i, .length = T, .complete = false};
+      }
+      block_map[src_blocks] = block;
+    } else {
+      block_map[src_blocks] = create_block(&buffer[*bytes_read], bytes_read, src_blocks);
+    }
   }
-
+  if(!is_encoder) {
+    spdlog::debug("Raptor Decoder- prepared {} empty source blocks with {} symbols (K = {})",block_map.size(),target_K(),K);
+  }
   return block_map;
 }
 
 
 bool LibFlute::RaptorFEC::parse_fdt_info(tinyxml2::XMLElement *file) {
-  // TODO
+  is_encoder = false;
 
   const char* val = 0;
   val = file->Attribute("Transfer-Length");
@@ -214,6 +231,8 @@ bool LibFlute::RaptorFEC::add_fdt_info(tinyxml2::XMLElement *file) {
   file->SetAttribute("FEC-OTI-Number-Of-Source-Blocks", Z);
   file->SetAttribute("FEC-OTI-Number-Of-Sub-Blocks", N);
   file->SetAttribute("FEC-OTI-Symbol-Alignment-Parameter", Al);
+
+  is_encoder = true;
 
   return true;
 }

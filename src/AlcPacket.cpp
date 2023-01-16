@@ -80,10 +80,16 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
         throw "TOI fields over 64 bits in length are not supported";
   } 
 
-  if (_lct_header.codepoint == 0) {
-    _fec_oti.encoding_id = FecScheme::CompactNoCode;
-  } else {
-    throw "Only Compact No-Code FEC is supported";
+  switch (_lct_header.codepoint) {
+    case 0:
+      _fec_oti.encoding_id = FecScheme::CompactNoCode;
+      break;
+    case 1:
+      _fec_oti.encoding_id = FecScheme::Raptor;
+      break;
+    default:
+      throw "Only Compact No-Code FEC is supported";
+      break;
   }
 
   auto expected_header_len = 2 +

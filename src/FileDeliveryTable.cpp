@@ -126,6 +126,7 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     switch (encoding_id){
       case (int) FecScheme::Raptor:
         fec_transformer = new RaptorFEC(); // corresponding delete calls in Receiver.cpp and destuctor function
+      spdlog::debug("Received FDT entry for a raptor encoded file");
         break;
       default:
         break;

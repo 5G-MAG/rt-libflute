@@ -49,11 +49,8 @@ auto LibFlute::EncodingSymbol::from_payload(char* encoded_data, size_t data_len,
   for (int i = 0; i < nof_symbols; i++) {
     switch(fec_oti.encoding_id) {
       case FecScheme::CompactNoCode:
-        symbols.emplace_back(encoding_symbol_id, source_block_number, encoded_data, std::min(data_len, (size_t)fec_oti.encoding_symbol_length), fec_oti.encoding_id);
-        break;
       case FecScheme::Raptor:
-        //TODO
-        throw "Raptor support is still on its way";
+        symbols.emplace_back(encoding_symbol_id, source_block_number, encoded_data, std::min(data_len, (size_t)fec_oti.encoding_symbol_length), fec_oti.encoding_id);
         break;
     }
     encoded_data += fec_oti.encoding_symbol_length;
@@ -96,14 +93,14 @@ auto LibFlute::EncodingSymbol::to_payload(const std::vector<EncodingSymbol>& sym
 auto LibFlute::EncodingSymbol::decode_to(char* buffer, size_t max_length) const -> void {
   switch (_fec_scheme) {
     case FecScheme::CompactNoCode:
+    case FecScheme::Raptor:
       if (_data_len <= max_length) {
         memcpy(buffer, _encoded_data, _data_len);
       }
       break;
-    case FecScheme::Raptor:
-      //TODO
-      spdlog::warn("EncodingSymbol::decode_to Raptor FEC encoding implementation is still in progress");
-      throw "EncodingSymbol::decode_to Raptor FEC is not done yet";
+    default:
+      spdlog::warn("EncodingSymbol::decode_to() called for unknown fec scheme {}",(int)_fec_scheme);
+      throw "EncodingSymbol::decode_to() called for unknown fec scheme";
       break;
   }
 }
