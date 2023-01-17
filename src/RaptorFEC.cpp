@@ -61,6 +61,12 @@ void LibFlute::RaptorFEC::extract_finished_block(LibFlute::SourceBlock& srcblk, 
    for(auto iter = srcblk.symbols.begin(); iter != srcblk.symbols.end(); iter++) {
     memcpy(iter->second.data,dc->pp[iter->first],T); // overwrite the encoded symbol with the source data;
    }
+   spdlog::debug("Raptor Decoder: finished decoding source block {}",srcblk.id);
+}
+
+void *LibFlute::RaptorFEC::allocate_file_buffer(int min_length){
+  assert(min_length <= Z*target_K()*T); // min length should be exactly Z*K*T, so including repair symbols we should be getting a larger value
+  return malloc(Z*target_K()*T); 
 }
 
 bool LibFlute::RaptorFEC::process_symbol(LibFlute::SourceBlock& srcblk, LibFlute::Symbol& symbol, unsigned int id) {
@@ -103,7 +109,6 @@ bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& s
     spdlog::error("Couldnt find raptor decoder for source block {}",srcblk.id);
     return false;
   }
-  spdlog::debug("raptor is finished? : {}",dc->finished);
   if (dc->finished) {
     extract_finished_block(srcblk,dc);
   }

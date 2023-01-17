@@ -34,7 +34,11 @@ LibFlute::File::File(LibFlute::FileDeliveryTable::FileEntry entry)
   spdlog::debug("Creating File from FileEntry");
   // Allocate a data buffer
   spdlog::debug("Allocating buffer");
-  _buffer = (char*)malloc(_meta.fec_oti.transfer_length);
+  if (_meta.fec_transformer){
+    _buffer = (char*) _meta.fec_transformer->allocate_file_buffer(_meta.fec_oti.transfer_length);
+  } else {
+    _buffer = (char*) malloc(_meta.fec_oti.transfer_length);
+  }
   if (_buffer == nullptr)
   {
     throw "Failed to allocate file buffer";
@@ -147,7 +151,6 @@ auto LibFlute::File::put_symbol( const LibFlute::EncodingSymbol& symbol ) -> voi
     target_symbol.complete = true;
     if (_meta.fec_transformer) {
       _meta.fec_transformer->process_symbol(source_block,target_symbol,symbol.id());
-      return;
     }
     check_source_block_completion(source_block);
     check_file_completion();

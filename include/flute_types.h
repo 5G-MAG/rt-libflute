@@ -127,6 +127,14 @@ namespace LibFlute {
      */
     virtual bool add_fdt_info(tinyxml2::XMLElement *file) = 0;
 
+    /**
+     * @brief Allocate the size of the buffer needed for this encoding scheme (since it may be larger)
+     * 
+     * @param min_length this should be the size of the file (transfer length). This determines the minimum size of the returned buffer
+     * @return 0 on failure, otherwise return a pointer to the buffer
+     */
+    virtual void *allocate_file_buffer(int min_length) = 0;
+
     uint32_t nof_source_symbols = 0;
     uint32_t nof_source_blocks = 0;
     uint32_t large_source_block_length = 0;
@@ -170,6 +178,8 @@ namespace LibFlute {
     bool parse_fdt_info(tinyxml2::XMLElement *file);
 
     bool add_fdt_info(tinyxml2::XMLElement *file);
+
+    void *allocate_file_buffer(int min_length);
 
 #ifdef RAPTOR_ENABLED
     std::map<uint16_t, struct dec_context* > decoders; // map of source block number to decoders
