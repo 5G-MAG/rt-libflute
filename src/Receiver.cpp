@@ -76,7 +76,14 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
           _files.emplace(alc.toi(), std::make_shared<LibFlute::File>(fe));
         }
       }
-
+#ifdef SIMULATE_PKT_LOSS
+      // only simulate packet loss with objects that arent the FDT
+      bool process = true;
+      if((rand() % 100) < 2) {
+        spdlog::warn("Simulating 1%% packet loss, dropping symbols. Total Packets dropped = {}",++packets_dropped);
+        process = false;
+      }
+#endif
       if (_files.find(alc.toi()) != _files.end() && !_files[alc.toi()]->complete()) {
         auto encoding_symbols = LibFlute::EncodingSymbol::from_payload(
             _data + alc.header_length(), 
@@ -85,8 +92,15 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
             alc.content_encoding());
 
         for (const auto& symbol : encoding_symbols) {
+#ifdef SIMULATE_PKT_LOSS
+          spdlog::debug("{} TOI {} SBN {} ID {}", process ? "receiver" : "dropped",alc.toi(), symbol.source_block_number(), symbol.id() );
+          if(process) {
+            _files[alc.toi()]->put_symbol(symbol);
+          }
+#else
           spdlog::debug("received TOI {} SBN {} ID {}", alc.toi(), symbol.source_block_number(), symbol.id() );
-          _files[alc.toi()]->put_symbol(symbol);
+            _files[alc.toi()]->put_symbol(symbol);
+#endif //SIMULATE_PKT_LOSS
         }
 
         auto file = _files[alc.toi()].get();
