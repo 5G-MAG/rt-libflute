@@ -1,0 +1,19 @@
+name: build
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - name: install dependencies
+        run: sudo apt install -y ninja-build cmake libssl-dev libboost-all-dev libspdlog-dev libtinyxml2-dev libnl-3-dev gcc pkg-config libconfig++-dev
+      - run: cmake --version
+      - name: build.sh
+        run: ${{ github.workspace }}/build.sh
+      - name: transmitter link check
+        run: ${{ github.workspace }}/build/examples/flute-transmitter --help
+      - name: receiver link check
+        run: ${{ github.workspace }}/build/examples/flute-receiver --help
