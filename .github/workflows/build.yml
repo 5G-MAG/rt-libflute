@@ -14,14 +14,14 @@ jobs:
         with:
           submodules: recursive
       - name: install dependencies
-        run: sudo apt install -y ninja-build cmake libssl-dev libboost-all-dev libspdlog-dev libtinyxml2-dev libnl-3-dev gcc pkg-config libconfig++-dev
+        run: sudo apt install -y gcc ninja-build cmake libssl-dev libboost-all-dev libspdlog-dev libtinyxml2-dev libnl-3-dev pkg-config libconfig++-dev
       - name: pre-cmake
-        run: cmake --version && mkdir build && echo `nproc` processing units available
+        run: cmake --version && mkdir ${{ github.workspace }}/build && echo `nproc` processing units available
       - name: cmake
-        run: cmake -S . -B build -GNinja -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} -DENABLE_RAPTOR=${{ matrix.raptor }}
+        run: cmake -S ${{ github.workspace }} -B ${{ github.workspace }}/build -GNinja -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} -DENABLE_RAPTOR=${{ matrix.raptor }}
       - name: build
-        run: cd build && ninja -j`nproc`
-      - name: transmitter linking quickcheck
+        run: cd ${{ github.workspace }}/build && ninja -j`nproc`
+      - name: check for runtime linking errors in transmitter
         run: ${{ github.workspace }}/build/examples/flute-transmitter --help
-      - name: receiver linking quickcheck
+      - name: check for runtime linking errors in receiver
         run: ${{ github.workspace }}/build/examples/flute-receiver --help
