@@ -2,18 +2,26 @@ name: build
 on: [push]
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        build-type: [Release]
+        raptor: [ON, OFF]
+        os: [ubuntu-22.04, ubuntu-20.04]
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Check out repository code
+      - name: check out repository code
         uses: actions/checkout@v3
         with:
           submodules: recursive
       - name: install dependencies
         run: sudo apt install -y ninja-build cmake libssl-dev libboost-all-dev libspdlog-dev libtinyxml2-dev libnl-3-dev gcc pkg-config libconfig++-dev
-      - run: cmake --version
-      - name: build.sh
-        run: ${{ github.workspace }}/build.sh
-      - name: transmitter link check
+      - name: pre-cmake
+        run: cmake --version && mkdir build && echo `nproc` processing units available
+      - name: cmake
+        run: cmake -S . -B build -GNinja -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} -DENABLE_RAPTOR=${{ matrix.raptor }}
+      - name: build
+        run: cd build && ninja -j`nproc`
+      - name: transmitter linking quickcheck
         run: ${{ github.workspace }}/build/examples/flute-transmitter --help
-      - name: receiver link check
+      - name: receiver linking quickcheck
         run: ${{ github.workspace }}/build/examples/flute-receiver --help

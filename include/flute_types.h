@@ -143,6 +143,7 @@ namespace LibFlute {
     
   };
 
+#ifdef RAPTOR_ENABLED
   class RaptorFEC : public FecTransformer {
 
     private:
@@ -181,9 +182,7 @@ namespace LibFlute {
 
     void *allocate_file_buffer(int min_length);
 
-#ifdef RAPTOR_ENABLED
     std::map<uint16_t, struct dec_context* > decoders; // map of source block number to decoders
-#endif
 
     uint32_t nof_source_symbols = 0;
     uint32_t nof_source_blocks = 0;
@@ -202,5 +201,6 @@ namespace LibFlute {
     unsigned int P; // maximum payload size: e.g. 1436 for ipv4 over 802.3
 
   };
+#endif
 
 };

@@ -302,7 +302,7 @@ auto LibFlute::File::mark_completed(const std::vector<EncodingSymbol>& symbols, 
   const EVP_MD* md = EVP_md5();
   unsigned int  md_len;
 
-  EVP_DigestInit_ex2(context, md, NULL);
+  EVP_DigestInit_ex(context, md, NULL);
   EVP_DigestUpdate(context, input, length);
   EVP_DigestFinal_ex(context, result, &md_len);
   EVP_MD_CTX_free(context);

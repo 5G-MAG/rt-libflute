@@ -25,9 +25,11 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, FecOti fec_
   , _global_fec_oti( fec_oti )
 {
   switch (fec_oti.encoding_id){
+#ifdef RAPTOR_ENABLED
     case FecScheme::Raptor:
     _fdt_fec_transformer = new RaptorFEC();
     break;
+#endif
     default:
     _fdt_fec_transformer = 0;
     break;
@@ -124,10 +126,12 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     FecTransformer *fec_transformer = 0;
 
     switch (encoding_id){
+#ifdef RAPTOR_ENABLED
       case (int) FecScheme::Raptor:
         fec_transformer = new RaptorFEC(); // corresponding delete calls in Receiver.cpp and destuctor function
       spdlog::debug("Received FDT entry for a raptor encoded file");
         break;
+#endif
       default:
         break;
     }
