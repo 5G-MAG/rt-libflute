@@ -23,7 +23,7 @@
 #include "FileDeliveryTable.h"
 #include "flute_types.h"
 
-#define SIMULATE_PKT_LOSS
+#define SIMULATED_PKT_LOSS 2 // simulate 2% packet loss
 namespace LibFlute {
   /**
    *  FLUTE receiver class. Construct an instance of this to receive files from a FLUTE/ALC session.
@@ -105,7 +105,7 @@ namespace LibFlute {
       completion_callback_t _completion_cb = nullptr;
 
       bool _running = true;
-#ifdef SIMULATE_PKT_LOSS
+#ifdef SIMULATED_PKT_LOSS
       unsigned int packets_dropped = 0;
 #endif
   };

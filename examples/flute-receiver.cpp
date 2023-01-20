@@ -55,6 +55,7 @@ static struct argp_option options[] = {  // NOLINT
      0},
     {"download-dir", 'd', "Download directory", 0 , "Directory in which to store downloaded files, defaults to the current directory otherwise", 0},
     {"fec", 'f', "FEC Scheme", 0, "Choose a scheme for Forward Error Correction. Compact No Code = 0, Raptor = 1 (default is 0)", 0},
+    {"num-files", 'n', "Stop Receiving after n files", 0, "Stop the reception after n files have been received (default is to never stop)", 0},
     {nullptr, 0, nullptr, 0, nullptr, 0}};
 
 /**
@@ -69,6 +70,7 @@ struct ft_arguments {
   unsigned log_level = 2;        /**< log level */
   char *download_dir = nullptr;
   unsigned fec = 0;        /**< log level */
+  unsigned nfiles = 0;        /**< log level */
   char **files;
 };
 
@@ -103,6 +105,9 @@ static auto parse_opt(int key, char *arg, struct argp_state *state) -> error_t {
       break;
     case 'd':
       arguments->download_dir = arg;
+      break;
+    case 'n':
+      arguments->nfiles = static_cast<unsigned>(strtoul(arg, nullptr, 10));
       break;
     default:
       return ARGP_ERR_UNKNOWN;
@@ -161,7 +166,6 @@ auto main(int argc, char **argv) -> int {
         arguments.mcast_target,
         (short)arguments.mcast_port,
         16,
-        // LibFlute::FecScheme(arguments.fec),
         io);
 
     // Configure IPSEC, if enabled
@@ -171,7 +175,7 @@ auto main(int argc, char **argv) -> int {
     }
 
     receiver.register_completion_callback(
-        [=](std::shared_ptr<LibFlute::File> file) { //NOLINT
+        [&](std::shared_ptr<LibFlute::File> file) { //NOLINT
         spdlog::info("{} (TOI {}) has been received",
             file->meta().content_location, file->meta().toi);
         char *buf = (char*) calloc(256,1);
@@ -194,12 +198,16 @@ auto main(int argc, char **argv) -> int {
           spdlog::error("Error opening file {} to store received object",buf);
         }
         free(buf);
+        if (file->meta().toi == arguments.nfiles) {
+          spdlog::warn("{} file(s) received. Stopping reception",arguments.nfiles);
+          receiver.stop();
+        }
         });
 
     // Start the IO service
     io.run();
   } catch (std::exception ex ) {
-    spdlog::error("Exiting on unhandled exception: %s", ex.what());
+    spdlog::error("Exiting on unhandled exception: {}", ex.what());
   }
 
 exit:

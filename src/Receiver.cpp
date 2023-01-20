@@ -55,7 +55,12 @@ auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key) -> v
 auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& error,
     size_t bytes_recvd) -> void
 {
-  if (!_running) return;
+  if (!_running) {
+#ifdef SIMULATED_PKT_LOSS
+    spdlog::warn("Stopping reception: total packets dropped {}", packets_dropped);
+#endif // SIMULATED_PKT_LOSS
+    return;
+  }
 
   if (!error)
   {
@@ -72,16 +77,16 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
 
       if (alc.toi() == 0 && (!_fdt || _fdt->instance_id() != alc.fdt_instance_id())) {
         if (_files.find(alc.toi()) == _files.end()) {
-          FileDeliveryTable::FileEntry fe{0, "", static_cast<uint32_t>(alc.fec_oti().transfer_length), "", "", 0, alc.fec_oti()};
+          FileDeliveryTable::FileEntry fe{0, "", static_cast<uint32_t>(alc.fec_oti().transfer_length), "", "", 0, alc.fec_oti(), 0};
           _files.emplace(alc.toi(), std::make_shared<LibFlute::File>(fe));
         }
       }
-#ifdef SIMULATE_PKT_LOSS
+#ifdef SIMULATED_PKT_LOSS
       // only simulate packet loss with objects that arent the FDT
-      bool process = true;
-      if((rand() % 100) < 2) {
-        spdlog::warn("Simulating 1%% packet loss, dropping symbols. Total Packets dropped = {}",++packets_dropped);
-        process = false;
+      bool process_pkt = true;
+      if((rand() % 100) < SIMULATED_PKT_LOSS) {
+        spdlog::warn("Simulating {}% packet loss, dropping symbols. Total Packets dropped = {}",SIMULATED_PKT_LOSS,++packets_dropped);
+        process_pkt = false;
       }
 #endif
       if (_files.find(alc.toi()) != _files.end() && !_files[alc.toi()]->complete()) {
@@ -92,15 +97,15 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
             alc.content_encoding());
 
         for (const auto& symbol : encoding_symbols) {
-#ifdef SIMULATE_PKT_LOSS
-          spdlog::debug("{} TOI {} SBN {} ID {}", process ? "receiver" : "dropped",alc.toi(), symbol.source_block_number(), symbol.id() );
-          if(process) {
+#ifdef SIMULATED_PKT_LOSS
+          spdlog::debug("{} TOI {} SBN {} ID {}", process_pkt ? "receiver" : "dropped",alc.toi(), symbol.source_block_number(), symbol.id() );
+          if(process_pkt) {
             _files[alc.toi()]->put_symbol(symbol);
           }
 #else
           spdlog::debug("received TOI {} SBN {} ID {}", alc.toi(), symbol.source_block_number(), symbol.id() );
             _files[alc.toi()]->put_symbol(symbol);
-#endif //SIMULATE_PKT_LOSS
+#endif //SIMULATED_PKT_LOSS
         }
 
         auto file = _files[alc.toi()].get();
