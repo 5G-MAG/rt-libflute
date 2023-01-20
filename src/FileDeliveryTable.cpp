@@ -19,7 +19,6 @@
 #include <string>
 #include "spdlog/spdlog.h"
 
-
 LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, FecOti fec_oti)
   : _instance_id( instance_id )
   , _global_fec_oti( fec_oti )
@@ -41,14 +40,7 @@ LibFlute::FileDeliveryTable::~FileDeliveryTable() {
     delete _fdt_fec_transformer;
     _fdt_fec_transformer = 0;
   }
-  for(auto &f : _file_entries) {
-    if (f.fec_transformer){
-      delete f.fec_transformer;
-      f.fec_transformer = 0;
-    }
-  }
 }
-
 
 LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffer, size_t len) 
   : _instance_id( instance_id )
