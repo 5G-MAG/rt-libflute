@@ -115,7 +115,10 @@ bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& s
   return dc->finished;
 }
 
-unsigned int LibFlute::RaptorFEC::target_K() { return K * surplus_packet_ratio; }
+unsigned int LibFlute::RaptorFEC::target_K() {
+  int target = K * surplus_packet_ratio;
+  return target > K ? target : K + 1; // always send at least one repair symbol
+}
 
 LibFlute::Symbol LibFlute::RaptorFEC::translate_symbol(struct enc_context *encoder_ctx){	
     // TODO: Delete in the File destructor (or anywhere where applicable)

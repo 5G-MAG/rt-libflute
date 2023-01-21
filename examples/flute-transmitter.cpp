@@ -16,9 +16,9 @@
 #include <cstdio>
 #include <iostream>
 #include <argp.h>
-
 #include <cstdlib>
-
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <fstream>
 #include <string>
 #include <filesystem>
@@ -166,15 +166,29 @@ auto main(int argc, char **argv) -> int {
 
     // read the file contents into the buffers
     for (int j = 0; arguments.files[j]; j++) {
-      std::string location = arguments.files[j];
-      std::ifstream file(arguments.files[j], std::ios::binary | std::ios::ate);
-      std::streamsize size = file.tellg();
-      file.seekg(0, std::ios::beg);
-      if (size > 0) {
-        char* buffer = (char*)malloc(size);
-        file.read(buffer, size);
-        files.push_back(FsFile{ arguments.files[j], buffer, (size_t)size});
+      struct stat sb;
+      int fd;
+      fd = open(arguments.files[j], O_RDONLY);
+      if (fd == -1) {
+        spdlog::error("Couldnt open file {}",arguments.files[j]);
+        continue;
+      } 
+      if (fstat(fd, &sb) == -1){ // To obtain file size
+        spdlog::error("fstat() call for file {} failed",arguments.files[j]);
+        close(fd);
+        continue;
       }
+      if (sb.st_size <= 0) {
+        close(fd);
+        continue;
+      }
+      char* buffer = (char*) mmap(nullptr, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+      close(fd);
+      if ( (long) buffer <= 0) {
+        spdlog::error("mmap() failed for file {}",arguments.files[j]);
+        continue;
+      }
+      files.push_back(FsFile{ arguments.files[j], buffer, (size_t) sb.st_size});
     }
 
     // Create a Boost io_service
@@ -202,7 +216,7 @@ auto main(int argc, char **argv) -> int {
         for (auto& file : files) {
           if (file.toi == toi) { 
             spdlog::info("{} (TOI {}) has been transmitted", file.location,file.toi);
-            // could free() the buffer here
+            munmap(file.buffer,file.len);
           }
         }
         });

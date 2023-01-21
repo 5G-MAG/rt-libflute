@@ -156,7 +156,7 @@ namespace LibFlute {
 
     LibFlute::SourceBlock create_block(char *buffer, int *bytes_read, int blockid);
 
-    const float surplus_packet_ratio = 1.5;
+    const float surplus_packet_ratio = 1.15; // adds 15% transmission overhead in exchange for protection against up to 15% packet loss. Assuming 1 symbol per packet, for smaller files packets may contain up to 10 symbols per packet but small files are much less vulnerable to packet loss anyways
     
     void extract_finished_block(LibFlute::SourceBlock& srcblk, struct dec_context *dc);
 
