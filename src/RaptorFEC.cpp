@@ -95,7 +95,12 @@ bool LibFlute::RaptorFEC::process_symbol(LibFlute::SourceBlock& srcblk, LibFlute
 bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& srcblk) {
   if (is_encoder) {
     // check source block completion for the Encoder
-    return std::all_of(srcblk.symbols.begin(), srcblk.symbols.end(), [](const auto& symbol){ return symbol.second.complete; });
+    bool complete = std::all_of(srcblk.symbols.begin(), srcblk.symbols.end(), [](const auto& symbol){ return symbol.second.complete; });
+
+    if(complete)
+        std::for_each(srcblk.symbols.begin(), srcblk.symbols.end(), [](const auto& symbol){ delete symbol.second.data; });
+
+    return complete;
   }
   // else case- we are the Decoder
 
@@ -120,8 +125,7 @@ unsigned int LibFlute::RaptorFEC::target_K() {
   return target > K ? target : K + 1; // always send at least one repair symbol
 }
 
-LibFlute::Symbol LibFlute::RaptorFEC::translate_symbol(struct enc_context *encoder_ctx){	
-    // TODO: Delete in the File destructor (or anywhere where applicable)
+LibFlute::Symbol LibFlute::RaptorFEC::translate_symbol(struct enc_context *encoder_ctx){
     struct LT_packet *lt_packet = encode_LT_packet(encoder_ctx);
     struct Symbol symbol { new char[T], T};
 
