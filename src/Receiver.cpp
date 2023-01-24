@@ -84,7 +84,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
 #ifdef SIMULATED_PKT_LOSS
       // only simulate packet loss with objects that arent the FDT and if we have an FEC scheme active)
       bool process_pkt = true;
-      if(_files[alc.toi()]->meta().fec_transformer && rand() % 100 < SIMULATED_PKT_LOSS) {
+      if(alc.toi() && _files[alc.toi()]->meta().fec_transformer && rand() % 100 < SIMULATED_PKT_LOSS) {
         spdlog::warn("Simulating {}% packet loss, dropping symbols. Total Packets dropped = {}",SIMULATED_PKT_LOSS,++packets_dropped);
         process_pkt = false;
       }
