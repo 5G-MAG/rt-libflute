@@ -23,10 +23,6 @@
 #include "FileDeliveryTable.h"
 #include "flute_types.h"
 
-#ifdef RAPTOR_ENABLED
-#define SIMULATED_PKT_LOSS 2 // simulate 2% packet loss
-#endif
-
 namespace LibFlute {
   /**
    *  FLUTE receiver class. Construct an instance of this to receive files from a FLUTE/ALC session.
