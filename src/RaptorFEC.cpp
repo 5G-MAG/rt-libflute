@@ -13,22 +13,31 @@ LibFlute::RaptorFEC::RaptorFEC(unsigned int transfer_length, unsigned int max_pa
   spdlog::debug("T = (unsigned int) floor((double)P/(double)(Al*g)) * Al");
   spdlog::debug("T = {} = floor({}/({}*{})) * {}",T,P,Al,g,Al);
 
-  assert(T % Al == 0); // Symbol size T should be a multiple of symbol alignment parameter Al
+  if (T % Al){
+    spdlog::error(" Symbol size T should be a multiple of symbol alignment parameter Al");
+    throw "Symbol size doesnt align";
+  }
   
-  double Kt = ceil((double)F/(double)T); // total symbols
+  Kt = ceil((double)F/(double)T); // total symbols
   spdlog::debug("double Kt = ceil((double)F/(double)T)");
   spdlog::debug("Kt = {} = ceil({}/{})",Kt,F,T);
 
-  Z = (unsigned int) ceil(Kt/8192);
+  if (Kt < 4){
+    spdlog::error("Input file is too small, it must be a minimum of 4 Symbols");
+    throw "Input is less than 4 symbols";
+  }
+
+  Z = (unsigned int) ceil((double)Kt/(double)8192);
   spdlog::debug("Z = (unsigned int) ceil(Kt/8192)");
   spdlog::debug("Z = {} = ceil({}/8192)",Z,Kt);
 
   K = (Kt > 8192) ? 8192 : (unsigned int) Kt; // symbols per source block
   spdlog::debug("K = {}",K);
 
-  N = fmin( ceil( ceil(Kt/(double)Z) * (double)T/(double)W ) , (double)T/(double)Al );
-  spdlog::warn("N = fmin( ceil( ceil(Kt/(double)Z) * (double)T/(double)W ) , (double)T/(double)Al )");
-  spdlog::warn("N = {} = min( ceil( ceil({}/{}) * {}/{} ) , {}/{} )",N,Kt,Z,T,W,T,Al);
+  N = fmin( ceil( ceil((double)Kt/(double)Z) * (double)T/(double)W ) , (double)T/(double)Al );
+  spdlog::debug("N = fmin( ceil( ceil(Kt/(double)Z) * (double)T/(double)W ) , (double)T/(double)Al )");
+  spdlog::debug("N = {} = min( ceil( ceil({}/{}) * {}/{} ) , {}/{} )",N,Kt,Z,T,W,T,Al);
+
   
   // Set the values that the File class may need:
   nof_source_symbols = (unsigned int) Kt;
@@ -65,15 +74,19 @@ void LibFlute::RaptorFEC::extract_finished_block(LibFlute::SourceBlock& srcblk, 
 }
 
 void *LibFlute::RaptorFEC::allocate_file_buffer(int min_length){
-  assert(min_length <= Z*target_K()*T); // min length should be exactly Z*K*T, so including repair symbols we should be getting a larger value
-  return malloc(Z*target_K()*T); 
+  assert(min_length <= Z*target_K(0)*T); // min length should be exactly Z*K*T, so including repair symbols we should have a larger value
+  return malloc(Z*target_K(0)*T);
 }
 
 bool LibFlute::RaptorFEC::process_symbol(LibFlute::SourceBlock& srcblk, LibFlute::Symbol& symbol, unsigned int id) {
-  assert(symbol.length == T); // symbol.length should always be T (the symbol's size)
+  assert(symbol.length == T); // symbol.length should always be the symbol size, T
   struct dec_context *dc = decoders[srcblk.id];
   if (!dc) {
-    struct enc_context *sc = create_encoder_context(NULL, K, T, srcblk.id);
+    int nsymbs = (srcblk.id < Z - 1) ? K : Kt - K*(Z-1); // the last block will usually be smaller than the normal block size, unless the file size is an exact multiple
+    int blocksize = (srcblk.id < Z - 1) ? K*T : F - K*T*(Z-1);
+    spdlog::debug("Preparing decoder context with {} blocks and blocksize {}", nsymbs, blocksize);
+    struct enc_context *sc = create_encoder_context(NULL, nsymbs, T, blocksize, srcblk.id);
+    //struct enc_context *sc = create_encoder_context(NULL, K, T, K*T, srcblk.id); // the "length" will always be K*T from the decoders perspective
     dc = create_decoder_context(sc);
     decoders[srcblk.id] = dc;
   }
@@ -83,11 +96,14 @@ bool LibFlute::RaptorFEC::process_symbol(LibFlute::SourceBlock& srcblk, LibFlute
   }
   struct LT_packet * pkt = (struct LT_packet *) calloc(1, sizeof(struct LT_packet));
   pkt->id = id;
-  pkt->syms = (GF_ELEMENT *) calloc(symbol.length, sizeof(char));
+  pkt->syms = (GF_ELEMENT *) malloc(symbol.length * sizeof(char));
   memcpy(pkt->syms, symbol.data, symbol.length * sizeof(char));
 
   process_LT_packet(dc, pkt);
   free_LT_packet(pkt);
+  if (dc->finished) {
+    extract_finished_block(srcblk, dc);
+  }
   return true;
 }
 
@@ -114,15 +130,18 @@ bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& s
     spdlog::error("Couldnt find raptor decoder for source block {}",srcblk.id);
     return false;
   }
-  if (dc->finished) {
-    extract_finished_block(srcblk,dc);
-  }
   return dc->finished;
 }
 
-unsigned int LibFlute::RaptorFEC::target_K() {
-  int target = K * surplus_packet_ratio;
-  return target > K ? target : K + 1; // always send at least one repair symbol
+unsigned int LibFlute::RaptorFEC::target_K(int blockno) {
+    // always send at least one repair symbol
+  if (blockno < Z-1) {
+      int target = K * surplus_packet_ratio;
+      return (target > K) ? target : K + 1;
+  }
+  // last block gets special treatment
+  int remaining_symbs = Kt - K*(Z-1);
+  return (remaining_symbs + 1 > remaining_symbs*surplus_packet_ratio) ? remaining_symbs + 1 : remaining_symbs * surplus_packet_ratio;
 }
 
 LibFlute::Symbol LibFlute::RaptorFEC::translate_symbol(struct enc_context *encoder_ctx){
@@ -139,13 +158,20 @@ LibFlute::SourceBlock LibFlute::RaptorFEC::create_block(char *buffer, int *bytes
     struct SourceBlock source_block;
     source_block.id = blockid;
     int seed = blockid;
-    struct enc_context *encoder_ctx = create_encoder_context((unsigned char *)buffer, K, T, seed);
-    unsigned int symbols_to_read = target_K();
-
+    int nsymbs = (blockid < Z - 1) ? K : Kt - K*(Z-1);
+    int blocksize = (blockid < Z - 1) ? K*T : F - K*T*(Z-1); // the last block will usually be smaller than the normal block size, unless the file size is an exact multiple
+    struct enc_context *encoder_ctx = create_encoder_context((unsigned char *)buffer, nsymbs , T, blocksize, seed);
+//    struct enc_context *encoder_ctx = create_encoder_context((unsigned char *)buffer, K, T, blocksize, seed);
+    if (!encoder_ctx) {
+        spdlog::error("Error creating encoder context");
+        throw "Error creating encoder context";
+    }
+    unsigned int symbols_to_read = target_K(blockid);
     for(unsigned int symbol_id = 0; symbol_id < symbols_to_read; symbol_id++) {
         source_block.symbols[symbol_id] = translate_symbol(encoder_ctx);
     }
-    *bytes_read += K * T;
+    *bytes_read += blocksize;
+    spdlog::debug("Creating encoder context with {} blocks and blocksize {}", nsymbs, blocksize);
 
     free_encoder_context(encoder_ctx);
     return source_block;
@@ -164,17 +190,15 @@ std::map<uint16_t, LibFlute::SourceBlock> LibFlute::RaptorFEC::create_blocks(cha
   for(unsigned int src_blocks = 0; src_blocks < Z; src_blocks++) {
     if(!is_encoder) {
       LibFlute::SourceBlock block;
-      unsigned int symbols_to_read = target_K();
+      unsigned int symbols_to_read = target_K(src_blocks);
       for (int i = 0; i < symbols_to_read; i++) {
         block.symbols[i] = Symbol {.data = buffer + T*i, .length = T, .complete = false};
       }
+      block.id = src_blocks;
       block_map[src_blocks] = block;
     } else {
       block_map[src_blocks] = create_block(&buffer[*bytes_read], bytes_read, src_blocks);
     }
-  }
-  if(!is_encoder) {
-    spdlog::debug("Raptor Decoder- prepared {} empty source blocks with {} symbols (K = {})",block_map.size(),target_K(),K);
   }
   return block_map;
 }
@@ -226,6 +250,7 @@ bool LibFlute::RaptorFEC::parse_fdt_info(tinyxml2::XMLElement *file) {
   // Set the values that are missing that we or the File class may need, follows the same logic as in calculate_partitioning()
   nof_source_symbols = ceil((double)F / (double)T);
   K = (nof_source_symbols > 8192) ? 8192 : nof_source_symbols;
+  Kt = ceil((double)F/(double)T); // total symbols
 
   nof_source_blocks = Z;
   small_source_block_length = (Z * K - nof_source_symbols) * T;

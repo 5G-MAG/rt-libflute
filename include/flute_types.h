@@ -150,7 +150,7 @@ namespace LibFlute {
 
     bool is_encoder = true;
 
-    unsigned int target_K();
+    unsigned int target_K(int blockno);
 
     Symbol translate_symbol(struct enc_context *encoder_ctx);
 
@@ -198,6 +198,7 @@ namespace LibFlute {
     unsigned int Z; // number of source blocks
     unsigned int N; // number of sub-blocks per source block
     unsigned int K; // number of symbols in a source block
+    unsigned int Kt; // total number of symbols
     unsigned int P; // maximum payload size: e.g. 1436 for ipv4 over 802.3
 
   };

@@ -236,7 +236,7 @@ auto LibFlute::File::create_blocks() -> void
       auto symbol_length = std::min(remaining_size, (size_t)_meta.fec_oti.encoding_symbol_length);
       assert(buffer_ptr + symbol_length <= _buffer + _meta.fec_oti.transfer_length);
 
-      LibFlute::Symbol symbol{.data = buffer_ptr, .length = symbol_length, .complete = false};
+      LibFlute::Symbol symbol{ .data = buffer_ptr, .length = symbol_length, .complete = false};
       block.symbols[ symbol_id++ ] = symbol;
       
       remaining_size -= symbol_length;
@@ -294,9 +294,10 @@ auto LibFlute::File::mark_completed(const std::vector<EncodingSymbol>& symbols, 
 {
   // simple implementation based on openssl docs (https://www.openssl.org/docs/man3.0/man3/EVP_DigestInit_ex.html) 
   if (!input || ! length) {
-    spdlog::debug("MD5 called for empty input (input {}, length {})", input, length);
+    spdlog::error("MD5 called with invalid input");
     return -1;
   }
+  spdlog::debug("MD5 calculation called for input length {}", length);
 
   EVP_MD_CTX*   context = EVP_MD_CTX_new();
   const EVP_MD* md = EVP_md5();
