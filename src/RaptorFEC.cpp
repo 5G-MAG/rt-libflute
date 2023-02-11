@@ -114,7 +114,7 @@ bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& s
     bool complete = std::all_of(srcblk.symbols.begin(), srcblk.symbols.end(), [](const auto& symbol){ return symbol.second.complete; });
 
     if(complete)
-        std::for_each(srcblk.symbols.begin(), srcblk.symbols.end(), [](const auto& symbol){ delete symbol.second.data; });
+        std::for_each(srcblk.symbols.begin(), srcblk.symbols.end(), [](const auto& symbol){ delete[] symbol.second.data; });
 
     return complete;
   }
@@ -192,7 +192,7 @@ std::map<uint16_t, LibFlute::SourceBlock> LibFlute::RaptorFEC::create_blocks(cha
       LibFlute::SourceBlock block;
       unsigned int symbols_to_read = target_K(src_blocks);
       for (int i = 0; i < symbols_to_read; i++) {
-        block.symbols[i] = Symbol {.data = buffer + T*i, .length = T, .complete = false};
+        block.symbols[i] = Symbol {.data = buffer + src_blocks*K*T + T*i, .length = T, .complete = false};
       }
       block.id = src_blocks;
       block_map[src_blocks] = block;

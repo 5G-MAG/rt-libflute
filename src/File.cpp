@@ -131,7 +131,7 @@ LibFlute::File::~File()
 auto LibFlute::File::put_symbol( const LibFlute::EncodingSymbol& symbol ) -> void
 {
   if(_complete) {
-    spdlog::debug("Skipped processing symbol {} , SBN {} since file is already complete",symbol.id(),symbol.source_block_number());
+    spdlog::debug("Not handling symbol {} , SBN {} since file is already complete",symbol.id(),symbol.source_block_number());
     return;
   }
   if (symbol.source_block_number() > _source_blocks.size()) {
@@ -140,6 +140,11 @@ auto LibFlute::File::put_symbol( const LibFlute::EncodingSymbol& symbol ) -> voi
 
   SourceBlock& source_block = _source_blocks[ symbol.source_block_number() ];
   
+  if(source_block.complete){
+      spdlog::warn("Ignoring symbol {} since block {} is already complete",symbol.id(),symbol.source_block_number());
+	  return;
+  }
+
   if (symbol.id() > source_block.symbols.size()) {
     throw "Encoding Symbol ID too high";
   } 
@@ -178,7 +183,7 @@ auto LibFlute::File::check_file_completion() -> void
 
     auto content_md5 = base64_decode(_meta.content_md5);
     if (memcmp(md5, content_md5.c_str(), MD5_DIGEST_LENGTH) != 0) {
-      spdlog::warn("MD5 mismatch for TOI {}, discarding", _meta.toi);
+      spdlog::error("MD5 mismatch for TOI {}, discarding", _meta.toi);
  
       // MD5 mismatch, try again
       for (auto& block : _source_blocks) {
@@ -186,7 +191,7 @@ auto LibFlute::File::check_file_completion() -> void
           symbol.second.complete = false;
         }
         block.second.complete = false;
-      } 
+      }
       _complete = false;
     }
   }
