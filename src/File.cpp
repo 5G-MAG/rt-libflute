@@ -177,6 +177,11 @@ auto LibFlute::File::check_file_completion() -> void
   _complete = std::all_of(_source_blocks.begin(), _source_blocks.end(), [](const auto& block){ return block.second.complete; });
 
   if (_complete && !_meta.content_md5.empty()) {
+
+      if(_meta.fec_transformer){
+          _meta.fec_transformer->extract_file(_source_blocks);
+      }
+
     //check MD5 sum
     unsigned char md5[EVP_MAX_MD_SIZE];
     calculate_md5(buffer(),length(),md5);

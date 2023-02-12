@@ -135,6 +135,13 @@ namespace LibFlute {
      */
     virtual void *allocate_file_buffer(int min_length) = 0;
 
+      /**
+       * @brief Called after the file is marked as complete, to finish extraction/decoding (if necessary)
+       *
+       * @param blocks the source blocks of the file, stored in the File object
+       */
+    virtual bool extract_file(std::map<uint16_t, SourceBlock> blocks) = 0;
+
     uint32_t nof_source_symbols = 0;
     uint32_t nof_source_blocks = 0;
     uint32_t large_source_block_length = 0;
@@ -181,6 +188,8 @@ namespace LibFlute {
     bool add_fdt_info(tinyxml2::XMLElement *file);
 
     void *allocate_file_buffer(int min_length);
+
+    bool extract_file(std::map<uint16_t, SourceBlock> blocks);
 
     std::map<uint16_t, struct dec_context* > decoders; // map of source block number to decoders
 

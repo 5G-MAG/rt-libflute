@@ -67,9 +67,12 @@ bool LibFlute::RaptorFEC::calculate_partitioning() {
 }
 
 void LibFlute::RaptorFEC::extract_finished_block(LibFlute::SourceBlock& srcblk, struct dec_context *dc) {
-   for(auto iter = srcblk.symbols.begin(); iter != srcblk.symbols.end(); iter++) {
-    memcpy(iter->second.data,dc->pp[iter->first],T); // overwrite the encoded symbol with the source data;
-   }
+    if(!dc){
+        return;
+    }
+    for(auto iter = srcblk.symbols.begin(); iter != srcblk.symbols.end(); iter++) {
+        memcpy(iter->second.data,dc->pp[iter->first],T); // overwrite the encoded symbol with the source data;
+    }
    spdlog::debug("Raptor Decoder: finished decoding source block {}",srcblk.id);
 }
 
@@ -101,12 +104,15 @@ bool LibFlute::RaptorFEC::process_symbol(LibFlute::SourceBlock& srcblk, LibFlute
 
   process_LT_packet(dc, pkt);
   free_LT_packet(pkt);
-  if (dc->finished) {
-    extract_finished_block(srcblk, dc);
-  }
   return true;
 }
 
+bool LibFlute::RaptorFEC::extract_file(std::map<uint16_t, SourceBlock> blocks) {
+    for(auto iter = blocks.begin(); iter != blocks.end(); iter++) {
+     extract_finished_block(iter->second,decoders[iter->second.id]);
+    }
+    return true;
+}
 
 bool LibFlute::RaptorFEC::check_source_block_completion(LibFlute::SourceBlock& srcblk) {
   if (is_encoder) {
