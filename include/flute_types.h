@@ -82,7 +82,11 @@ namespace LibFlute {
    *  abstract class for FEC Object En/De-coding
    */
   class FecTransformer {
+
     public:
+
+    virtual ~FecTransformer() = default;
+
 
     /**
      * @brief Attempt to decode a source block
@@ -173,7 +177,7 @@ namespace LibFlute {
 
     RaptorFEC() {};
 
-    virtual ~RaptorFEC();
+    ~RaptorFEC();
 
     bool check_source_block_completion(SourceBlock& srcblk);
 

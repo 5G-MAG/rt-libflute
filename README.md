@@ -26,8 +26,16 @@ git submodule update --init
 ### Step 2: Building
 ````
 cd rt-libflute/
-./build.sh
+mkdir build
+cd build
+cmake ..
+cmake --build .
 ````
+(alternatively you can use the `build.sh` script to build in debug mode with raptor enabled)
+
+Build options:
+
+- "Enable Raptor": build with support for the raptor10-based forward error correction. On by default. Disable by passing the `-DENABLE_RAPTOR=OFF` option to cmake
 
 ## Usage
  
@@ -87,6 +95,16 @@ accordingly. Alternatively, you can run it with superuser rights (``sudo ...``).
 sudo setcap 'cap_net_admin=eip' ./flute-transmitter
 sudo setcap 'cap_net_admin=eip' ./flute-receiver
 ````
+
+### Optional: Forward Error Correction (FEC) for lossy environment
+
+To use forward error correction to overcome packet loss during transmission add the option `-f 1` to the transmitter. The receiver needs no such option, just make sure that both of them were properly built/rebuilt with raptor enabled in the build options (this is the default).
+
+To simulate packet loss over the loopback interface and test that FEC works, you can run the `setup_packet_loss_on_loopback` script, as root.
+
+Then start a transmission as you usually would. Make sure to use the default ip address, since the script will reroute this to go through the loopback interface.
+
+Finally revert the changes to your loopback interface and routing table with the `reset_loopback_settings` script.
 
 ## Documentation
 

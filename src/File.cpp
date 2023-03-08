@@ -318,7 +318,7 @@ auto LibFlute::File::mark_completed(const std::vector<EncodingSymbol>& symbols, 
   EVP_DigestFinal_ex(context, result, &md_len);
   EVP_MD_CTX_free(context);
 
-  char buf [EVP_MAX_MD_SIZE * 2] = {{0}};
+  char buf [EVP_MAX_MD_SIZE * 2] = {};
   for (unsigned int i = 0 ; i < md_len ; ++i){
     sprintf(&buf[i*2], "%02x", result[i]);
   }

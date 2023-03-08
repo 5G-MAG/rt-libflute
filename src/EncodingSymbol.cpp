@@ -48,6 +48,7 @@ auto LibFlute::EncodingSymbol::from_payload(char* encoded_data, size_t data_len,
   int nof_symbols = std::ceil((float)data_len / (float)fec_oti.encoding_symbol_length);
   for (int i = 0; i < nof_symbols; i++) {
     switch(fec_oti.encoding_id) {
+      default:
       case FecScheme::CompactNoCode:
       case FecScheme::Raptor:
         symbols.emplace_back(encoding_symbol_id, source_block_number, encoded_data, std::min(data_len, (size_t)fec_oti.encoding_symbol_length), fec_oti.encoding_id);
@@ -107,6 +108,7 @@ auto LibFlute::EncodingSymbol::decode_to(char* buffer, size_t max_length) const 
 
 auto LibFlute::EncodingSymbol::encode_to(char* buffer, size_t max_length) const -> size_t {
   switch (_fec_scheme) {
+    default:
     case FecScheme::CompactNoCode:
     case FecScheme::Raptor:
       if (_data_len <= max_length) {
