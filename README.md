@@ -1,34 +1,32 @@
-# Table of contents
-* Installation guide
-* Usage
-* Documentation
+# File Delivery over Unidirectional Transport (FLUTE)
 
-## Installation guide
+## Introduction
 
-Installation of libflute consists of 3 simple steps:
-1. Getting the source code
-2. Build setup
-3. Building
+This repository holds an implementation of the File Delivery over Unidirectional Transport FLUTE) protocol as defined in IETF RFC 6726. This is a protocol for the unidirectional delivery of files over the Internet, which is particularly suited to multicast networks.
 
-### Step 1: Getting the source code
+### Specifications
+
+Details are defined in [IETF RFC 6726](https://www.rfc-editor.org/rfc/rfc6726).
+
+### About the implementation
+
+Documentation of the source code can be found at: https://5g-mag.github.io/rt-libflute/
+
+## Downloading
 ````
 cd ~
 git clone https://github.com/5G-MAG/rt-libflute.git
 ````
 
-### Step 2: Build setup
+## Build
 ````
 cd libflute/
 mkdir build && cd build
 cmake -GNinja ..
-````
-
-### Step 3: Building
-````
 ninja
 ````
 
-## Usage
+## Running
  
 When installing libflute, it comes with two demo applications, a receiver and a transmitter. Both applications can be found under ``libflute/build/examples``.
 
@@ -86,7 +84,3 @@ accordingly. Alternatively, you can run it with superuser rights (``sudo ...``).
 sudo setcap 'cap_net_admin=eip' ./flute-transmitter
 sudo setcap 'cap_net_admin=eip' ./flute-receiver
 ````
-
-## Documentation
-
-Documentation of the source code can be found at: https://5g-mag.github.io/rt-libflute/
