@@ -10,11 +10,6 @@ Details are defined in [IETF RFC 6726](https://www.rfc-editor.org/rfc/rfc6726).
 
 Documentation of the source code can be found at: https://5g-mag.github.io/rt-libflute/
 
-# Table of contents
-* Installation guide
-* Usage
-* Documentation
-
 ## Downloading
 ````
 cd ~
