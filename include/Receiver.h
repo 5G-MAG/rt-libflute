@@ -104,8 +104,5 @@ namespace LibFlute {
       completion_callback_t _completion_cb = nullptr;
 
       bool _running = true;
-#ifdef SIMULATED_PKT_LOSS
-      unsigned int packets_dropped = 0;
-#endif
   };
 };

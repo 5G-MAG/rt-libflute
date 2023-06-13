@@ -88,7 +88,7 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
       _fec_oti.encoding_id = FecScheme::Raptor;
       break;
     default:
-      throw "Only Compact No-Code FEC is supported";
+      throw "Only the Compact No-Code and Raptor FEC schemes are supported";
       break;
   }
 
@@ -134,8 +134,8 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                           break;
                         case FecScheme::Raptor:
                           //TODO
-                          spdlog::warn("Raptor FEC support is still in progress");
-                          throw "Raptor FEC support is still in progress";
+                          spdlog::warn("Raptor FEC support in EXT_FTI header extension is still in progress");
+                          throw "Raptor FEC support in EXT_FTI header extension is still in progress";
                           break;
                         default:
                           throw "Unsupported FEC scheme";
