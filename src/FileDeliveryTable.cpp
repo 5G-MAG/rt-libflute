@@ -14,16 +14,32 @@
 // under the License.
 //
 #include "FileDeliveryTable.h"
-#include "tinyxml2.h" 
+#include "tinyxml2.h"
 #include <iostream>
 #include <string>
 #include "spdlog/spdlog.h"
-
 
 LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, FecOti fec_oti)
   : _instance_id( instance_id )
   , _global_fec_oti( fec_oti )
 {
+  switch (fec_oti.encoding_id){
+#ifdef RAPTOR_ENABLED
+    case FecScheme::Raptor:
+    _fdt_fec_transformer = new RaptorFEC();
+    break;
+#endif
+    default:
+    _fdt_fec_transformer = 0;
+    break;
+  }
+}
+
+LibFlute::FileDeliveryTable::~FileDeliveryTable() {
+  if (_fdt_fec_transformer) {
+    delete _fdt_fec_transformer;
+    _fdt_fec_transformer = 0;
+  }
 }
 
 LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffer, size_t len) 
@@ -99,6 +115,20 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
       encoding_id = strtoul(val, nullptr, 0);
     }
 
+    FecTransformer *fec_transformer = 0;
+
+    switch (encoding_id){
+#ifdef RAPTOR_ENABLED
+      case (int) FecScheme::Raptor:
+        fec_transformer = new RaptorFEC(); // corresponding delete calls in Receiver.cpp and destuctor function
+      spdlog::debug("Received FDT entry for a raptor encoded file");
+        break;
+#endif
+      default:
+        break;
+    }
+
+
     auto max_source_block_length = def_fec_max_source_block_length;
     val = file->Attribute("FEC-OTI-Maximum-Source-Block-Length");
     if (val != nullptr) {
@@ -109,6 +139,10 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     val = file->Attribute("FEC-OTI-Encoding-Symbol-Length");
     if (val != nullptr) {
       encoding_symbol_length = strtoul(val, nullptr, 0);
+    }
+
+    if (fec_transformer && !fec_transformer->parse_fdt_info(file)) {
+      throw "Failed to parse fdt info for specific FEC data";
     }
     uint32_t expires = 0;
     auto cc = file->FirstChildElement("mbms2007:Cache-Control");
@@ -128,18 +162,19 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
 
     FileEntry fe{
       toi,
-        std::string(content_location),
-        content_length,
-        std::string(content_md5),
-        std::string(content_type),
-        expires,
-        fec_oti
+      std::string(content_location),
+      content_length,
+      std::string(content_md5),
+      std::string(content_type),
+      expires,
+      fec_oti,
+      fec_transformer
     };
     _file_entries.push_back(fe);
   }
 }
 
-auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> void
+auto LibFlute::FileDeliveryTable::add(FileEntry& fe) -> void
 {
   _instance_id++;
   _file_entries.push_back(fe);
@@ -147,8 +182,12 @@ auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> void
 
 auto LibFlute::FileDeliveryTable::remove(uint32_t toi) -> void
 {
-  for (auto it = _file_entries.cbegin(); it != _file_entries.cend();) {
+  for (auto it = _file_entries.begin(); it != _file_entries.end();) {
     if (it->toi == toi) {
+      if (it->fec_transformer) {
+        delete it->fec_transformer;
+        it->fec_transformer = 0;
+      }
       it = _file_entries.erase(it);
     } else {
       ++it;
@@ -176,6 +215,9 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
     f->SetAttribute("Transfer-Length", (unsigned)file.fec_oti.transfer_length);
     f->SetAttribute("Content-MD5", file.content_md5.c_str());
     f->SetAttribute("Content-Type", file.content_type.c_str());
+    if(file.fec_transformer) {
+      file.fec_transformer->add_fdt_info(f);
+    }
     auto cc = doc.NewElement("mbms2007:Cache-Control");
     auto exp = doc.NewElement("mbms2007:Expires");
     exp->SetText(std::to_string(file.expires).c_str());

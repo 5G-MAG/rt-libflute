@@ -5,28 +5,37 @@
 
 ## Installation guide
 
-Installation of libflute consists of 3 simple steps:
+Installation of libflute consists of 2 simple steps:
 1. Getting the source code
-2. Build setup
-3. Building
+2. Building
 
 ### Step 1: Getting the source code
+
+This repository uses git submodules so it must be cloned with the following command
+
 ````
-cd ~
-git clone https://github.com/5G-MAG/rt-libflute.git
+git clone --recurse-submodules https://github.com/5G-MAG/rt-libflute.git
 ````
 
-### Step 2: Build setup
-````
-cd libflute/
-mkdir build && cd build
-cmake -GNinja ..
-````
+If you had checked it out before the submodules were added or ran git clone withou the `--recurse-submodules` argument then initialise and update the submodules by running
 
-### Step 3: Building
+```
+git submodule update --init
+```
+
+### Step 2: Building
 ````
-ninja
+cd rt-libflute/
+mkdir build
+cd build
+cmake ..
+cmake --build .
 ````
+(alternatively you can use the `build.sh` script to build in debug mode with raptor enabled)
+
+Build options:
+
+- "Enable Raptor": build with support for the raptor10-based forward error correction. On by default. Disable by passing the `-DENABLE_RAPTOR=OFF` option to cmake
 
 ## Usage
  
@@ -87,6 +96,19 @@ sudo setcap 'cap_net_admin=eip' ./flute-transmitter
 sudo setcap 'cap_net_admin=eip' ./flute-receiver
 ````
 
+### Optional: Forward Error Correction (FEC) for lossy environment
+
+To use forward error correction to overcome packet loss during transmission add the option `-f 1` to the transmitter. The receiver needs no such option, just make sure that both of them were properly built/rebuilt with raptor enabled in the build options (this is the default).
+
+To simulate packet loss over the loopback interface and test that FEC works, you can run the `setup_packet_loss_on_loopback` script, as root.
+
+Then start a transmission as you usually would. Make sure to use the default ip address, since the script will reroute this to go through the loopback interface.
+
+Finally revert the changes to your loopback interface and routing table with the `reset_loopback_settings` script.
+
 ## Documentation
 
 Documentation of the source code can be found at: https://5g-mag.github.io/rt-libflute/
+
+To generate it locally via doxygen run `doxygen` in the project root.
+Then to view it open the local file `html/index.html` in a browser

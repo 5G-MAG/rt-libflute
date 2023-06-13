@@ -21,9 +21,9 @@
 #include "spdlog/spdlog.h"
 #include "Transmitter.h"
 #include "IpSec.h"
-LibFlute::Transmitter::Transmitter ( const std::string& address,
-    short port, uint64_t tsi, unsigned short mtu, uint32_t rate_limit,
-    boost::asio::io_service& io_service)
+LibFlute::Transmitter::Transmitter ( const std::string& address, short port,
+uint64_t tsi, unsigned short mtu, uint32_t rate_limit, FecScheme fec_scheme,
+boost::asio::io_service& io_service)
     : _endpoint(boost::asio::ip::address::from_string(address), port)
     , _socket(io_service, _endpoint.protocol())
     , _fdt_timer(io_service)
@@ -33,18 +33,29 @@ LibFlute::Transmitter::Transmitter ( const std::string& address,
     , _mtu(mtu)
     , _rate_limit(rate_limit)
     , _mcast_address(address)
+    ,_fec_scheme(fec_scheme)
 {
   _max_payload = mtu -
-    20 - // IPv4 header
+    ( _endpoint.address().is_v6() ? 40 : 20) - // IP header
      8 - // UDP header
     32 - // ALC Header with EXT_FDT and EXT_FTI
-     4;  // SBN and ESI for compact no-code FEC
+     4;  // SBN and ESI for compact no-code or raptor FEC
   uint32_t max_source_block_length = 64;
+
+  switch(_fec_scheme) {
+    case FecScheme::Raptor:
+      if (_max_payload % 4) {
+        _max_payload -= (_max_payload % 4); // must be divisible by Al = 4
+      }
+      break;
+    default:
+      break;
+  }
 
   _socket.set_option(boost::asio::ip::multicast::enable_loopback(true));
   _socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
 
-  _fec_oti = FecOti{FecScheme::CompactNoCode, 0, _max_payload, max_source_block_length};
+  _fec_oti = FecOti{_fec_scheme, 0, _max_payload, max_source_block_length};
   _fdt = std::make_unique<FileDeliveryTable>(1, _fec_oti);
 
   _fdt_timer.expires_from_now(boost::posix_time::seconds(_fdt_repeat_interval));
@@ -75,9 +86,17 @@ auto LibFlute::Transmitter::seconds_since_epoch() -> uint64_t
 auto LibFlute::Transmitter::send_fdt() -> void {
   _fdt->set_expires(seconds_since_epoch() + _fdt_repeat_interval * 2);
   auto fdt = _fdt->to_string();
+  auto fdt_fec_oti = _fec_oti;
+  fdt_fec_oti.encoding_id = FecScheme::CompactNoCode; // always send the FDT in "plaintext"
+  fdt_fec_oti.encoding_symbol_length = _mtu -
+    20 - // IPv4 header
+     8 - // UDP header
+    32 - // ALC Header with EXT_FDT and EXT_FTI
+     4;  // SBN and ESI for compact no-code FEC
+  fdt_fec_oti.max_source_block_length = 64;
   auto file = std::make_shared<File>(
         0,
-        _fec_oti,
+        fdt_fec_oti,
         "",
         "",
         seconds_since_epoch() + _fdt_repeat_interval * 2,
@@ -96,17 +115,23 @@ auto LibFlute::Transmitter::send(
     size_t length) -> uint16_t 
 {
   auto toi = _toi;
+  std::shared_ptr<File> file;
+  try {
+      file = std::make_shared<File>(
+          toi,
+          _fec_oti,
+          content_location,
+          content_type,
+          expires,
+          data,
+          length);
+  } catch (const char *e) {
+    spdlog::error("Failed to create File object for file {} : {}", content_location, e);
+    return -1;
+  }
+
   _toi++;
   if (_toi == 0) _toi = 1; // clamp to >= 1 in case it wraps
-
-  auto file = std::make_shared<File>(
-        toi,
-        _fec_oti,
-        content_location,
-        content_type,
-        expires,
-        data,
-        length);
 
   _fdt->add(file->meta());
   send_fdt();
@@ -151,6 +176,7 @@ auto LibFlute::Transmitter::send_next_packet() -> void
           }
           auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id());
           bytes_queued += packet->size();
+          spdlog::debug("Queued ALC packet of {} bytes, containing {} symbols, for TOI {} , for transmission", packet->size(), symbols.size(), file->meta().toi );
 
           _socket.async_send_to(
               boost::asio::buffer(packet->data(), packet->size()), _endpoint,
@@ -159,7 +185,7 @@ auto LibFlute::Transmitter::send_next_packet() -> void
                 std::size_t bytes_transferred)
               {
                 if (error) {
-                  spdlog::debug("sent_to error: {}", error.message());
+                  spdlog::debug("send_to error: {}", error.message());
                 } else {
                   file->mark_completed(symbols, !error);
                   if (file->complete()) {

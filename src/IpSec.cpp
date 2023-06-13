@@ -95,8 +95,8 @@ namespace LibFlute::IpSec {
     xsinfo.mode = XFRM_MODE_TRANSPORT;
 
     struct {
-      struct xfrm_algo xa;
       char buf[512];
+      struct xfrm_algo xa;
     } algo = {};
 
     std::vector<char> binary_key;

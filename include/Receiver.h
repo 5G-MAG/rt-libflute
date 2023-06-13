@@ -21,6 +21,7 @@
 #include <mutex>
 #include "File.h"
 #include "FileDeliveryTable.h"
+#include "flute_types.h"
 
 namespace LibFlute {
   /**
@@ -45,8 +46,7 @@ namespace LibFlute {
       *  @param io_service Boost io_service to run the socket operations in (must be provided by the caller)
       */
       Receiver( const std::string& iface, const std::string& address, 
-          short port, uint64_t tsi,
-          boost::asio::io_service& io_service);
+          short port, uint64_t tsi, boost::asio::io_service& io_service);
 
      /**
       *  Default destructor.

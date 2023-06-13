@@ -1,0 +1,14 @@
+#! /bin/bash
+
+t=238.1.1.95
+
+echo Removing route to target address
+sudo ip r del $t dev lo
+echo Removing packet loss from loopback device
+sudo tc qdisc del dev lo root netem loss 2%
+
+echo Check everything got removed
+ip r get $t
+tc qdisc show dev lo
+echo 2 second ping check to assert packet loss is gone
+ping -I lo 127.0.0.1 -i 0.002 -w 2 -q

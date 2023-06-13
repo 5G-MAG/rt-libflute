@@ -21,6 +21,7 @@
 #include "AlcPacket.h"
 #include "FileDeliveryTable.h"
 #include "EncodingSymbol.h"
+#include "flute_types.h"
 
 namespace LibFlute {
   /**
@@ -84,12 +85,12 @@ namespace LibFlute {
      /**
       *  Get the FEC OTI values
       */
-      const FecOti& fec_oti() const { return _meta.fec_oti; };
+      FecOti& fec_oti() { return _meta.fec_oti; };
 
      /**
       *  Get the file metadata from its FDT entry
       */
-      const LibFlute::FileDeliveryTable::FileEntry& meta() const { return _meta; };
+      LibFlute::FileDeliveryTable::FileEntry& meta() { return _meta; };
 
      /**
       *  Timestamp of file reception
@@ -130,21 +131,10 @@ namespace LibFlute {
       void calculate_partitioning();
       void create_blocks();
 
-      struct SourceBlock {
-        bool complete = false;
-        struct Symbol {
-          char* data;
-          size_t length;
-          bool complete = false;
-          bool queued = false;
-        };
-        std::map<uint16_t, Symbol> symbols; 
-      };
-
       void check_source_block_completion(SourceBlock& block);
       void check_file_completion();
 
-      std::map<uint16_t, SourceBlock> _source_blocks; 
+      std::map<uint16_t, LibFlute::SourceBlock> _source_blocks; 
 
       bool _complete = false;;
 
@@ -163,4 +153,16 @@ namespace LibFlute {
 
       uint16_t _fdt_instance_id = 0;
   };
+
+  /**
+  *  Calculate the md5 message digest
+  *
+  *  @param input byte array whose md5 message digest shall be calculated
+  *  @param length size of the input array
+  *  @param result buffer to store the output of the md5 calculation. Make sure it is EVP_MAX_MD_SIZE bytes large
+  * 
+  *  @return length of the calculated md5 sum (should be 16 bytes for md5)
+  */
+  int calculate_md5(char *input, int length, unsigned char *result);
+
 };

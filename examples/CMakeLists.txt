@@ -32,6 +32,7 @@ target_link_libraries( flute-transmitter
     config++
     flute
     pthread
+    m
 )
 target_link_libraries( flute-receiver
     LINK_PUBLIC
@@ -39,4 +40,5 @@ target_link_libraries( flute-receiver
     config++
     flute
     pthread
+    m
 )
