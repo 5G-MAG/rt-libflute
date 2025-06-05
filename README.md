@@ -10,10 +10,11 @@ Additional information can be found at: https://5g-mag.github.io/Getting-Started
 
 ## Installation guide
 
-Installation of libflute consists of 3 simple steps:
+Installation of libflute consists of 4 simple steps:
 1. Getting the source code
-2. Build setup
-3. Building
+2. Installing the dependencies
+3. Build setup
+4. Building
 
 ### Step 1: Getting the source code
 ````
@@ -21,7 +22,19 @@ cd ~
 git clone https://github.com/5G-MAG/rt-libflute.git
 ````
 
-### Step 2: Build setup
+### Step 2: Installing the dependencies
+````
+apt install ninja-build
+sudo apt-get install libboost-all-dev
+sudo apt install libspdlog-dev
+sudo apt install libtinyxml2-dev
+sudo apt-get install libconfig++-dev
+apt install clang-tidy
+sudo apt install clang
+sudo apt install g++-12
+````
+
+### Step 3: Build setup
 ````
 cd rt-libflute/
 mkdir build && cd build
