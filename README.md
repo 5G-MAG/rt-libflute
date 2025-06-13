@@ -24,14 +24,7 @@ git clone https://github.com/5G-MAG/rt-libflute.git
 
 ### Step 2: Installing the dependencies
 ````
-apt install ninja-build
-sudo apt-get install libboost-all-dev
-sudo apt install libspdlog-dev
-sudo apt install libtinyxml2-dev
-sudo apt-get install libconfig++-dev
-apt install clang-tidy
-sudo apt install clang
-sudo apt install g++-12
+sudo apt install ninja-build libboost-all-dev libspdlog-dev libtinyxml2-dev libconfig++-dev clang-tidy clang g++-12
 ````
 
 ### Step 3: Build setup
