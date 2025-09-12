@@ -177,7 +177,7 @@ LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_
   auto hdr_ptr = _buffer + 4;
   auto payload_ptr = _buffer + 4 * lct_header_len;
 
-  auto payload_size = EncodingSymbol::to_payload(symbols, payload_ptr, max_size, _fec_oti, ContentEncoding::NONE);
+  auto payload_size = EncodingSymbol::to_payload(symbols, payload_ptr, max_size + 4, _fec_oti, ContentEncoding::NONE);
   _len = 4 * lct_header_len + payload_size;
   
   hdr_ptr += 4; // CCI = 0
