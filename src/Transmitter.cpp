@@ -458,14 +458,14 @@ void Transmitter::FileDescription::_calculate_file_entry()
 
 Transmitter::Transmitter ( const std::string& address, short port,
                            uint64_t tsi, unsigned short mtu, uint32_t rate_limit,
-                           boost::asio::io_service& io_service,
+                           boost::asio::io_context& io_context,
                            const std::optional<boost::asio::ip::udp::endpoint> &tunnel_endpoint,
                            Transmitter::FdtNamespace fdt_namespace )
-    : _endpoint(boost::asio::ip::address::from_string(address), port)
-    , _socket(io_service, _endpoint.protocol())
-    , _io_service(io_service)
-    , _send_timer(io_service)
-    , _fdt_timer(io_service)
+    : _endpoint(boost::asio::ip::make_address(address), port)
+    , _socket(io_context, _endpoint.protocol())
+    , _io_context(io_context)
+    , _send_timer(io_context)
+    , _fdt_timer(io_context)
     , _tsi(tsi)
     , _mtu(mtu)
     , _files()
@@ -484,7 +484,7 @@ Transmitter::Transmitter ( const std::string& address, short port,
     // Remove extra overhead for UDP tunnelling, if set
     _max_payload -= 20 - // IPv4 header
                     8; // UDP header
-    boost::asio::ip::udp::socket local_socket(io_service, _tunnel_endpoint.value().protocol());
+    boost::asio::ip::udp::socket local_socket(io_context, _tunnel_endpoint.value().protocol());
     local_socket.connect(_tunnel_endpoint.value());
     _tunnel_local_address = local_socket.local_endpoint().address();
   }
@@ -678,7 +678,7 @@ auto Transmitter::send_next_packet() -> void
     _send_timer.async_wait( boost::bind(&Transmitter::send_next_packet, this));
   } else {
     if (_rate_limit == 0) {
-      _io_service.post(boost::bind(&Transmitter::send_next_packet, this));
+      boost::asio::post(_io_context, boost::bind(&Transmitter::send_next_packet, this));
     } else {
       auto send_duration = ((bytes_queued * 8.0) / (double)_rate_limit/1000.0) * 1000.0 * 1000.0;
       spdlog::trace("Rate limiter: queued {} bytes, limit {} kbps, next send in {} us",
@@ -701,8 +701,8 @@ static void create_udp_pkt(char *udp_buffer, const boost::asio::ip::udp::endpoin
   } *pseudo_hdr = reinterpret_cast<struct udp_pseudo_hdr*>(udp_buffer - sizeof(*pseudo_hdr));
   struct udphdr *udp_hdr = reinterpret_cast<struct udphdr*>(udp_buffer);
 
-  pseudo_hdr->source = htonl(local_address.to_v4().to_ulong());
-  pseudo_hdr->dest = htonl(endpoint.address().to_v4().to_ulong());
+  pseudo_hdr->source = htonl(local_address.to_v4().to_uint());
+  pseudo_hdr->dest = htonl(endpoint.address().to_v4().to_uint());
   pseudo_hdr->reserved = 0;
   pseudo_hdr->protocol = endpoint.protocol().protocol();
   pseudo_hdr->length = htons(data_len + 8);
@@ -729,8 +729,8 @@ static void create_ip_hdr(char *ip_buffer, const boost::asio::ip::udp::endpoint 
   ip_hdr->ttl = 63; // TTL 63 hops
   ip_hdr->protocol = endpoint.protocol().protocol();
   ip_hdr->check = 0;
-  ip_hdr->saddr = htonl(local_address.to_v4().to_ulong());
-  ip_hdr->daddr = htonl(endpoint.address().to_v4().to_ulong());
+  ip_hdr->saddr = htonl(local_address.to_v4().to_uint());
+  ip_hdr->daddr = htonl(endpoint.address().to_v4().to_uint());
 
   ip_hdr->check = calculate_sum(reinterpret_cast<uint16_t*>(ip_hdr), 20);
 }

@@ -42,11 +42,11 @@ namespace LibFlute {
       *  @param address Multicast address
       *  @param port Target port 
       *  @param tsi TSI value of the session 
-      *  @param io_service Boost io_service to run the socket operations in (must be provided by the caller)
+      *  @param io_context Boost io_context to run the socket operations in (must be provided by the caller)
       */
       Receiver( const std::string& iface, const std::string& address, 
           short port, uint64_t tsi,
-          boost::asio::io_service& io_service);
+          boost::asio::io_context& io_context);
 
      /**
       *  Default destructor.
