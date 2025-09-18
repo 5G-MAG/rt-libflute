@@ -17,6 +17,7 @@
 #include <iostream>
 #include <arpa/inet.h>
 #include "AlcPacket.h"
+#include "AlcConstants.h"
 
 LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
 {
@@ -102,14 +103,14 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
       hdr_ptr += 1;
     }
 
-    switch ((AlcPacket::HeaderExtension)het) {
-      case EXT_NOP: 
-      case EXT_AUTH: 
-      case EXT_TIME:  {
+    switch (het) {
+      case AlcHeaderExtension::EXT_NOP:
+      case AlcHeaderExtension::EXT_AUTH:
+      case AlcHeaderExtension::EXT_TIME:  {
                         hdr_ptr += 3;
                         break; // ignored
                       }
-      case EXT_FTI: {
+      case AlcHeaderExtension::EXT_FTI: {
                       if (_fec_oti.encoding_id == FecScheme::CompactNoCode) {
                         if (hel != 4) {
                           throw "Invalid length for EXT_FTI header extension";
@@ -126,7 +127,7 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                       }
                       break; 
                     }
-      case EXT_FDT: {
+      case AlcHeaderExtension::EXT_FDT: {
                       uint8_t flute_version = (*hdr_ptr & 0xF0) >> 4;
                       if (flute_version > 2) {
                         throw "Unsupported FLUTE version";
@@ -137,7 +138,7 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                       hdr_ptr += 2;
                       break; 
                     }
-      case EXT_CENC: {
+      case AlcHeaderExtension::EXT_CENC: {
                        uint8_t encoding = *hdr_ptr;
                        switch (encoding) {
                          case 0: _content_encoding = ContentEncoding::NONE; break;
@@ -189,14 +190,14 @@ LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_
   hdr_ptr += 2;
 
   if (toi == 0) { // Add extensions for FDT
-    *((uint8_t*)hdr_ptr) = EXT_FDT;
+    *((uint8_t*)hdr_ptr) = AlcHeaderExtension::FDT;
     hdr_ptr += 1;
     *((uint8_t*)hdr_ptr) = 1 << 4 | (fdt_instance_id & 0x000F0000) >> 16;
     hdr_ptr += 1;
     *((uint16_t*)hdr_ptr) = htons(fdt_instance_id & 0x0000FFFF);
     hdr_ptr += 2;
 
-    *((uint8_t*)hdr_ptr) = EXT_FTI;
+    *((uint8_t*)hdr_ptr) = AlcHeaderExtension::FTI;
     hdr_ptr += 1;
     *((uint8_t*)hdr_ptr) = 4; // HEL
     hdr_ptr += 1;

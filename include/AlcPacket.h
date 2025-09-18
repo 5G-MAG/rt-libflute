@@ -144,16 +144,6 @@ namespace LibFlute {
         uint8_t codepoint;
       } _lct_header;
       static_assert(sizeof(_lct_header) == 4);
-
-      enum HeaderExtension { 
-        EXT_NOP  =   0,
-        EXT_AUTH =   1,
-        EXT_TIME =   2,
-        EXT_FTI  =  64,
-        EXT_FDT  = 192,
-        EXT_CENC = 193
-      };
-
   };
 };
 
