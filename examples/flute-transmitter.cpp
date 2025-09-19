@@ -191,7 +191,7 @@ static void send_with_new_api(struct ft_arguments &arguments)
         arguments.tsi,
         arguments.mtu,
         arguments.rate_limit,
-        io, std::nullopt, LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005);
+        io, std::nullopt, FileDeliveryTableConstants::FDT_NS_DRAFT_2005);
 
   // Configure IPSEC ESP, if enabled
   if (arguments.enable_ipsec)
@@ -259,7 +259,7 @@ static void send_with_old_api(struct ft_arguments &arguments)
         arguments.tsi,
         arguments.mtu,
         arguments.rate_limit,
-        io, std::nullopt, LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005);
+        io, std::nullopt, FileDeliveryTableConstants::FDT_NS_DRAFT_2005);
 
   // Configure IPSEC ESP, if enabled
   if (arguments.enable_ipsec) 

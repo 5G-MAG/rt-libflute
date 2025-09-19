@@ -39,7 +39,7 @@ namespace LibFlute {
      /**
       * FDT namespace enumeration
       */
-      using FdtNamespace = FileDeliveryTable::FdtNamespace;
+      using FdtNamespace = FileDeliveryTableConstants::FdtNamespace;
 
 
      /**
