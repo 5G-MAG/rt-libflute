@@ -97,6 +97,11 @@ namespace LibFlute {
       size_t size() const { return _len; };
 
     private:
+      void handleIgnoredExtension(char*& hdr_ptr);
+      void handleFtiExtension(char*& hdr_ptr, uint8_t hel);
+      void handleFdtExtension(char*& hdr_ptr);
+      void handleCencExtension(char*& hdr_ptr);
+
       uint64_t _tsi = 0;
       uint64_t _toi = 0;
 
@@ -146,4 +151,3 @@ namespace LibFlute {
       static_assert(sizeof(_lct_header) == 4);
   };
 };
-

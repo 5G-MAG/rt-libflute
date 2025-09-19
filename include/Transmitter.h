@@ -378,7 +378,7 @@ namespace LibFlute {
           uint32_t rate_limit,
           boost::asio::io_context& io_context,
           const std::optional<boost::asio::ip::udp::endpoint> &tunnel_endpoint = std::nullopt,
-          FdtNamespace fdt_namespace = FileDeliveryTable::FDT_NS_NONE);
+          FdtNamespace fdt_namespace = FileDeliveryTableConstants::FDT_NS_NONE);
 
      /**
       *  Default destructor.

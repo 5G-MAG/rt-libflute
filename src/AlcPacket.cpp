@@ -17,7 +17,7 @@
 #include <iostream>
 #include <arpa/inet.h>
 #include "AlcPacket.h"
-#include "AlcConstants.h"
+#include "Constants.h"
 
 LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
 {
@@ -106,49 +106,18 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
     switch (het) {
       case AlcHeaderExtension::EXT_NOP:
       case AlcHeaderExtension::EXT_AUTH:
-      case AlcHeaderExtension::EXT_TIME:  {
-                        hdr_ptr += 3;
-                        break; // ignored
-                      }
-      case AlcHeaderExtension::EXT_FTI: {
-                      if (_fec_oti.encoding_id == FecScheme::CompactNoCode) {
-                        if (hel != 4) {
-                          throw "Invalid length for EXT_FTI header extension";
-                        }
-                        _fec_oti.transfer_length = (uint64_t)(ntohs(*(uint16_t*)hdr_ptr)) << 32;
-                        hdr_ptr += 2;
-                        _fec_oti.transfer_length |= (uint64_t)(ntohl(*(uint32_t*)hdr_ptr));
-                        hdr_ptr += 4;
-                        hdr_ptr += 2; // reserved
-                        _fec_oti.encoding_symbol_length = ntohs(*(uint16_t*)hdr_ptr);
-                        hdr_ptr += 2;
-                        _fec_oti.max_source_block_length = ntohl(*(uint32_t*)hdr_ptr);
-                        hdr_ptr += 4;
-                      }
-                      break; 
-                    }
-      case AlcHeaderExtension::EXT_FDT: {
-                      uint8_t flute_version = (*hdr_ptr & 0xF0) >> 4;
-                      if (flute_version > 2) {
-                        throw "Unsupported FLUTE version";
-                      }
-                      _fdt_instance_id =  (*hdr_ptr & 0x0F) << 16;
-                      hdr_ptr++;
-                      _fdt_instance_id |= ntohs(*(uint16_t*)hdr_ptr);
-                      hdr_ptr += 2;
-                      break; 
-                    }
-      case AlcHeaderExtension::EXT_CENC: {
-                       uint8_t encoding = *hdr_ptr;
-                       switch (encoding) {
-                         case 0: _content_encoding = ContentEncoding::NONE; break;
-                         case 1: _content_encoding = ContentEncoding::ZLIB; break;
-                         case 2: _content_encoding = ContentEncoding::DEFLATE; break;
-                         case 3: _content_encoding = ContentEncoding::GZIP; break;
-                       }
-                       hdr_ptr += 3;
-                       break; 
-                     }
+      case AlcHeaderExtension::EXT_TIME:
+        handleIgnoredExtension(hdr_ptr);
+        break;
+      case AlcHeaderExtension::EXT_FTI:
+        handleFtiExtension(hdr_ptr, hel);
+        break;
+      case AlcHeaderExtension::EXT_FDT:
+        handleFdtExtension(hdr_ptr);
+        break;
+      case AlcHeaderExtension::EXT_CENC:
+        handleCencExtension(hdr_ptr);
+        break;
     }
 
     ext_header_len -= 4;
@@ -190,14 +159,14 @@ LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_
   hdr_ptr += 2;
 
   if (toi == 0) { // Add extensions for FDT
-    *((uint8_t*)hdr_ptr) = AlcHeaderExtension::FDT;
+    *((uint8_t*)hdr_ptr) = AlcHeaderExtension::EXT_FDT;
     hdr_ptr += 1;
     *((uint8_t*)hdr_ptr) = 1 << 4 | (fdt_instance_id & 0x000F0000) >> 16;
     hdr_ptr += 1;
     *((uint16_t*)hdr_ptr) = htons(fdt_instance_id & 0x0000FFFF);
     hdr_ptr += 2;
 
-    *((uint8_t*)hdr_ptr) = AlcHeaderExtension::FTI;
+    *((uint8_t*)hdr_ptr) = AlcHeaderExtension::EXT_FTI;
     hdr_ptr += 1;
     *((uint8_t*)hdr_ptr) = 4; // HEL
     hdr_ptr += 1;
@@ -216,4 +185,49 @@ LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_
 LibFlute::AlcPacket::~AlcPacket()
 {
   if (_buffer) free(_buffer);
+}
+
+void LibFlute::AlcPacket::handleIgnoredExtension(char*& hdr_ptr) {
+  hdr_ptr += 3;
+}
+
+void LibFlute::AlcPacket::handleFtiExtension(char*& hdr_ptr, uint8_t hel) {
+  if (_fec_oti.encoding_id == FecScheme::CompactNoCode) {
+    if (hel != 4) {
+      throw "Invalid length for EXT_FTI header extension";
+    }
+    _fec_oti.transfer_length = (uint64_t)(ntohs(*(uint16_t*)hdr_ptr)) << 32;
+    hdr_ptr += 2;
+    _fec_oti.transfer_length |= (uint64_t)(ntohl(*(uint32_t*)hdr_ptr));
+    hdr_ptr += 4;
+    hdr_ptr += 2; // reserved
+    _fec_oti.encoding_symbol_length = ntohs(*(uint16_t*)hdr_ptr);
+    hdr_ptr += 2;
+    _fec_oti.max_source_block_length = ntohl(*(uint32_t*)hdr_ptr);
+    hdr_ptr += 4;
+  }
+}
+
+void LibFlute::AlcPacket::handleFdtExtension(char*& hdr_ptr) {
+  uint8_t flute_version = (*hdr_ptr & 0xF0) >> 4;
+  if (flute_version > 2) {
+    throw "Unsupported FLUTE version";
+  }
+  _fdt_instance_id =  (*hdr_ptr & 0x0F) << 16;
+  hdr_ptr++;
+  uint16_t instance_id_part;
+  memcpy(&instance_id_part, hdr_ptr, sizeof(uint16_t));
+  _fdt_instance_id |= ntohs(instance_id_part);
+  hdr_ptr += 2;
+}
+
+void LibFlute::AlcPacket::handleCencExtension(char*& hdr_ptr) {
+  uint8_t encoding = *hdr_ptr;
+  switch (encoding) {
+    case 0: _content_encoding = ContentEncoding::NONE; break;
+    case 1: _content_encoding = ContentEncoding::ZLIB; break;
+    case 2: _content_encoding = ContentEncoding::DEFLATE; break;
+    case 3: _content_encoding = ContentEncoding::GZIP; break;
+  }
+  hdr_ptr += 3;
 }
