@@ -1,18 +1,20 @@
-// libflute - FLUTE/ALC library
-//
-// Copyright (C) 2021 Klaus Kühnhammer (Österreichische Rundfunksender GmbH & Co KG)
-//
-// Licensed under the License terms and conditions for use, reproduction, and
-// distribution of 5G-MAG software (the “License”).  You may not use this file
-// except in compliance with the License.  You may obtain a copy of the License at
-// https://www.5g-mag.com/reference-tools.  Unless required by applicable law or
-// agreed to in writing, software distributed under the License is distributed on
-// an “AS IS” BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
-// or implied.
-// 
-// See the License for the specific language governing permissions and limitations
-// under the License.
-//
+/*
+libflute - FLUTE/ALC library
+
+Copyright (C) 2021 Klaus Kühnhammer (Österreichische Rundfunksender GmbH & Co KG)
+
+Licensed under the License terms and conditions for use, reproduction, and
+distribution of 5G-MAG software (the “License”).  You may not use this file
+except in compliance with the License.  You may obtain a copy of the License at
+https://www.5g-mag.com/reference-tools.  Unless required by applicable law or
+agreed to in writing, software distributed under the License is distributed on
+an “AS IS” BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+or implied.
+
+See the License for the specific language governing permissions and limitations
+under the License.
+*/
+
 #include <cstring>
 #include <iostream>
 #include <arpa/inet.h>
@@ -45,11 +47,11 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
     _tsi = ntohs(*(uint16_t*)hdr_ptr);
     tsi_shift = 16;
     hdr_ptr += 2;
-  } 
+  }
   if(_lct_header.tsi_flag == 1) {
     _tsi |= ntohl(*(uint32_t*)hdr_ptr) << tsi_shift;
     hdr_ptr += 4;
-  } 
+  }
 
   if ( _lct_header.close_session_flag == 0 && _lct_header.half_word_flag == 0 && _lct_header.toi_flag == 0) {
     throw "TOI field not present";
@@ -59,10 +61,10 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
     _toi = ntohs(*(uint16_t*)hdr_ptr);
     toi_shift = 16;
     hdr_ptr += 2;
-  } 
+  }
   switch(_lct_header.toi_flag) {
       case 0: break;
-      case 1: 
+      case 1:
         _toi |= ntohl(*(uint32_t*)hdr_ptr) << toi_shift;
         hdr_ptr += 4;
         break;
@@ -78,7 +80,7 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
         break;
       default:
         throw "TOI fields over 64 bits in length are not supported";
-  } 
+  }
 
   if (_lct_header.codepoint == 0) {
     _fec_oti.encoding_id = FecScheme::CompactNoCode;
@@ -118,6 +120,8 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
       case AlcHeaderExtension::EXT_CENC:
         handleCencExtension(hdr_ptr);
         break;
+      default:
+        handleIgnoredExtension(hdr_ptr);
     }
 
     ext_header_len -= 4;
@@ -149,12 +153,12 @@ LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_
 
   auto payload_size = EncodingSymbol::to_payload(symbols, payload_ptr, max_size, _fec_oti, ContentEncoding::NONE);
   _len = 4 * lct_header_len + payload_size;
-  
+
   hdr_ptr += 4; // CCI = 0
-  
+
   *((uint16_t*)hdr_ptr) = htons(tsi);
   hdr_ptr += 2;
-  
+
   *((uint16_t*)hdr_ptr) = htons(toi);
   hdr_ptr += 2;
 
@@ -221,13 +225,21 @@ void LibFlute::AlcPacket::handleFdtExtension(char*& hdr_ptr) {
   hdr_ptr += 2;
 }
 
-void LibFlute::AlcPacket::handleCencExtension(char*& hdr_ptr) {
+void LibFlute::AlcPacket::handleCencExtension(char*& hdr_ptr)
+{
   uint8_t encoding = *hdr_ptr;
-  switch (encoding) {
-    case 0: _content_encoding = ContentEncoding::NONE; break;
-    case 1: _content_encoding = ContentEncoding::ZLIB; break;
-    case 2: _content_encoding = ContentEncoding::DEFLATE; break;
-    case 3: _content_encoding = ContentEncoding::GZIP; break;
+  switch (encoding)
+  {
+  case 0: _content_encoding = ContentEncoding::NONE;
+    break;
+  case 1: _content_encoding = ContentEncoding::ZLIB;
+    break;
+  case 2: _content_encoding = ContentEncoding::DEFLATE;
+    break;
+  case 3: _content_encoding = ContentEncoding::GZIP;
+    break;
+  default:
+    break;
   }
   hdr_ptr += 3;
 }
