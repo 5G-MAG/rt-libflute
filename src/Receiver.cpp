@@ -20,6 +20,7 @@ under the License.
 #include <string>
 #include "spdlog/spdlog.h"
 #include "IpSec.h"
+#include "Messages.h"
 
 
 LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& address,
@@ -61,12 +62,12 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
 
   if (!error)
   {
-    spdlog::trace("Received {} bytes", bytes_recvd);
+    spdlog::trace(Messages::RECEIVED_BYTES, bytes_recvd);
     try {
       auto alc = LibFlute::AlcPacket(_data, bytes_recvd);
 
       if (alc.tsi() != _tsi) {
-        spdlog::warn("Discarding packet for unknown TSI {}", alc.tsi());
+        spdlog::warn(Messages::DISCARD_UNKNOWN_TSI, alc.tsi());
         return;
       }
 
@@ -87,7 +88,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
             alc.content_encoding());
 
         for (const auto& symbol : encoding_symbols) {
-          spdlog::debug("received TOI {} SBN {} ID {}", alc.toi(), symbol.source_block_number(), symbol.id() );
+          spdlog::debug(Messages::RECEIVED_SYMBOL, alc.toi(), symbol.source_block_number(), symbol.id() );
           _files[alc.toi()]->put_symbol(symbol);
         }
 
@@ -97,7 +98,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
           {
             if (it->second.get() != file && it->second->meta().content_location == file->meta().content_location)
             {
-              spdlog::debug("Replacing file with TOI {}", it->first);
+              spdlog::debug(Messages::REPLACING_FILE, it->first);
               it = _files.erase(it);
             }
             else
@@ -108,7 +109,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
 
           file->decode();
 
-          spdlog::debug("File with TOI {} completed", alc.toi());
+          spdlog::debug(Messages::FILE_COMPLETED, alc.toi());
           if (alc.toi() != 0 && _completion_cb) {
             _completion_cb(_files[alc.toi()]);
             _files.erase(alc.toi());
@@ -122,18 +123,17 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
             for (const auto& file_entry : _fdt->file_entries()) {
               // automatically receive all files in the FDT
               if (_files.find(file_entry.toi) == _files.end()) {
-                spdlog::debug("Starting reception for file with TOI {}: {} ({})", file_entry.toi,
-                    file_entry.content_location, file_entry.content_type);
+                spdlog::debug(Messages::STARTING_RECEPTION, file_entry.toi, file_entry.content_location, file_entry.content_type);
                 _files.emplace(file_entry.toi, std::make_shared<LibFlute::File>(file_entry));
               }
             }
           }
         }
       } else {
-        spdlog::trace("Discarding packet for unknown or already completed file with TOI {}", alc.toi());
+        spdlog::trace(Messages::DISCARD_UNKNOWN_OR_COMPLETED_FILE, alc.toi());
       }
     } catch (const std::exception &ex) {
-      spdlog::warn("Failed to decode ALC/FLUTE packet: {}", ex.what());
+      spdlog::warn(Messages::FAILED_DECODE_PACKET, ex.what());
     }
 
     _socket.async_receive_from(
@@ -144,7 +144,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
   }
   else 
   {
-    spdlog::error("receive_from error: {}", error.message());
+    spdlog::error(Messages::RECEIVE_FROM_ERROR, error.message());
   }
 }
 

@@ -24,10 +24,10 @@ under the License.
 #include <linux/rtnetlink.h>
 #include <linux/in.h>
 #include <linux/xfrm.h>
-#include <linux/ipsec.h>
 #include <arpa/inet.h>
 #include "IpSec.h"
 #include <boost/algorithm/hex.hpp>
+#include "Messages.h"
 
 namespace LibFlute::IpSec {
   void configure_policy(uint32_t spi, const std::string& dest_address, Direction direction)
@@ -101,7 +101,7 @@ namespace LibFlute::IpSec {
       binary_key.emplace_back((char)strtol(key.substr(i, 2).c_str(), nullptr, 16));
     }
     if (binary_key.size() > 512) {
-      throw "Key is too long";
+      throw Messages::KEY_TOO_LONG;
     }
     size_t algo_size = sizeof(struct xfrm_algo) + binary_key.size();
     void *algo_mem = std::malloc(algo_size);

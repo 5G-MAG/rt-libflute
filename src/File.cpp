@@ -31,6 +31,7 @@ under the License.
 #include "spdlog/spdlog.h"
 #include "Transmitter.h"
 #include "File.h"
+#include "Messages.h"
 
 namespace LibFlute {
 
@@ -39,13 +40,13 @@ File::File(FileDeliveryTable::FileEntry entry)
   , _received_at( time(nullptr) )
   , _file_description()
 {
-  spdlog::debug("Creating File from FileEntry");
+  spdlog::debug(Messages::CREATING_FILE_FROM_ENTRY);
   // Allocate a data buffer
-  spdlog::debug("Allocating buffer");
+  spdlog::debug(Messages::ALLOCATING_BUFFER);
   _buffer = (char*)malloc(_meta.fec_oti.transfer_length);
   if (_buffer == nullptr)
   {
-    throw "Failed to allocate file buffer";
+    throw Messages::FAILED_TO_ALLOCATE_FILE_BUFFER;
   }
   _own_buffer = true;
 
@@ -57,13 +58,13 @@ File::File(const std::shared_ptr<Transmitter::FileDescription> &file_description
   : _meta()
   , _file_description(file_description)
 {
-  spdlog::debug("Creating File from FileDescription");
+  spdlog::debug(Messages::CREATING_FILE_FROM_DESCRIPTION);
 
   auto length = _file_description->data_length();
   _buffer = (char*)malloc(length);
   if (_buffer == nullptr)
   {
-    throw "No data allocated";
+    throw Messages::NO_DATA_ALLOCATED;
   }
   _own_buffer = true;
   memcpy(_buffer, _file_description->data(), length);
@@ -73,7 +74,7 @@ File::File(const std::shared_ptr<Transmitter::FileDescription> &file_description
   if (_meta.fec_oti.encoding_id == FecScheme::CompactNoCode) {
     _meta.fec_oti.transfer_length = length;
   } else {
-    throw "Unsupported FEC scheme";
+    throw Messages::UNSUPPORTED_FEC_SCHEME;
   }
 
   encode();
@@ -94,13 +95,13 @@ File::File(uint32_t toi,
   , _meta()
   , _file_description()
 {
-  spdlog::debug("Creating File from data");
+  spdlog::debug(Messages::CREATING_FILE_FROM_DATA);
   if (copy_data) {
-    spdlog::debug("Allocating buffer");
+    spdlog::debug(Messages::ALLOCATING_BUFFER);
     _buffer = (char*)malloc(length);
     if (_buffer == nullptr)
     {
-      throw "Failed to allocate file buffer";
+      throw Messages::FAILED_TO_ALLOCATE_FILE_BUFFER;
     }
     memcpy(_buffer, data, length);
     _own_buffer = true;
@@ -123,7 +124,7 @@ File::File(uint32_t toi,
   if (_meta.fec_oti.encoding_id == FecScheme::CompactNoCode) { 
     _meta.fec_oti.transfer_length = length;
   } else {
-    throw "Unsupported FEC scheme";
+    throw Messages::UNSUPPORTED_FEC_SCHEME;
   }
 
   this->calculate_partitioning();
@@ -132,10 +133,10 @@ File::File(uint32_t toi,
 
 File::~File()
 {
-  spdlog::debug("Destroying File");
+  spdlog::debug(Messages::DESTROYING_FILE);
   if (_own_buffer && _buffer != nullptr)
   {
-    spdlog::debug("Freeing buffer");
+    spdlog::debug(Messages::FREEING_BUFFER);
     free(_buffer);
   }
 }
@@ -180,8 +181,8 @@ auto File::check_file_completion() -> void
 
     auto content_md5 = base64_decode(_meta.content_md5);
     if (memcmp(md5, content_md5.c_str(), MD5_DIGEST_LENGTH) != 0) {
-      spdlog::debug("MD5 mismatch for TOI {}, discarding", _meta.toi);
- 
+      spdlog::debug(Messages::MD5_MISMATCH, _meta.toi);
+
       // MD5 mismatch, try again
       for (auto& block : _source_blocks) {
         for (auto& symbol : block.second.symbols) {
@@ -278,21 +279,21 @@ auto File::encode() -> void
     if (_meta.content_encoding == "gzip" || _meta.content_encoding=="deflate") {
       auto decomp_buffer = _buffer;
       bool own_decomp = _own_buffer;
-      std::shared_ptr<unsigned char> comp_buffer(new unsigned char[16384]);
+      std::shared_ptr<unsigned char> comp_buffer(new unsigned char[16384], std::default_delete<unsigned char[]>());
       z_stream zs = {
         .next_in = reinterpret_cast<unsigned char*>(decomp_buffer),
         .avail_in = static_cast<uint32_t>(_meta.content_length),
         .next_out = comp_buffer.get(),
         .avail_out = 16384
       };
-      spdlog::debug("Compressing contents with {}", _meta.content_encoding);
+      spdlog::debug(Messages::COMPRESSING_CONTENTS, _meta.content_encoding);
 
       if (deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 | 16, 8, Z_DEFAULT_STRATEGY) == Z_OK) {
         _buffer = nullptr;
         auto zstate = deflate(&zs, Z_FINISH);
         size_t last_out = 0;
         while (zstate == Z_OK) {
-          spdlog::debug("Part compressed: {} bytes", 16384-zs.avail_out);
+          spdlog::debug(Messages::PART_COMPRESSED, 16384-zs.avail_out);
           _buffer = reinterpret_cast<char*>(realloc(_buffer, zs.total_out));
           memcpy(_buffer+last_out, comp_buffer.get(), 16384-zs.avail_out);
           last_out = zs.total_out;
@@ -310,7 +311,7 @@ auto File::encode() -> void
           }
           _meta.fec_oti.transfer_length = zs.total_out;
         } else {
-          spdlog::error("Error compressing file {}: {}", _meta.toi, zs.msg);
+          spdlog::error(Messages::ERROR_COMPRESSING_FILE, _meta.toi, zs.msg);
           throw zs.msg;
         }
         deflateEnd(&zs);
@@ -318,8 +319,8 @@ auto File::encode() -> void
         if (own_decomp) free(decomp_buffer);
       }
     } else {
-      spdlog::error("Unknown Content-Encoding {}", _meta.content_encoding);
-      throw "Content-Encoding not known";
+      spdlog::error(Messages::UNKNOWN_CONTENT_ENCODING, _meta.content_encoding);
+      throw Messages::UNKNOWN_CONTENT_ENCODING;
     }
 
     _been_encoded = true;
@@ -333,7 +334,7 @@ auto File::decode() -> void
     if (_meta.content_encoding == "gzip" || _meta.content_encoding=="deflate") {
       auto comp_buffer = _buffer;
       bool own_comp = _own_buffer;
-      std::shared_ptr<unsigned char> decomp_buffer(new unsigned char[16384]);
+      const std::shared_ptr<unsigned char[]> decomp_buffer(new unsigned char[16384]);
       z_stream zs = {
 	.next_in = reinterpret_cast<unsigned char*>(comp_buffer),
 	.avail_in = static_cast<uint32_t>(_meta.fec_oti.transfer_length),
@@ -366,17 +367,17 @@ auto File::decode() -> void
         if (!_meta.content_length) {
           _meta.content_length = zs.total_out;
         } else if (_meta.content_length != zs.total_out) {
-          spdlog::error("Decompressed length does not match expected Content-Length ({} != {})", _meta.content_length, zs.total_out);
+          spdlog::error(Messages::DECOMPRESSED_LENGTH_MISMATCH, _meta.content_length, zs.total_out);
         }
       } else {
-        spdlog::error("Error decompressing file {}: {}", _meta.toi, zs.msg);
+        spdlog::error(Messages::ERROR_DECOMPRESSING_FILE, _meta.toi, zs.msg);
 	throw zs.msg;
       }
 
       if (own_comp) free(comp_buffer);
     } else {
-      spdlog::error("Unknown Content-Encoding {}", _meta.content_encoding);
-      throw "Content-Encoding not known";
+      spdlog::error(Messages::UNKNOWN_CONTENT_ENCODING, _meta.content_encoding);
+      throw Messages::UNKNOWN_CONTENT_ENCODING;
     }
 
     _been_decoded = true;
@@ -389,7 +390,7 @@ auto File::decode() -> void
 
       auto content_md5 = base64_decode(_meta.content_md5);
       if (memcmp(md5, content_md5.c_str(), MD5_DIGEST_LENGTH) != 0) {
-        spdlog::debug("MD5 mismatch for TOI {}, discarding", _meta.toi);
+        spdlog::debug(Messages::MD5_MISMATCH, _meta.toi);
 
         // MD5 mismatch, try again
         for (auto& block : _source_blocks) {

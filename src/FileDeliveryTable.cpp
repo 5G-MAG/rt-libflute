@@ -20,6 +20,7 @@
 #include <string>
 #include <map>
 #include "spdlog/spdlog.h"
+#include "Messages.h"
 
 namespace {
   class XMLNamespaces {
@@ -150,7 +151,7 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
   XMLNamespaces root_ns(fdt_instance);
   const auto& fdt_ns = root_ns.elementNamespace(fdt_instance);
   if (!root_ns.matches(fdt_instance->Name(), "FDT-Instance", fdt_ns)) {
-    throw "Root element is not FDT-Instance";
+    throw Messages::ROOT_NOT_FDT_INSTANCE;
   }
 
   if (fdt_ns == "") {
@@ -162,12 +163,12 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
   } else if (fdt_ns == FileDeliveryTableConstants::FDT_NS_URL_3GPP_2022) { // 3GPP TS 26.346 Clause L.6.1
     _fdt_namespace = FileDeliveryTableConstants::FDT_NS_3GPP_CONSOLIDATED_V2;
   } else {
-    throw "FDT namespace not recognised";
+    throw Messages::FDT_NAMESPACE_NOT_RECOGNISED;
   }
 
   _expires = std::stoull(root_ns.findAttribute(fdt_instance, "Expires", fdt_ns)->Value());
 
-  spdlog::debug("Received new FDT with instance ID {}: {}", instance_id, buffer);
+  spdlog::debug(Messages::RECEIVED_NEW_FDT, instance_id, buffer);
 
   auto val = root_ns.findAttribute(fdt_instance, "FEC-OTI-FEC-Encoding-ID", fdt_ns);
   if (val != nullptr) {
@@ -202,13 +203,13 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     // File required attributes
     auto toi_str = file_ns.findAttribute(file, "TOI", fdt_ns);
     if (toi_str == nullptr) {
-      throw "Missing TOI attribute on File element";
+      throw Messages::MISSING_TOI_ATTRIBUTE;
     }
     uint32_t toi = strtoull(toi_str->Value(), nullptr, 0);
 
     auto content_location = file_ns.findAttribute(file, "Content-Location", fdt_ns);
     if (content_location == nullptr) {
-      throw "Missing Content-Location attribute on File element";
+      throw Messages::MISSING_CONTENT_LOCATION_ATTRIBUTE;
     }
 
     // File optional attributes

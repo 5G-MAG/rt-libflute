@@ -16,31 +16,32 @@ under the License.
 */
 
 #include <cstring>
-#include <iostream>
+#include <cstdlib>
 #include <arpa/inet.h>
 #include "AlcPacket.h"
 #include "Constants.h"
+#include "Messages.h"
 
 LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
 {
   if (len < 4) {
-    throw "Packet too short";
+    throw Messages::PACKET_TOO_SHORT;
   }
 
   std::memcpy(&_lct_header, data, 4);
   if (_lct_header.version != 1) {
-    throw "Unsupported LCT version";
+    throw Messages::UNSUPPORTED_LCT_VERSION;
   }
 
   char* hdr_ptr = data + 4;
   if (_lct_header.congestion_control_flag != 0) {
-    throw "Unsupported CCI field length";
+    throw Messages::UNSUPPORTED_CCI_FIELD_LENGTH;
   }
   // [TODO] read CCI
   hdr_ptr += 4;
 
   if (_lct_header.half_word_flag == 0 && _lct_header.tsi_flag == 0) {
-    throw "TSI field not present";
+    throw Messages::TSI_FIELD_NOT_PRESENT;
   }
   auto tsi_shift = 0;
   if(_lct_header.half_word_flag == 1) {
@@ -54,7 +55,7 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
   }
 
   if ( _lct_header.close_session_flag == 0 && _lct_header.half_word_flag == 0 && _lct_header.toi_flag == 0) {
-    throw "TOI field not present";
+    throw Messages::TOI_FIELD_NOT_PRESENT;
   }
   auto toi_shift = 0;
   if(_lct_header.half_word_flag == 1) {
@@ -70,7 +71,7 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
         break;
       case 2:
         if (toi_shift > 0) {
-          throw "TOI fields over 64 bits in length are not supported";
+          throw Messages::TOI_OVER_64_BITS;
         } else {
           _toi = ntohl(*(uint32_t*)hdr_ptr);
           hdr_ptr += 4;
@@ -79,13 +80,13 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
         }
         break;
       default:
-        throw "TOI fields over 64 bits in length are not supported";
+        throw Messages::TOI_OVER_64_BITS;
   }
 
   if (_lct_header.codepoint == 0) {
     _fec_oti.encoding_id = FecScheme::CompactNoCode;
   } else {
-    throw "Only Compact No-Code FEC is supported";
+    throw Messages::ONLY_COMPACT_NO_CODE_FEC;
   }
 
   auto expected_header_len = 2 +
@@ -198,7 +199,7 @@ void LibFlute::AlcPacket::handleIgnoredExtension(char*& hdr_ptr) {
 void LibFlute::AlcPacket::handleFtiExtension(char*& hdr_ptr, uint8_t hel) {
   if (_fec_oti.encoding_id == FecScheme::CompactNoCode) {
     if (hel != 4) {
-      throw "Invalid length for EXT_FTI header extension";
+      throw Messages::INVALID_EXT_FTI_LENGTH;
     }
     _fec_oti.transfer_length = (uint64_t)(ntohs(*(uint16_t*)hdr_ptr)) << 32;
     hdr_ptr += 2;
@@ -215,7 +216,7 @@ void LibFlute::AlcPacket::handleFtiExtension(char*& hdr_ptr, uint8_t hel) {
 void LibFlute::AlcPacket::handleFdtExtension(char*& hdr_ptr) {
   uint8_t flute_version = (*hdr_ptr & 0xF0) >> 4;
   if (flute_version > 2) {
-    throw "Unsupported FLUTE version";
+    throw Messages::UNSUPPORTED_FLUTE_VERSION;
   }
   _fdt_instance_id =  (*hdr_ptr & 0x0F) << 16;
   hdr_ptr++;

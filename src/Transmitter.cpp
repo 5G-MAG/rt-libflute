@@ -43,6 +43,7 @@
 #include "spdlog/spdlog.h"
 #include "File.h"
 #include "IpSec.h"
+#include "Messages.h"
 
 #include "Transmitter.h"
 
@@ -119,7 +120,7 @@ Transmitter::FileDescription::FileDescription(const std::string &content_locatio
   _calculate_file_entry();
 }
 
-Transmitter::FileDescription::FileDescription(const Transmitter::FileDescription &other)
+Transmitter::FileDescription::FileDescription(const FileDescription &other)
     : _tsi(other._tsi)
     , _file_entry(other._file_entry)
     , _compression_type(other._compression_type)
@@ -144,7 +145,7 @@ Transmitter::FileDescription::FileDescription(const Transmitter::FileDescription
   } 
 }
 
-Transmitter::FileDescription::FileDescription(Transmitter::FileDescription &&other)
+Transmitter::FileDescription::FileDescription(FileDescription &&other)
     : _tsi(std::move(other._tsi))
     , _file_entry(other._file_entry)
     , _compression_type(other._compression_type)
@@ -305,7 +306,7 @@ Transmitter::FileDescription &Transmitter::FileDescription::set_content(const ch
       /* data being removed, reset the TOI */
       _file_entry.toi = 0;
     }
-       
+
     _free_file_data();
     _data = data;
     _data_length = data_length;
@@ -540,7 +541,7 @@ auto Transmitter::send_fdt() -> void {
         true);
   if (file) {
     file->set_fdt_instance_id( _fdt->instance_id() );
-    spdlog::debug("Sending FDT instance {}:\n{}", _fdt->instance_id(), _fdt->to_string());
+    spdlog::debug(Messages::SENDING_FDT_INSTANCE, _fdt->instance_id(), _fdt->to_string());
     _files.insert_or_assign(0, file);
   }
 }
@@ -576,7 +577,7 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
   if (file_description->has_tsi() && file_description->tsi() != _tsi) {
     // Reset TOI if the file_description is being used on a new TSI
     file_description->toi(0);
-    spdlog::debug("Reset TOI for FileDescription");
+    spdlog::debug(Messages::RESET_TOI_FILE_DESCRIPTION);
   }
 
   // Set the TSI and TOI for the FileDescription
@@ -585,7 +586,7 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
     file_description->toi(_toi);
     _toi++;
     if (_toi == 0) _toi = 1; // clamp to >= 1 in case it wraps
-    spdlog::debug("Assigned new TOI {}", file_description->toi());
+    spdlog::debug(Messages::ASSIGNED_NEW_TOI, file_description->toi());
   }
 
   // Copy in default FEC parameters if not already set
@@ -631,7 +632,7 @@ auto Transmitter::send_next_packet() -> void
 
         if (symbols.size()) {
           for(const auto& symbol : symbols) {
-            spdlog::debug("sending TOI {} SBN {} ID {}", file->meta().toi, symbol.source_block_number(), symbol.id() );
+            spdlog::debug(Messages::SENDING_SYMBOL, file->meta().toi, symbol.source_block_number(), symbol.id());
           }
           auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id());
           bytes_queued += packet->size();
@@ -657,7 +658,7 @@ auto Transmitter::send_next_packet() -> void
                 std::size_t bytes_transferred)
               {
                 if (error) {
-                  spdlog::debug("sent_to error: {}", error.message());
+                  spdlog::debug(Messages::SENT_TO_ERROR, error.message());
                 } else {
                   file->mark_completed(symbols, !error);
                   if (file->complete()) {
@@ -681,8 +682,7 @@ auto Transmitter::send_next_packet() -> void
       boost::asio::post(_io_context, boost::bind(&Transmitter::send_next_packet, this));
     } else {
       auto send_duration = ((bytes_queued * 8.0) / (double)_rate_limit/1000.0) * 1000.0 * 1000.0;
-      spdlog::trace("Rate limiter: queued {} bytes, limit {} kbps, next send in {} us",
-          bytes_queued, _rate_limit, send_duration);
+      spdlog::trace(Messages::RATE_LIMITER, bytes_queued, _rate_limit, send_duration);
       _send_timer.expires_from_now(boost::posix_time::microseconds(
             static_cast<int>(ceil(send_duration))));
       _send_timer.async_wait( boost::bind(&Transmitter::send_next_packet, this));
