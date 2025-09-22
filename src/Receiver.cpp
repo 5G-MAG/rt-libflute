@@ -151,6 +151,8 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
 auto LibFlute::Receiver::file_list() -> std::vector<std::shared_ptr<LibFlute::File>>
 {
   std::vector<std::shared_ptr<LibFlute::File>> files;
+  // Pre-allocate the vector capacity to optimize performance
+  files.reserve(_files.size());
   for (auto& f : _files) {
     files.push_back(f.second);
   }

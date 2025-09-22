@@ -119,7 +119,7 @@ namespace LibFlute {
         *
         * @param other The other file description to move
         */
-        FileDescription(FileDescription &&other);
+        FileDescription(FileDescription &&other) noexcept;
 
        /**
         * Destructor
@@ -148,7 +148,7 @@ namespace LibFlute {
         *
         * @return this file description
         */
-        FileDescription &operator=(FileDescription &&other);
+        FileDescription &operator=(FileDescription &&other) noexcept;
 
        /**
         * Equality operator

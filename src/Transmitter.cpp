@@ -31,12 +31,8 @@
 #include <zlib.h>
 
 #include <ctime>
-#include <cstdio>
 #include <chrono>
 #include <cstring>
-#include <exception>
-#include <iostream>
-#include <list>
 #include <string>
 #include <system_error>
 
@@ -145,9 +141,9 @@ Transmitter::FileDescription::FileDescription(const FileDescription &other)
   } 
 }
 
-Transmitter::FileDescription::FileDescription(FileDescription &&other)
-    : _tsi(std::move(other._tsi))
-    , _file_entry(other._file_entry)
+Transmitter::FileDescription::FileDescription(FileDescription &&other) noexcept
+    : _tsi(other._tsi)
+    , _file_entry(std::move(other._file_entry))
     , _compression_type(other._compression_type)
     , _filename(std::move(other._filename))
     , _file_handle(other._file_handle)
@@ -166,6 +162,11 @@ Transmitter::FileDescription::~FileDescription ()
 
 Transmitter::FileDescription &Transmitter::FileDescription::operator=(const Transmitter::FileDescription &other)
 {
+  if (this == &other) return *this; // self-assignment guard
+  // Free any existing owned file-backed resources before overwriting
+  if (!_filename.empty()) {
+    _free_file_data();
+  }
   _tsi = other._tsi;
   _file_entry = other._file_entry;
   _compression_type = other._compression_type;
@@ -192,15 +193,15 @@ Transmitter::FileDescription &Transmitter::FileDescription::operator=(const Tran
   return *this;
 }
 
-Transmitter::FileDescription &Transmitter::FileDescription::operator=(Transmitter::FileDescription &&other)
+Transmitter::FileDescription &Transmitter::FileDescription::operator=(Transmitter::FileDescription &&other) noexcept
 {
-  _tsi = std::move(other._tsi);
-  _file_entry = other._file_entry;
+  if (this == &other) return *this;
+  _tsi = other._tsi; // copy/move optional trivially
+  _file_entry = std::move(other._file_entry);
   _compression_type = other._compression_type;
   _filename = std::move(other._filename);
   _file_handle = other._file_handle;
   other._file_handle = -1;
-
   _data = other._data;
   other._data = nullptr;
   _data_length = other._data_length;
@@ -281,29 +282,28 @@ Transmitter::FileDescription &Transmitter::FileDescription::set_content(const st
 
 Transmitter::FileDescription &Transmitter::FileDescription::set_content(const char *data, size_t data_length)
 {
-  if (!data) data_length=0;
+  if (!data) data_length = 0;
   if (data != _data || _data_length != data_length) {
-    /* data area has changed in some way, do we need to reset the TOI? */
+    bool reset_toi = false;
     if (_data_length != data_length) {
-      /* data length has changed, reset the TOI */
-      _file_entry.toi = 0;
-    } else if (data) {
-      if (!_data) {
-	if (data_length) {
-          /* data being added, reset the TOI */
-          _file_entry.toi = 0;
+      reset_toi = true; // length changed
+    } else {
+      if (data) {
+        if (!_data) {
+          if (data_length) reset_toi = true; // new data added
+        } else if (data_length) {
+          // same length, both non-null: compare content hash
+          unsigned char md5[MD5_DIGEST_LENGTH];
+          MD5(reinterpret_cast<const unsigned char*>(data), data_length, md5);
+          if (_file_entry.content_md5 != base64_encode(md5, sizeof(md5))) {
+            reset_toi = true; // contents differ
+          }
         }
-      } else if (data_length) {
-        /* had data before and have new data now, but are they the same? */
-        unsigned char md5[MD5_DIGEST_LENGTH];
-        MD5(reinterpret_cast<const unsigned char*>(data), data_length, md5);
-        if (_file_entry.content_md5 != base64_encode(md5, sizeof(md5))) {
-          /* data contents are different, reset TOI */
-          _file_entry.toi = 0;
-        }
+      } else if (_data) {
+        reset_toi = true; // data removed
       }
-    } else if (_data) {
-      /* data being removed, reset the TOI */
+    }
+    if (reset_toi) {
       _file_entry.toi = 0;
     }
 
@@ -753,4 +753,3 @@ static uint16_t calculate_sum(uint16_t *buffer, size_t len)
 }
 
 } // End namespace LibFlute
-
