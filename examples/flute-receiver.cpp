@@ -142,8 +142,8 @@ auto main(int argc, char **argv) -> int {
   spdlog::info("FLUTE receiver demo starting up");
 
   try {
-    // Create a Boost io_service
-    boost::asio::io_service io;
+    // Create a Boost io_context
+    boost::asio::io_context io;
 
     // Create the receiver
     LibFlute::Receiver receiver(

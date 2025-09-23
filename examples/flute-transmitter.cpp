@@ -181,8 +181,8 @@ static void send_with_new_api(struct ft_arguments &arguments)
     files.emplace_back(fd);
   }
 
-  // Create a Boost io_service
-  boost::asio::io_service io;
+  // Create a Boost io_context
+  boost::asio::io_context io;
 
   // Construct the transmitter class
   LibFlute::Transmitter transmitter(
@@ -249,8 +249,8 @@ static void send_with_old_api(struct ft_arguments &arguments)
     files.push_back(FsFile{ location, buffer, (size_t)size});
   }
 
-  // Create a Boost io_service
-  boost::asio::io_service io;
+  // Create a Boost io_context
+  boost::asio::io_context io;
 
   // Construct the transmitter class
   LibFlute::Transmitter transmitter(
