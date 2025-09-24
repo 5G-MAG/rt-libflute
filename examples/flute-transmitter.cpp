@@ -221,7 +221,7 @@ static void send_with_new_api(struct ft_arguments &arguments)
           file_entry.content_location, file_entry.content_length, file_entry.fec_oti.transfer_length, toi);
   }
 
-  // Start the io_service, and thus sending data
+  // Start the io_context, and thus sending data
   io.run();
 }
 
@@ -290,7 +290,7 @@ static void send_with_old_api(struct ft_arguments &arguments)
           file.location, file.len, file.toi);
   }
 
-  // Start the io_service, and thus sending data
+  // Start the io_context, and thus sending data
   io.run();
 }
 
