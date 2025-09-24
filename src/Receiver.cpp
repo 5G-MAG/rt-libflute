@@ -64,11 +64,8 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
     try {
       auto alc = LibFlute::AlcPacket(_data, bytes_recvd);
 
-      if (alc.tsi() != _tsi) {
-        spdlog::warn("Discarding packet for unknown TSI {}", alc.tsi());
-        return;
-      }
-
+      if (alc.tsi() == _tsi) {
+       
       const std::lock_guard<std::mutex> lock(_files_mutex);
 
       if (alc.toi() == 0 && (!_fdt || _fdt->instance_id() != alc.fdt_instance_id())) {
@@ -131,6 +128,9 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
       } else {
         spdlog::trace("Discarding packet for unknown or already completed file with TOI {}", alc.toi());
       }
+    } else {
+       spdlog::warn("Discarding packet for unknown TSI {}", alc.tsi());
+    }
     } catch (const std::exception &ex) {
       spdlog::warn("Failed to decode ALC/FLUTE packet: {}", ex.what());
     }
