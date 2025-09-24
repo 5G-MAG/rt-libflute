@@ -228,19 +228,22 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
       transfer_length = content_length;
     }
 
-    auto content_md5 = file_ns.findAttribute(file, "Content-MD5", fdt_ns)->Value();
-    if (!content_md5) {
-      content_md5 = "";
+    auto content_md5 = std::string();
+    val = file_ns.findAttribute(file, "Content-MD5", fdt_ns);
+    if (val != nullptr) {
+      content_md5 = val->Value();
     }
 
-    auto content_encoding = file_ns.findAttribute(file, "Content-Encoding", fdt_ns)->Value();
-    if (!content_encoding) {
-      content_encoding = "";
+    auto content_encoding = std::string();
+    val = file_ns.findAttribute(file, "Content-Encoding", fdt_ns);
+    if (val != nullptr) {
+      content_encoding = val->Value();
     }
 
-    auto content_type = file_ns.findAttribute(file, "Content-Type", fdt_ns)->Value();
-    if (!content_type) {
-      content_type = "";
+    auto content_type = std::string();
+    val = file_ns.findAttribute(file, "Content-Type", fdt_ns);
+    if (val != nullptr) {
+      content_type = val->Value();
     }
 
     auto encoding_id = _global_fec_oti.encoding_id;
@@ -319,8 +322,8 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
       toi,
       std::string(content_location->Value()),
       content_length,
-      std::string(content_md5),
-      std::string(content_type),
+      content_md5,
+      content_type,
       (cache_expires)?(cache_expires.value()):0,
       fec_oti,
       {
