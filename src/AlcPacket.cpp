@@ -98,7 +98,7 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
     ext_ptr += 1; // Skip HET
     uint8_t hel = 0;
     size_t ext_len = 4;
-    if (het < 128) {
+    if (het <= 127) {
       hel = *ext_ptr;
       ext_len = hel * 4;
       ext_ptr += 1; // Skip HEL
