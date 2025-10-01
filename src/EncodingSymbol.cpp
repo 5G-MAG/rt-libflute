@@ -19,8 +19,9 @@
 #include <cmath>
 #include <arpa/inet.h>
 #include "EncodingSymbol.h"
+#include "spdlog/spdlog.h"
 
-auto LibFlute::EncodingSymbol::from_payload(char* encoded_data, size_t data_len, const FecOti& fec_oti, ContentEncoding encoding) -> std::vector<EncodingSymbol> 
+auto LibFlute::EncodingSymbol::from_payload(char* encoded_data, size_t data_len, const FecOti& fec_oti, ContentEncoding encoding) -> std::vector<EncodingSymbol>
 {
   auto source_block_number = 0;
   auto encoding_symbol_id = 0;
@@ -29,7 +30,7 @@ auto LibFlute::EncodingSymbol::from_payload(char* encoded_data, size_t data_len,
   if (encoding != ContentEncoding::NONE && encoding != ContentEncoding::GZIP) {
     throw "Only unencoded or gzipped content is supported";
   }
-  
+
   if (fec_oti.encoding_id == FecScheme::CompactNoCode) {
     source_block_number = ntohs(*(uint16_t*)encoded_data);
     encoded_data += 2;
@@ -72,8 +73,11 @@ auto LibFlute::EncodingSymbol::to_payload(const std::vector<EncodingSymbol>& sym
     if (symbol.len() <= data_len) {
       auto symbol_len = symbol.encode_to(ptr, data_len);
       data_len -= symbol_len;
-      encoded_data += symbol_len;
       len += symbol_len;
+      ptr += symbol_len;
+    } else {
+      spdlog::warn("Not enough space in payload buffer for encoding symbol");
+      break;
     }
   }
   return len;
