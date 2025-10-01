@@ -92,21 +92,26 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
    _lct_header.toi_flag;
 
   auto ext_header_len = (_lct_header.lct_header_len - expected_header_len) * 4;
-
   while (ext_header_len > 0) {
-    uint8_t het = *hdr_ptr;
-    hdr_ptr += 1;
+    auto ext_ptr = hdr_ptr;
+    uint8_t het = *ext_ptr;
+    ext_ptr += 1; // Skip HET
     uint8_t hel = 0;
-    if (het < 128) {
-      hel = *hdr_ptr;
-      hdr_ptr += 1;
+    size_t ext_len = 4;
+    if (het <= 127) {
+      hel = *ext_ptr;
+      ext_len = hel * 4;
+      ext_ptr += 1; // Skip HEL
+    }
+
+    if (ext_len > ext_header_len) {
+      throw "Header extension length exceeds remaining header length";
     }
 
     switch ((AlcPacket::HeaderExtension)het) {
-      case EXT_NOP: 
-      case EXT_AUTH: 
+      case EXT_NOP:
+      case EXT_AUTH:
       case EXT_TIME:  {
-                        hdr_ptr += 3;
                         break; // ignored
                       }
       case EXT_FTI: {
@@ -114,44 +119,41 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                         if (hel != 4) {
                           throw "Invalid length for EXT_FTI header extension";
                         }
-                        _fec_oti.transfer_length = (uint64_t)(ntohs(*(uint16_t*)hdr_ptr)) << 32;
-                        hdr_ptr += 2;
-                        _fec_oti.transfer_length |= (uint64_t)(ntohl(*(uint32_t*)hdr_ptr));
-                        hdr_ptr += 4;
-                        hdr_ptr += 2; // reserved
-                        _fec_oti.encoding_symbol_length = ntohs(*(uint16_t*)hdr_ptr);
-                        hdr_ptr += 2;
-                        _fec_oti.max_source_block_length = ntohl(*(uint32_t*)hdr_ptr);
-                        hdr_ptr += 4;
+                        _fec_oti.transfer_length = (uint64_t)(ntohs(*(uint16_t*)ext_ptr)) << 32;
+                        ext_ptr += 2;
+                        _fec_oti.transfer_length |= (uint64_t)(ntohl(*(uint32_t*)ext_ptr));
+                        ext_ptr += 4;
+                        ext_ptr += 2; // reserved
+                        _fec_oti.encoding_symbol_length = ntohs(*(uint16_t*)ext_ptr);
+                        ext_ptr += 2;
+                        _fec_oti.max_source_block_length = ntohl(*(uint32_t*)ext_ptr);
                       }
-                      break; 
+                      break;
                     }
       case EXT_FDT: {
-                      uint8_t flute_version = (*hdr_ptr & 0xF0) >> 4;
+                      uint8_t flute_version = (*ext_ptr & 0xF0) >> 4;
                       if (flute_version > 2) {
                         throw "Unsupported FLUTE version";
                       }
-                      _fdt_instance_id =  (*hdr_ptr & 0x0F) << 16;
-                      hdr_ptr++;
-                      _fdt_instance_id |= ntohs(*(uint16_t*)hdr_ptr);
-                      hdr_ptr += 2;
-                      break; 
+                      _fdt_instance_id =  (*ext_ptr & 0x0F) << 16;
+                      ext_ptr++;
+                      _fdt_instance_id |= ntohs(*(uint16_t*)ext_ptr);
+                      break;
                     }
       case EXT_CENC: {
-                       uint8_t encoding = *hdr_ptr;
+                       uint8_t encoding = *ext_ptr;
                        switch (encoding) {
                          case 0: _content_encoding = ContentEncoding::NONE; break;
                          case 1: _content_encoding = ContentEncoding::ZLIB; break;
                          case 2: _content_encoding = ContentEncoding::DEFLATE; break;
                          case 3: _content_encoding = ContentEncoding::GZIP; break;
                        }
-                       hdr_ptr += 3;
-                       break; 
+                       break;
                      }
     }
 
-    ext_header_len -= 4;
-    ext_header_len -= hel * 4;
+    ext_header_len -= ext_len;
+    hdr_ptr += ext_len;
   }
 }
 
