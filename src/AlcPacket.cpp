@@ -155,17 +155,18 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
   }
 }
 
-LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_oti, const std::vector<LibFlute::EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id)
+LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_oti, const std::vector<LibFlute::EncodingSymbol>& symbols, size_t max_encoding_symbol_size, uint32_t fdt_instance_id)
   : _fec_oti(fec_oti)
 {
+  const size_t max_alc_header_size = 4;
   auto lct_header_len = 3;
   if (toi == 0) { // Add extensions for FDT
     lct_header_len += 5;
   }
 
-  auto max_packet_length = max_size +
+  auto max_packet_length = max_encoding_symbol_size +
     lct_header_len * 4
-    + 4 ;
+    + max_alc_header_size ;
 
   _buffer = (char*)calloc(max_packet_length, sizeof(char));
 
@@ -177,7 +178,7 @@ LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_
   auto hdr_ptr = _buffer + 4;
   auto payload_ptr = _buffer + 4 * lct_header_len;
 
-  auto payload_size = EncodingSymbol::to_payload(symbols, payload_ptr, max_size, _fec_oti, ContentEncoding::NONE);
+  auto payload_size = EncodingSymbol::to_payload(symbols, payload_ptr, max_encoding_symbol_size + max_alc_header_size, _fec_oti, ContentEncoding::NONE);
   _len = 4 * lct_header_len + payload_size;
   
   hdr_ptr += 4; // CCI = 0
