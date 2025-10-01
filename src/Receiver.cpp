@@ -9,7 +9,7 @@
 // agreed to in writing, software distributed under the License is distributed on
 // an “AS IS” BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 // or implied.
-// 
+//
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
@@ -22,14 +22,14 @@
 
 
 LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& address,
-    short port, uint64_t tsi, 
-    boost::asio::io_service& io_service)
-    : _socket(io_service)
+    short port, uint64_t tsi,
+    boost::asio::io_context& io_context)
+    : _socket(io_context)
     , _tsi(tsi)
     , _mcast_address(address)
 {
     boost::asio::ip::udp::endpoint listen_endpoint(
-        boost::asio::ip::address::from_string(iface), port);
+        boost::asio::ip::address::make_address(iface), port);
     _socket.open(listen_endpoint.protocol());
     _socket.set_option(boost::asio::ip::multicast::enable_loopback(true));
     _socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
@@ -39,7 +39,7 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
     // Join the multicast group.
     _socket.set_option(
         boost::asio::ip::multicast::join_group(
-          boost::asio::ip::address::from_string(address)));
+          boost::asio::ip::address::make_address(address)));
 
     _socket.async_receive_from(
         boost::asio::buffer(_data, max_length), _sender_endpoint,
@@ -48,7 +48,7 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
           boost::asio::placeholders::bytes_transferred));
 }
 
-auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key) -> void 
+auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key) -> void
 {
   LibFlute::IpSec::enable_esp(spi, _mcast_address, LibFlute::IpSec::Direction::In, key);
 }
@@ -80,7 +80,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
 
       if (_files.find(alc.toi()) != _files.end() && !_files[alc.toi()]->complete()) {
         auto encoding_symbols = LibFlute::EncodingSymbol::from_payload(
-            _data + alc.header_length(), 
+            _data + alc.header_length(),
             bytes_recvd - alc.header_length(),
             _files[alc.toi()]->fec_oti(),
             alc.content_encoding());
@@ -141,7 +141,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
           boost::asio::placeholders::error,
           boost::asio::placeholders::bytes_transferred));
   }
-  else 
+  else
   {
     spdlog::error("receive_from error: {}", error.message());
   }

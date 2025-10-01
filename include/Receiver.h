@@ -9,7 +9,7 @@
 // agreed to in writing, software distributed under the License is distributed on
 // an “AS IS” BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 // or implied.
-// 
+//
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
@@ -40,13 +40,13 @@ namespace LibFlute {
       *
       *  @param iface Address of the (local) interface to bind the receiving socket to. 0.0.0.0 = any.
       *  @param address Multicast address
-      *  @param port Target port 
-      *  @param tsi TSI value of the session 
-      *  @param io_service Boost io_service to run the socket operations in (must be provided by the caller)
+      *  @param port Target port
+      *  @param tsi TSI value of the session
+      *  @param io_context Boost io_context to run the socket operations in (must be provided by the caller)
       */
-      Receiver( const std::string& iface, const std::string& address, 
+      Receiver( const std::string& iface, const std::string& address,
           short port, uint64_t tsi,
-          boost::asio::io_service& io_service);
+          boost::asio::io_context& io_context);
 
      /**
       *  Default destructor.

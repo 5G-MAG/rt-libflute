@@ -365,18 +365,18 @@ namespace LibFlute {
       *  Default constructor.
       *
       *  @param address Target multicast address
-      *  @param port Target port 
-      *  @param tsi TSI value for the session 
-      *  @param mtu Path MTU to size FLUTE packets for 
+      *  @param port Target port
+      *  @param tsi TSI value for the session
+      *  @param mtu Path MTU to size FLUTE packets for
       *  @param rate_limit Transmit rate limit (in kbps)
-      *  @param io_service Boost io_service to run the socket operations in (must be provided by the caller)
+      *  @param io_context Boost io_context to run the socket operations in (must be provided by the caller)
       *  @param tunnel_endpoint Tunnelling endpoint address (default: no tunnelling)
       *  @param fdt_namespace Which XML namespace to use for the FDT (default: none)
       */
-      Transmitter( const std::string& address, 
+      Transmitter( const std::string& address,
           short port, uint64_t tsi, unsigned short mtu,
           uint32_t rate_limit,
-          boost::asio::io_service& io_service,
+          boost::asio::io_context& io_context,
           const std::optional<boost::asio::ip::udp::endpoint> &tunnel_endpoint = std::nullopt,
           FdtNamespace fdt_namespace = FileDeliveryTable::FDT_NS_NONE);
 
@@ -398,7 +398,7 @@ namespace LibFlute {
       *
       *  @deprecated send(FileDescription*) should be used instead.
       *
-      *  The caller must ensure the data buffer passed here remains valid until the completion callback 
+      *  The caller must ensure the data buffer passed here remains valid until the completion callback
       *  for this file is called.
       *
       *  @param content_location URI to set in the content location field of the generated FDT entry
@@ -455,7 +455,7 @@ namespace LibFlute {
       void handle_send_to(const boost::system::error_code& error);
       boost::asio::ip::udp::endpoint _endpoint;
       boost::asio::ip::udp::socket _socket;
-      boost::asio::io_service& _io_service;
+      boost::asio::io_context& _io_context;
       boost::asio::deadline_timer _send_timer;
       boost::asio::deadline_timer _fdt_timer;
 

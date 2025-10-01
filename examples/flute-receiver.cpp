@@ -9,7 +9,7 @@
 // agreed to in writing, software distributed under the License is distributed on
 // an “AS IS” BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 // or implied.
-// 
+//
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
@@ -116,7 +116,7 @@ void print_version(FILE *stream, struct argp_state * /*state*/) {
 
 /**
  *  Main entry point for the program.
- *  
+ *
  * @param argc  Command line agument count
  * @param argv  Command line arguments
  * @return 0 on clean exit, -1 on failure
@@ -142,8 +142,8 @@ auto main(int argc, char **argv) -> int {
   spdlog::info("FLUTE receiver demo starting up");
 
   try {
-    // Create a Boost io_service
-    boost::asio::io_service io;
+    // Create a Boost io_context
+    boost::asio::io_context io;
 
     // Create the receiver
     LibFlute::Receiver receiver(
@@ -154,7 +154,7 @@ auto main(int argc, char **argv) -> int {
         io);
 
     // Configure IPSEC, if enabled
-    if (arguments.enable_ipsec) 
+    if (arguments.enable_ipsec)
     {
       receiver.enable_ipsec(1, arguments.aes_key);
     }

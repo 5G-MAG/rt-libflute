@@ -163,7 +163,7 @@ static void send_with_new_api(struct ft_arguments &arguments)
     std::shared_ptr<LibFlute::Transmitter::FileDescription> file;
     size_t transmitted_count;
   };
-    
+
   std::list<fileEntry> files;
 
   for (int j = 0; arguments.files[j]; j++) {
@@ -181,8 +181,8 @@ static void send_with_new_api(struct ft_arguments &arguments)
     files.emplace_back(fd);
   }
 
-  // Create a Boost io_service
-  boost::asio::io_service io;
+  // Create a Boost io_context
+  boost::asio::io_context io;
 
   // Construct the transmitter class
   LibFlute::Transmitter transmitter(
@@ -213,7 +213,7 @@ static void send_with_new_api(struct ft_arguments &arguments)
           }
         });
 
-  // Queue all the files 
+  // Queue all the files
   for (const auto& file : files) {
     auto toi = transmitter.send( file.file );
     const auto &file_entry = file.file->file_entry();
@@ -221,7 +221,7 @@ static void send_with_new_api(struct ft_arguments &arguments)
           file_entry.content_location, file_entry.content_length, file_entry.fec_oti.transfer_length, toi);
   }
 
-  // Start the io_service, and thus sending data
+  // Start the io_context, and thus sending data
   io.run();
 }
 
@@ -249,8 +249,8 @@ static void send_with_old_api(struct ft_arguments &arguments)
     files.push_back(FsFile{ location, buffer, (size_t)size});
   }
 
-  // Create a Boost io_service
-  boost::asio::io_service io;
+  // Create a Boost io_context
+  boost::asio::io_context io;
 
   // Construct the transmitter class
   LibFlute::Transmitter transmitter(
@@ -262,7 +262,7 @@ static void send_with_old_api(struct ft_arguments &arguments)
         io, std::nullopt, LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005);
 
   // Configure IPSEC ESP, if enabled
-  if (arguments.enable_ipsec) 
+  if (arguments.enable_ipsec)
   {
     transmitter.enable_ipsec(1, arguments.aes_key);
   }
@@ -271,14 +271,14 @@ static void send_with_old_api(struct ft_arguments &arguments)
   transmitter.register_completion_callback(
         [&files](uint32_t toi) {
           for (auto& file : files) {
-            if (file.toi == toi) { 
+            if (file.toi == toi) {
               spdlog::info("{} (TOI {}) has been transmitted", file.location, file.toi);
               // could free() the buffer here
             }
           }
         });
 
-  // Queue all the files 
+  // Queue all the files
   for (auto& file : files) {
     file.toi = transmitter.send( file.location,
           "application/octet-stream",
@@ -290,13 +290,13 @@ static void send_with_old_api(struct ft_arguments &arguments)
           file.location, file.len, file.toi);
   }
 
-  // Start the io_service, and thus sending data
+  // Start the io_context, and thus sending data
   io.run();
 }
 
 /**
  *  Main entry point for the program.
- *  
+ *
  * @param argc  Command line agument count
  * @param argv  Command line arguments
  * @return 0 on clean exit, -1 on failure
