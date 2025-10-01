@@ -461,7 +461,7 @@ Transmitter::Transmitter ( const std::string& address, short port,
                            boost::asio::io_context& io_context,
                            const std::optional<boost::asio::ip::udp::endpoint> &tunnel_endpoint,
                            Transmitter::FdtNamespace fdt_namespace )
-    : _endpoint(boost::asio::ip::address::make_address(address), port)
+    : _endpoint(boost::asio::ip::make_address(address), port)
     , _socket(io_context, _endpoint.protocol())
     , _io_context(io_context)
     , _send_timer(io_context)
