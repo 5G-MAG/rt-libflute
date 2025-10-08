@@ -56,13 +56,14 @@ ninja
 ## Usage
 
 When installing libflute, it comes with two demo applications, a receiver and a transmitter. Both applications can be
-found under ``libflute/build/examples``.
+found under ``rt-libflute/build/examples``.
 
 ### Step 1: Setting up a Flute receiver
 
 To start the Flute receiver type in
 
 ````
+cd rt-libflute/build/examples
 ./flute-receiver
 ````
 
@@ -74,6 +75,7 @@ The application will listen at the multicast address 238.1.1.95 by default. Chec
 To start the Flute transmitter type in
 
 ````
+cd rt-libflute/build/examples
 ./flute-transmitter -r 100000 file
 ````
 
