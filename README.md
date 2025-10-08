@@ -34,6 +34,15 @@ mkdir build && cd build
 cmake -GNinja ..
 ````
 
+If you want to build the project without the unit tests run the following commands instead:
+
+````
+cd rt-libflute/
+mkdir build && cd build
+cmake -GNinja -DBUILD_TESTING=OFF ..
+````
+
+
 ### Step 3: Building
 ````
 ninja
