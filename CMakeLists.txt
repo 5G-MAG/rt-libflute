@@ -20,7 +20,11 @@ pkg_check_modules(LIBCONFIG REQUIRED IMPORTED_TARGET libconfig++)
 pkg_check_modules(ZLIB REQUIRED IMPORTED_TARGET zlib)
 check_cxx_symbol_exists(mmap "sys/mman.h" HAVE_MMAP)
 
-add_subdirectory(examples)
+# Option to build example programs
+option(BUILD_EXAMPLES "Build example transmitter/receiver programs" ON)
+if (BUILD_EXAMPLES)
+  add_subdirectory(examples)
+endif()
 
 include_directories(
     "${PROJECT_BINARY_DIR}"
@@ -56,8 +60,6 @@ target_include_directories(flute
     ${CMAKE_CURRENT_LIST_DIR}/include/
   )
 
-#add_library(flute src/Receiver.cpp src/Receiver.h src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp)
-
 target_link_libraries( flute
     LINK_PUBLIC
     spdlog::spdlog
@@ -69,3 +71,8 @@ target_link_libraries( flute
     PkgConfig::ZLIB
 )
 
+# ---- Tests Subdirectory (optional) ----
+option(BUILD_TESTING "Build unit tests" ON)
+if (BUILD_TESTING AND NOT DEFINED GTEST_DISABLE)
+  add_subdirectory(tests)
+endif()
