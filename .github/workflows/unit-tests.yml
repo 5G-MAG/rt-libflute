@@ -1,9 +1,8 @@
-name: Unit Test
+name: Unit Tests
 
 on:
-  push:
-    branches:
-      - feature/unitTests
+  pull_request:
+    branches: [development]
 
 concurrency:
   group: unit-tests-${{ github.ref }}
