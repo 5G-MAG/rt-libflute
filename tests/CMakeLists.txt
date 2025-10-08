@@ -27,13 +27,14 @@ add_executable(flute_tests
         test_transmitter.cpp
 )
 
+# Link against library under test
 target_link_libraries(
         flute_tests
+        PRIVATE
+        flute
         GTest::gtest_main
 )
 
 target_include_directories(flute_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 include(GoogleTest)
 gtest_discover_tests(flute_tests)
-
-
