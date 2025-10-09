@@ -70,6 +70,14 @@ cd rt-libflute/build/examples
 The application will listen at the multicast address 238.1.1.95 by default. Check the help page for additional options (
 ``./flute-receiver --help``).
 
+By default, the FLUTE receiver will store the received files under the same path they were transmitted from (essentially
+overwriting the files if you are running the transmitter and the receiver on the same machine). To change the output
+directly you can use the `-o` option:
+
+````
+./flute-receiver -o /path/to/output/directory
+````
+
 ### Step 2: Setting up a Flute transmitter
 
 To start the Flute transmitter type in

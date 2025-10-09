@@ -53,6 +53,7 @@ static struct argp_option options[] = {  // NOLINT
      "critical, 6 = none. Default: 2.",
      0},
     {"tsi", 'T', "ID", 0, "The TSI to use for the FLUTE session (default: 16)", 0},
+    {"output-path", 'o', "PATH", 0, "Directory to save received files", 0},
     {nullptr, 0, nullptr, 0, nullptr, 0}};
 
 /**
@@ -67,6 +68,7 @@ struct ft_arguments {
   unsigned log_level = 2;        /**< log level */
   char **files;
   uint64_t tsi = 16;
+  const char *output_path = nullptr;
 };
 
 /**
@@ -93,6 +95,9 @@ static auto parse_opt(int key, char *arg, struct argp_state *state) -> error_t {
       break;
     case 'T':
       arguments->tsi = static_cast<uint64_t>(strtoul(arg, nullptr, 10));
+      break;
+    case 'o':
+      arguments->output_path = arg;
       break;
     default:
       return ARGP_ERR_UNKNOWN;
@@ -160,13 +165,18 @@ auto main(int argc, char **argv) -> int {
     }
 
     receiver.register_completion_callback(
-        [](std::shared_ptr<LibFlute::File> file) { //NOLINT
-        spdlog::info("{} (TOI {}{}{}) has been received",
-            file->meta().content_location, file->meta().toi, file->meta().etag.empty()?"":", ETag = ", file->meta().etag);
-        FILE* fd = fopen(file->meta().content_location.c_str(), "wb");
+      [output_path = arguments.output_path](std::shared_ptr<LibFlute::File> file) { //NOLINT
+        std::string out_file = file->meta().content_location;
+        if (output_path && std::strlen(output_path) > 0) {
+          out_file = (std::filesystem::path(output_path) / std::filesystem::path(out_file).filename()).string();
+        }
+
+        spdlog::info("{} (TOI {}) has been received",
+                     out_file, file->meta().toi);
+        FILE *fd = fopen(out_file.c_str(), "wb");
         fwrite(file->buffer(), 1, file->length(), fd);
         fclose(fd);
-        });
+      });
 
     // Start the IO service
     io.run();
