@@ -138,13 +138,31 @@ sudo setcap 'cap_net_admin=eip' ./flute-receiver
 
 ## Testing
 
-To execute the unit tests make sure to have built the project with the unit tests enabled (see Step 3: Build setup).
+To execute the tests make sure to have built the project with testing enabled (see Step 3: Build setup).
 
 Then run
 
 ````
 cd build/tests
 ctest
+````
+
+To run only the unit tests:
+
+````
+ctest -R '^unit:'
+````
+
+To run only the end-to-end FLUTE transmitter/receiver test:
+
+````
+ctest -R '^e2e:'
+````
+
+To see the end-to-end test's transmit/receive debug output locally:
+
+````
+ctest -R '^e2e:' --verbose
 ````
 
 ## Documentation

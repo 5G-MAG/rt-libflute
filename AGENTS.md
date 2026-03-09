@@ -33,11 +33,18 @@ Compiler flags are set in the root `CMakeLists.txt`:
 ## Test Commands
 
 Test framework: Google Test v1.17.0 (fetched automatically via CMake FetchContent).
-Test source: `tests/test_transmitter.cpp`. Single binary: `flute_tests`.
+Test sources: `tests/test_transmitter.cpp` and `tests/test_end_to_end.cpp`.
+Test binaries: `build/tests/flute_unit_tests` and `build/tests/flute_e2e_tests`.
 
 ```bash
 # Run all tests
 ctest --test-dir build/tests --output-on-failure -j 2
+
+# Run unit tests only
+ctest --test-dir build/tests -R '^unit:' --output-on-failure -j 2
+
+# Run end-to-end tests only
+ctest --test-dir build/tests -R '^e2e:' --output-on-failure -j 1
 
 # List available tests without running
 ctest --test-dir build/tests -N
@@ -45,15 +52,20 @@ ctest --test-dir build/tests -N
 # Run a single test by name (regex match)
 ctest --test-dir build/tests -R "RateLimitGetterSetter"
 
-# Run a single test via GoogleTest binary directly
-./build/tests/flute_tests --gtest_filter="TransmitterGetterSetterTest.RateLimitGetterSetter"
+# Run a single unit test via GoogleTest binary directly
+./build/tests/flute_unit_tests --gtest_filter="TransmitterGetterSetterTest.RateLimitGetterSetter"
+
+# Run the end-to-end test binary directly
+./build/tests/flute_e2e_tests --gtest_filter="FluteEndToEndTest.TransmitsFileToReceiver"
 
 # Run all tests in a suite
-./build/tests/flute_tests --gtest_filter="TransmitterGetterSetterTest.*"
+./build/tests/flute_unit_tests --gtest_filter="TransmitterGetterSetterTest.*"
 
 # List all tests from the binary
-./build/tests/flute_tests --gtest_list_tests
+./build/tests/flute_unit_tests --gtest_list_tests
 ```
+
+Pull requests against `development` and `main` run separate GitHub Actions workflows for unit tests and end-to-end tests.
 
 ## Lint / Static Analysis
 
@@ -83,7 +95,7 @@ include/          Public API headers (Receiver.h, Transmitter.h, File.h, AlcPack
 src/              Implementation files (.cpp)
 utils/            Third-party utilities (base64)
 examples/         Demo apps (flute-receiver, flute-transmitter)
-tests/            Unit tests (Google Test)
+tests/            Unit and end-to-end tests (Google Test)
 ```
 
 ## Code Style Guidelines

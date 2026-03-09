@@ -23,18 +23,26 @@ FetchContent_MakeAvailable(googletest)
 
 enable_testing()
 
-add_executable(flute_tests
-        test_transmitter.cpp
-)
-
-# Link against library under test
-target_link_libraries(
-        flute_tests
-        PRIVATE
-        flute
-        GTest::gtest_main
-)
-
-target_include_directories(flute_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 include(GoogleTest)
-gtest_discover_tests(flute_tests)
+
+function(add_flute_test_executable target_name test_source test_prefix)
+  add_executable(${target_name}
+          ${test_source}
+  )
+
+  target_link_libraries(
+          ${target_name}
+          PRIVATE
+          flute
+          GTest::gtest_main
+  )
+
+  target_include_directories(${target_name} PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
+  gtest_discover_tests(${target_name}
+          TEST_PREFIX ${test_prefix}
+  )
+endfunction()
+
+add_flute_test_executable(flute_unit_tests test_transmitter.cpp "unit:")
+add_flute_test_executable(flute_e2e_tests test_end_to_end.cpp "e2e:")
