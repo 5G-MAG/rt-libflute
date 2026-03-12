@@ -16,16 +16,20 @@
 //
 #include <argp.h>
 
+#include <cstdint>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 
 #include <chrono>
+#include <functional>
 #include <iostream>
 #include <list>
-#include <vector>
+#include <memory>
 #include <fstream>
-#include <string>
 #include <filesystem>
+#include <string>
+#include <vector>
 
 #include <libconfig.h++>
 #include <boost/asio.hpp>
@@ -56,6 +60,8 @@ static struct argp_option options[] = {  // NOLINT
     {"port", 'p', "PORT", 0, "Target port (default: 40085)", 0},
     {"mtu", 't', "BYTES", 0, "Path MTU to size ALC packets for (default: 1500)", 0},
     {"rate-limit", 'r', "KBPS", 0, "Transmit rate limit (kbps), 0 = no limit, default: 1000 (1 Mbps)", 0},
+    {"deactivate-mode", 'd', "MODE", 0, "Deactivation mode for --deactivate-after or Ctrl-C: immediate|drain (default: immediate)", 0},
+    {"deactivate-after", 'a', "MS", 0, "Request transmitter deactivation after this many milliseconds (default: disabled)", 0},
     {"ipsec-key", 'k', "KEY", 0, "To enable IPSec/ESP encryption of packets, provide a hex-encoded AES key here", 0},
     {"log-level", 'l', "LEVEL", 0,
      "Log verbosity: 0 = trace, 1 = debug, 2 = info, 3 = warn, 4 = error, 5 = "
@@ -72,6 +78,11 @@ static struct argp_option options[] = {  // NOLINT
  * Holds all options passed on the command line
  */
 struct ft_arguments {
+  enum class DeactivateMode : std::uint8_t {
+    Immediate,
+    Drain,
+  };
+
   const char *mcast_target = {};
   bool enable_ipsec = false;
   bool use_gzip = false;
@@ -83,9 +94,79 @@ struct ft_arguments {
   uint32_t rate_limit = 1000;
   uint64_t tsi = 16;
   size_t retransmit_count = 1;
+  DeactivateMode deactivate_mode = DeactivateMode::Immediate;
+  uint32_t deactivate_after_ms = 0;
   unsigned log_level = 2;        /**< log level */
   char **files;
 };
+
+struct deactivation_demo_state {
+  bool deactivation_requested = false;
+};
+
+static auto request_deactivation(
+    LibFlute::Transmitter& transmitter,
+    boost::asio::io_context& io,
+    const ft_arguments& arguments,
+    const std::shared_ptr<deactivation_demo_state>& state,
+    bool force_immediate = false) -> void {
+  if (state->deactivation_requested && !force_immediate) {
+    return;
+  }
+
+  const bool drain = !force_immediate && arguments.deactivate_mode == ft_arguments::DeactivateMode::Drain;
+  const auto queued_files = transmitter.number_of_files();
+  if (drain) {
+    spdlog::info("Deactivation requested, draining {} queued transmissions before stopping", queued_files);
+  } else {
+    spdlog::info("Deactivating immediately, {} queued transmissions may remain unsent", queued_files);
+  }
+
+  state->deactivation_requested = true;
+  transmitter.deactivate(drain);
+  if (!drain || queued_files == 0) {
+    io.stop();
+  }
+}
+
+static auto configure_deactivation_demo(
+    const ft_arguments& arguments,
+    boost::asio::io_context& io,
+    LibFlute::Transmitter& transmitter,
+    const std::shared_ptr<deactivation_demo_state>& state) -> void {
+  if (arguments.deactivate_after_ms > 0) {
+    auto timer = std::make_shared<boost::asio::deadline_timer>(io);
+    timer->expires_from_now(boost::posix_time::milliseconds(arguments.deactivate_after_ms));
+    timer->async_wait(
+        [timer, &arguments, &io, &transmitter, state](const boost::system::error_code& error) {
+          if (error == boost::asio::error::operation_aborted) {
+            return;
+          }
+          request_deactivation(transmitter, io, arguments, state);
+        });
+  }
+
+  auto signals = std::make_shared<boost::asio::signal_set>(io, SIGINT, SIGTERM);
+  auto handler = std::make_shared<std::function<void(const boost::system::error_code&, int)>>();
+  *handler = [signals, handler, &arguments, &io, &transmitter, state](
+                 const boost::system::error_code& error,
+                 int signal_number) {
+    if (error == boost::asio::error::operation_aborted) {
+      return;
+    }
+
+    if (state->deactivation_requested) {
+      spdlog::warn("Received signal {}, forcing immediate shutdown", signal_number);
+      request_deactivation(transmitter, io, arguments, state, true);
+      return;
+    }
+
+    spdlog::info("Received signal {}, requesting transmitter deactivation", signal_number);
+    request_deactivation(transmitter, io, arguments, state);
+    signals->async_wait(*handler);
+  };
+  signals->async_wait(*handler);
+}
 
 /**
  * Parses the command line options into the arguments struct.
@@ -112,6 +193,20 @@ static auto parse_opt(int key, char *arg, struct argp_state *state) -> error_t {
       break;
     case 'r':
       arguments->rate_limit = static_cast<uint32_t>(strtoul(arg, nullptr, 10));
+      break;
+    case 'd': {
+      const std::string mode(arg);
+      if (mode == "immediate") {
+        arguments->deactivate_mode = ft_arguments::DeactivateMode::Immediate;
+      } else if (mode == "drain") {
+        arguments->deactivate_mode = ft_arguments::DeactivateMode::Drain;
+      } else {
+        argp_error(state, "Invalid deactivate mode '%s'. Use immediate or drain.", arg);
+      }
+      break;
+    }
+    case 'a':
+      arguments->deactivate_after_ms = static_cast<uint32_t>(strtoul(arg, nullptr, 10));
       break;
     case 'l':
       arguments->log_level = static_cast<unsigned>(strtoul(arg, nullptr, 10));
@@ -183,6 +278,7 @@ static void send_with_new_api(struct ft_arguments &arguments)
 
   // Create a Boost io_context
   boost::asio::io_context io;
+  auto deactivation_state = std::make_shared<deactivation_demo_state>();
 
   // Construct the transmitter class
   LibFlute::Transmitter transmitter(
@@ -199,17 +295,24 @@ static void send_with_new_api(struct ft_arguments &arguments)
     transmitter.enable_ipsec(1, arguments.aes_key);
   }
 
+  configure_deactivation_demo(arguments, io, transmitter, deactivation_state);
+
   // Register a completion callback
   transmitter.register_completion_callback(
-        [&files, &arguments, &transmitter](uint32_t toi) -> void {
+        [&files, &arguments, &transmitter, &io, deactivation_state](uint32_t toi) -> void {
           for (auto& f : files) {
             if (f.file->toi() == toi) {
               spdlog::info("{} (TOI {}) has been transmitted", f.file->file_entry().content_location, f.file->toi());
               f.transmitted_count++;
-              if (f.transmitted_count < arguments.retransmit_count) {
-		transmitter.send(f.file);
+              if (!deactivation_state->deactivation_requested && f.transmitted_count < arguments.retransmit_count) {
+                transmitter.send(f.file);
               }
             }
+          }
+
+          if (deactivation_state->deactivation_requested && transmitter.number_of_files() == 0) {
+            spdlog::info("Queued transmissions drained, stopping transmitter demo");
+            io.stop();
           }
         });
 
@@ -251,6 +354,7 @@ static void send_with_old_api(struct ft_arguments &arguments)
 
   // Create a Boost io_context
   boost::asio::io_context io;
+  auto deactivation_state = std::make_shared<deactivation_demo_state>();
 
   // Construct the transmitter class
   LibFlute::Transmitter transmitter(
@@ -267,14 +371,21 @@ static void send_with_old_api(struct ft_arguments &arguments)
     transmitter.enable_ipsec(1, arguments.aes_key);
   }
 
+  configure_deactivation_demo(arguments, io, transmitter, deactivation_state);
+
   // Register a completion callback
   transmitter.register_completion_callback(
-        [&files](uint32_t toi) -> void {
+        [&files, &transmitter, &io, deactivation_state](uint32_t toi) -> void {
           for (auto& file : files) {
             if (file.toi == toi) {
               spdlog::info("{} (TOI {}) has been transmitted", file.location, file.toi);
               // could free() the buffer here
             }
+          }
+
+          if (deactivation_state->deactivation_requested && transmitter.number_of_files() == 0) {
+            spdlog::info("Queued transmissions drained, stopping transmitter demo");
+            io.stop();
           }
         });
 

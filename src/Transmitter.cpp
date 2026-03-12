@@ -695,6 +695,10 @@ auto Transmitter::file_transmitted(uint32_t toi) -> void
       _completion_cb(toi);
     }
   }
+
+  if (_deactivate_when_files_done && !_has_queued_transmissions()) {
+    _complete_deactivation();
+  }
 }
 
 auto Transmitter::send_next_packet() -> void
@@ -779,6 +783,7 @@ auto Transmitter::send_next_packet() -> void
 
 auto Transmitter::activate() -> void
 {
+  _deactivate_when_files_done = false;
   if (!_active) {
     _active = true;
     start_fdt_repeat_timer();
@@ -786,13 +791,30 @@ auto Transmitter::activate() -> void
   }
 }
 
-auto Transmitter::deactivate() -> void
+auto Transmitter::deactivate(bool finish_file_transmissions) -> void
 {
   if (_active) {
-    _active = false;
-    _fdt_timer.cancel();
-    _send_timer.cancel();
+    if (finish_file_transmissions && _has_queued_transmissions()) {
+      _deactivate_when_files_done = true;
+      return;
+    }
+
+    _complete_deactivation();
   }
+}
+
+auto Transmitter::_complete_deactivation() -> void
+{
+  _deactivate_when_files_done = false;
+  _active = false;
+  _fdt_timer.cancel();
+  _send_timer.cancel();
+}
+
+auto Transmitter::_has_queued_transmissions() -> bool
+{
+  std::lock_guard<std::mutex> guard(_files_mutex);
+  return !_files.empty();
 }
 
 auto Transmitter::start_fdt_repeat_timer() -> void
@@ -869,4 +891,3 @@ static uint16_t calculate_sum(uint16_t *buffer, size_t len)
 }
 
 } // End namespace LibFlute
-

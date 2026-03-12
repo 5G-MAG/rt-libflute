@@ -143,3 +143,128 @@ TEST(FluteEndToEndTest, TransmitsFileToReceiver) {
   const std::string received_payload(received_file->buffer(), received_file->length());
   EXPECT_EQ(received_payload, expected_payload);
 }
+
+TEST(FluteEndToEndTest, DeferredDeactivateDrainsQueuedFiles) {
+  namespace fs = std::filesystem;
+  using namespace std::chrono_literals;
+
+  constexpr short kPort = 18092;
+  const fs::path fixtures_dir = fs::path{__FILE__}.parent_path() / "tmp";
+  const fs::path input_file = fixtures_dir / "e2e_payload.bin";
+  const std::string expected_payload = read_fixture_file(input_file);
+  const std::string first_location = "e2e/first.bin";
+  const std::string second_location = "e2e/second.bin";
+  const auto now = std::chrono::system_clock::now();
+
+  ASSERT_FALSE(expected_payload.empty());
+
+  boost::asio::io_context receiver_io;
+  boost::asio::io_context transmitter_io;
+
+  LibFlute::Receiver receiver("0.0.0.0", "239.255.0.2", kPort, 4343, receiver_io);
+  LibFlute::Transmitter transmitter(
+      "239.255.0.2",
+      kPort,
+      4343,
+      1400,
+      0,
+      transmitter_io,
+      std::nullopt,
+      LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005);
+
+  auto first_file_description = std::make_shared<LibFlute::Transmitter::FileDescription>(
+      first_location,
+      input_file.string());
+  first_file_description->set_content_type("application/octet-stream");
+  first_file_description->set_expiry_time(now + 60s);
+
+  auto second_file_description = std::make_shared<LibFlute::Transmitter::FileDescription>(
+      second_location,
+      input_file.string());
+  second_file_description->set_content_type("application/octet-stream");
+  second_file_description->set_expiry_time(now + 60s);
+
+  std::promise<std::shared_ptr<LibFlute::File>> first_received_promise;
+  std::promise<std::shared_ptr<LibFlute::File>> second_received_promise;
+  std::promise<void> first_transmitted_promise;
+  std::promise<void> second_transmitted_promise;
+  auto first_received_future = first_received_promise.get_future();
+  auto second_received_future = second_received_promise.get_future();
+  auto first_transmitted_future = first_transmitted_promise.get_future();
+  auto second_transmitted_future = second_transmitted_promise.get_future();
+
+  receiver.register_completion_callback(
+      [&first_received_promise,
+       &second_received_promise,
+       &receiver,
+       &receiver_io,
+       first_location,
+       second_location](const std::shared_ptr<LibFlute::File>& file) {
+        if (file->meta().content_location == first_location) {
+          first_received_promise.set_value(file);
+        } else if (file->meta().content_location == second_location) {
+          second_received_promise.set_value(file);
+          receiver.stop();
+          receiver_io.stop();
+        }
+      });
+
+  transmitter.register_completion_callback(
+      [&first_transmitted_promise,
+       &second_transmitted_promise,
+       &transmitter_io,
+       first_file_description,
+       second_file_description](const uint32_t toi) {
+        if (toi == first_file_description->toi()) {
+          first_transmitted_promise.set_value();
+        } else if (toi == second_file_description->toi()) {
+          second_transmitted_promise.set_value();
+          transmitter_io.stop();
+        }
+      });
+
+  std::thread receiver_thread([&receiver_io]() { receiver_io.run(); });
+  std::thread transmitter_thread([&transmitter_io]() { transmitter_io.run(); });
+
+  transmitter.send(first_file_description);
+  transmitter.send(second_file_description);
+  transmitter.deactivate(true);
+
+  const auto first_transmitted_ready = first_transmitted_future.wait_for(5s);
+  const auto second_transmitted_ready = second_transmitted_future.wait_for(5s);
+  const auto first_received_ready = first_received_future.wait_for(5s);
+  const auto second_received_ready = second_received_future.wait_for(5s);
+
+  if (first_transmitted_ready != std::future_status::ready ||
+      second_transmitted_ready != std::future_status::ready ||
+      first_received_ready != std::future_status::ready ||
+      second_received_ready != std::future_status::ready) {
+    transmitter.deactivate();
+    transmitter_io.stop();
+    receiver.stop();
+    receiver_io.stop();
+  }
+
+  if (receiver_thread.joinable()) {
+    receiver_thread.join();
+  }
+  if (transmitter_thread.joinable()) {
+    transmitter_thread.join();
+  }
+
+  ASSERT_EQ(first_transmitted_ready, std::future_status::ready);
+  ASSERT_EQ(second_transmitted_ready, std::future_status::ready);
+  ASSERT_EQ(first_received_ready, std::future_status::ready);
+  ASSERT_EQ(second_received_ready, std::future_status::ready);
+
+  const auto first_received_file = first_received_future.get();
+  const auto second_received_file = second_received_future.get();
+  ASSERT_NE(first_received_file, nullptr);
+  ASSERT_NE(second_received_file, nullptr);
+
+  EXPECT_EQ(first_received_file->meta().content_location, first_location);
+  EXPECT_EQ(second_received_file->meta().content_location, second_location);
+  EXPECT_EQ(std::string(first_received_file->buffer(), first_received_file->length()), expected_payload);
+  EXPECT_EQ(std::string(second_received_file->buffer(), second_received_file->length()), expected_payload);
+  EXPECT_EQ(transmitter.number_of_files(), 0u);
+}
