@@ -62,6 +62,7 @@ struct TunnelBridgeStats {
 
 struct EndToEndOptions {
   bool tunneled = false;
+  std::string expected_location;
 };
 
 auto make_test_payload() -> std::vector<char> {
@@ -264,20 +265,20 @@ auto run_tunnel_bridge(std::promise<void> ready_promise, std::atomic<bool>& stop
 }
 
 auto run_end_to_end_scenario(const EndToEndOptions& options) -> void {
-  const std::string expected_location = options.tunneled ? "e2e/tunnelled-payload.bin" : "e2e/payload.bin";
+  const std::string expected_location = options.expected_location;
   const std::vector<char> expected_payload = make_test_payload();
   const auto now = std::chrono::system_clock::now();
 
   ASSERT_FALSE(expected_payload.empty());
 
-  std::promise<void> tunnel_ready_promise;
-  std::future<void> tunnel_ready_future;
   std::atomic<bool> tunnel_stop_requested = false;
   TunnelBridgeStats tunnel_stats;
   std::thread tunnel_thread;
 
   std::optional<boost::asio::ip::udp::endpoint> tunnel_endpoint = std::nullopt;
   if (options.tunneled) {
+    std::future<void> tunnel_ready_future;
+    std::promise<void> tunnel_ready_promise;
     tunnel_ready_future = tunnel_ready_promise.get_future();
     tunnel_endpoint = boost::asio::ip::udp::endpoint(boost::asio::ip::make_address("127.0.0.1"), kTunnelPort);
     tunnel_thread = std::thread(
@@ -401,11 +402,13 @@ auto run_end_to_end_scenario(const EndToEndOptions& options) -> void {
 TEST(FluteEndToEndTest, TransmitsFileToReceiver) {
   EndToEndOptions options;
   options.tunneled = false;
+  options.expected_location = "e2e/payload.bin";
   run_end_to_end_scenario(options);
 }
 
 TEST(FluteEndToEndTest, TransmitsFileToReceiverThroughUdpTunnel) {
   EndToEndOptions options;
   options.tunneled = true;
+  options.expected_location = "e2e/tunnelled-payload.bin";
   run_end_to_end_scenario(options);
 }
