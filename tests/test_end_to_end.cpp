@@ -60,6 +60,13 @@ struct TunnelBridgeStats {
   std::string error;
 };
 
+struct TunnelRuntime {
+  std::atomic<bool> stop_requested = false;
+  TunnelBridgeStats stats;
+  std::thread thread;
+  std::optional<boost::asio::ip::udp::endpoint> endpoint = std::nullopt;
+};
+
 struct EndToEndOptions {
   bool tunneled = false;
   std::string expected_location;
@@ -264,6 +271,29 @@ auto run_tunnel_bridge(std::promise<void> ready_promise, std::atomic<bool>& stop
   }
 }
 
+auto start_tunnel_bridge(TunnelRuntime& tunnel_runtime) -> void {
+  std::future<void> tunnel_ready_future;
+  std::promise<void> tunnel_ready_promise;
+  tunnel_ready_future = tunnel_ready_promise.get_future();
+  tunnel_runtime.endpoint =
+      boost::asio::ip::udp::endpoint(boost::asio::ip::make_address("127.0.0.1"), kTunnelPort);
+  tunnel_runtime.thread =
+      std::thread([ready_promise = std::move(tunnel_ready_promise), &tunnel_runtime]() mutable {
+        run_tunnel_bridge(std::move(ready_promise), tunnel_runtime.stop_requested, tunnel_runtime.stats);
+      });
+
+  const auto tunnel_ready = tunnel_ready_future.wait_for(2s);
+  if (tunnel_ready != std::future_status::ready) {
+    tunnel_runtime.stop_requested.store(true);
+    if (tunnel_runtime.thread.joinable()) {
+      tunnel_runtime.thread.join();
+    }
+    FAIL() << "Timed out waiting for tunnel bridge to start";
+  }
+
+  ASSERT_TRUE(tunnel_runtime.stats.error.empty()) << tunnel_runtime.stats.error;
+}
+
 auto run_end_to_end_scenario(const EndToEndOptions& options) -> void {
   const std::string expected_location = options.expected_location;
   const std::vector<char> expected_payload = make_test_payload();
@@ -271,29 +301,9 @@ auto run_end_to_end_scenario(const EndToEndOptions& options) -> void {
 
   ASSERT_FALSE(expected_payload.empty());
 
-  std::atomic<bool> tunnel_stop_requested = false;
-  TunnelBridgeStats tunnel_stats;
-  std::thread tunnel_thread;
-
-  std::optional<boost::asio::ip::udp::endpoint> tunnel_endpoint = std::nullopt;
+  TunnelRuntime tunnel_runtime;
   if (options.tunneled) {
-    std::future<void> tunnel_ready_future;
-    std::promise<void> tunnel_ready_promise;
-    tunnel_ready_future = tunnel_ready_promise.get_future();
-    tunnel_endpoint = boost::asio::ip::udp::endpoint(boost::asio::ip::make_address("127.0.0.1"), kTunnelPort);
-    tunnel_thread = std::thread(
-        [ready_promise = std::move(tunnel_ready_promise), &tunnel_stop_requested, &tunnel_stats]() mutable {
-          run_tunnel_bridge(std::move(ready_promise), tunnel_stop_requested, tunnel_stats);
-        });
-    const auto tunnel_ready = tunnel_ready_future.wait_for(2s);
-    if (tunnel_ready != std::future_status::ready) {
-      tunnel_stop_requested.store(true);
-      if (tunnel_thread.joinable()) {
-        tunnel_thread.join();
-      }
-      FAIL() << "Timed out waiting for tunnel bridge to start";
-    }
-    ASSERT_TRUE(tunnel_stats.error.empty()) << tunnel_stats.error;
+    start_tunnel_bridge(tunnel_runtime);
   }
 
   boost::asio::io_context receiver_io;
@@ -307,7 +317,7 @@ auto run_end_to_end_scenario(const EndToEndOptions& options) -> void {
       kMtu,
       0,
       transmitter_io,
-      tunnel_endpoint,
+      tunnel_runtime.endpoint,
       LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005);
 
   auto file_description = std::make_shared<LibFlute::Transmitter::FileDescription>(
@@ -367,9 +377,9 @@ auto run_end_to_end_scenario(const EndToEndOptions& options) -> void {
   }
 
   if (options.tunneled) {
-    tunnel_stop_requested.store(true);
-    if (tunnel_thread.joinable()) {
-      tunnel_thread.join();
+    tunnel_runtime.stop_requested.store(true);
+    if (tunnel_runtime.thread.joinable()) {
+      tunnel_runtime.thread.join();
     }
   }
 
@@ -390,10 +400,10 @@ auto run_end_to_end_scenario(const EndToEndOptions& options) -> void {
   EXPECT_EQ(received_payload, expected_payload_string);
 
   if (options.tunneled) {
-    ASSERT_TRUE(tunnel_stats.error.empty()) << tunnel_stats.error;
-    EXPECT_GT(tunnel_stats.received_packet_count, 0U);
-    EXPECT_GT(tunnel_stats.forwarded_packet_count, 0U);
-    EXPECT_LE(tunnel_stats.max_tunnel_payload_size, kTunnelPayloadLimit);
+    ASSERT_TRUE(tunnel_runtime.stats.error.empty()) << tunnel_runtime.stats.error;
+    EXPECT_GT(tunnel_runtime.stats.received_packet_count, 0U);
+    EXPECT_GT(tunnel_runtime.stats.forwarded_packet_count, 0U);
+    EXPECT_LE(tunnel_runtime.stats.max_tunnel_payload_size, kTunnelPayloadLimit);
   }
 }
 
