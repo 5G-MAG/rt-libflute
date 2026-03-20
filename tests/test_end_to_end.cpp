@@ -150,6 +150,10 @@ namespace
         }
     }
 
+    // In tunneled mode the transmitter sends an outer UDP datagram whose payload is
+    // a complete inner IPv4+UDP packet carrying the FLUTE payload. This helper
+    // detunnels that packet and forwards only the inner FLUTE bytes to the regular
+    // receiver path used by this end-to-end test.
     auto run_tunnel_bridge(std::promise<void> ready_promise, std::atomic<bool>& stop_requested,
                            TunnelBridgeStats& stats) -> void
     {
@@ -224,6 +228,8 @@ namespace
                     throw std::runtime_error("Tunnelled packet too short for inner IP/UDP headers");
                 }
 
+                // Validate the encapsulated inner IPv4/UDP headers before forwarding so
+                // the test covers tunnel formatting as well as end-to-end delivery.
                 const auto* ip_header = reinterpret_cast<const iphdr*>(buffer.data());
                 const size_t ip_header_length = static_cast<size_t>(ip_header->ihl) * 4U;
                 if (ip_header->version != 4 || ip_header_length < sizeof(iphdr))
@@ -274,6 +280,8 @@ namespace
                     throw std::runtime_error("Tunnelled packet inner UDP checksum mismatch");
                 }
 
+                // Forward only the inner FLUTE payload. LibFlute::Receiver expects plain
+                // ALC/FLUTE bytes and does not strip tunnel headers on receive.
                 const ssize_t forwarded_bytes = sendto(forward_socket,
                                                        flute_payload,
                                                        flute_payload_size,
@@ -351,6 +359,9 @@ namespace
         TunnelRuntime tunnel_runtime;
         if (options.tunneled)
         {
+            // The bridge is only needed in tunneled mode: it receives encapsulated
+            // packets from the transmitter's tunnel endpoint and re-injects the inner
+            // FLUTE payload onto the receiver's normal UDP port.
             start_tunnel_bridge(tunnel_runtime);
         }
 
@@ -456,6 +467,8 @@ namespace
 
         if (options.tunneled)
         {
+            // Confirm that tunneled delivery really used the bridge and that the
+            // encapsulated packets stayed within the configured MTU-safe payload limit.
             ASSERT_TRUE(tunnel_runtime.stats.error.empty()) << tunnel_runtime.stats.error;
             EXPECT_GT(tunnel_runtime.stats.received_packet_count, 0U);
             EXPECT_GT(tunnel_runtime.stats.forwarded_packet_count, 0U);
@@ -464,6 +477,10 @@ namespace
     }
 } // namespace
 
+
+// Verifies the baseline end-to-end flow without tunnelling: the transmitter
+// sends FLUTE packets directly to the receiver and the reconstructed file
+// matches the original payload and metadata.
 TEST(FluteEndToEndTest, TransmitsFileToReceiver)
 {
     EndToEndOptions options;
@@ -472,6 +489,9 @@ TEST(FluteEndToEndTest, TransmitsFileToReceiver)
     run_end_to_end_scenario(options);
 }
 
+// Verifies tunneled transmission end to end: the transmitter encapsulates the
+// FLUTE packet inside an inner IPv4+UDP packet, the tunnel bridge detunnels it,
+// and the receiver still reconstructs the original file correctly.
 TEST(FluteEndToEndTest, TransmitsFileToReceiverThroughUdpTunnel)
 {
     EndToEndOptions options;
