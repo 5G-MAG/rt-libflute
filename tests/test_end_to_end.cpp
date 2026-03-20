@@ -45,14 +45,14 @@ namespace
 {
     using namespace std::chrono_literals;
 
-    constexpr short kPort = 18091;
-    constexpr short kTunnelPort = 18092;
-    constexpr uint64_t kTsi = 4242;
-    constexpr unsigned short kMtu = 1400;
-    constexpr size_t kTunnelPayloadLimit = kMtu - 20 - 8;
+    constexpr short port = 18091;
+    constexpr short tunnel_port = 18092;
+    constexpr uint64_t tsi = 4242;
+    constexpr unsigned short mtu = 1400;
+    constexpr size_t tunnel_payload_limit = mtu - 20 - 8;
     const std::string tunnel_address = "127.0.0.1";
     const std::string receiver_interface = "0.0.0.0";
-    const std::string receiver_transmitter_address = "239.255.0.1";
+    const std::string multicast_address = "239.255.0.1";
 
     struct TunnelBridgeStats
     {
@@ -76,7 +76,9 @@ namespace
         std::string expected_location;
     };
 
-    auto make_test_payload() -> std::vector<char>
+    // Builds a deterministic 5,000-byte payload with a repeating A-Z pattern so
+    // both end-to-end scenarios can assert exact file contents after delivery.
+    auto create_test_payload() -> std::vector<char>
     {
         std::vector<char> payload(5000);
         for (size_t i = 0; i < payload.size(); ++i)
@@ -152,7 +154,7 @@ namespace
 
     // In tunneled mode the transmitter sends an outer UDP datagram whose payload is
     // a complete inner IPv4+UDP packet carrying the FLUTE payload. This helper
-    // detunnels that packet and forwards only the inner FLUTE bytes to the regular
+    // de-tunnels that packet and forwards only the inner FLUTE bytes to the regular
     // receiver path used by this end-to-end test.
     auto run_tunnel_bridge(std::promise<void> ready_promise, std::atomic<bool>& stop_requested,
                            TunnelBridgeStats& stats) -> void
@@ -177,7 +179,7 @@ namespace
 
             sockaddr_in receive_address{};
             receive_address.sin_family = AF_INET;
-            receive_address.sin_port = htons(kTunnelPort);
+            receive_address.sin_port = htons(tunnel_port);
             receive_address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
             if (bind(receive_socket, reinterpret_cast<const sockaddr*>(&receive_address), sizeof(receive_address)) != 0)
             {
@@ -189,11 +191,11 @@ namespace
 
             sockaddr_in forward_address{};
             forward_address.sin_family = AF_INET;
-            forward_address.sin_port = htons(kPort);
+            forward_address.sin_port = htons(port);
             forward_address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
             const uint32_t expected_destination =
-                htonl(boost::asio::ip::make_address_v4("239.255.0.1").to_uint());
+                htonl(boost::asio::ip::make_address_v4(multicast_address).to_uint());
             std::vector<uint8_t> buffer(2048);
 
             while (!stop_requested.load())
@@ -219,7 +221,7 @@ namespace
                 stats.received_packet_count += 1;
                 stats.max_tunnel_payload_size = std::max(stats.max_tunnel_payload_size, packet_size);
 
-                if (packet_size > kTunnelPayloadLimit)
+                if (packet_size > tunnel_payload_limit)
                 {
                     throw std::runtime_error("Tunnelled packet exceeded MTU-safe payload size");
                 }
@@ -263,7 +265,7 @@ namespace
                 {
                     throw std::runtime_error("Tunnelled packet inner UDP length mismatch");
                 }
-                if (ntohs(udp_header->uh_sport) != kPort || ntohs(udp_header->uh_dport) != kPort)
+                if (ntohs(udp_header->uh_sport) != port || ntohs(udp_header->uh_dport) != port)
                 {
                     throw std::runtime_error("Tunnelled packet inner UDP ports mismatch");
                 }
@@ -322,12 +324,15 @@ namespace
         }
     }
 
+    // Starts the tunnel bridge thread for tunneled end-to-end tests, records the
+    // tunnel endpoint for the transmitter, and waits until the bridge is ready or
+    // reports an immediate startup failure before the test continues.
     auto start_tunnel_bridge(TunnelRuntime& tunnel_runtime) -> void
     {
         std::promise<void> tunnel_ready_promise;
         std::future<void> tunnel_ready_future = tunnel_ready_promise.get_future();
         tunnel_runtime.endpoint =
-            boost::asio::ip::udp::endpoint(boost::asio::ip::make_address(tunnel_address), kTunnelPort);
+            boost::asio::ip::udp::endpoint(boost::asio::ip::make_address(tunnel_address), tunnel_port);
         tunnel_runtime.thread =
             std::thread([ready_promise = std::move(tunnel_ready_promise), &tunnel_runtime]() mutable
             {
@@ -351,7 +356,7 @@ namespace
     auto run_end_to_end_scenario(const EndToEndOptions& options) -> void
     {
         const std::string expected_location = options.expected_location;
-        const std::vector<char> expected_payload = make_test_payload();
+        const std::vector<char> expected_payload = create_test_payload();
         const auto now = std::chrono::system_clock::now();
 
         ASSERT_FALSE(expected_payload.empty());
@@ -368,12 +373,12 @@ namespace
         boost::asio::io_context receiver_io;
         boost::asio::io_context transmitter_io;
 
-        LibFlute::Receiver receiver(receiver_interface, receiver_transmitter_address, kPort, kTsi, receiver_io);
+        LibFlute::Receiver receiver(receiver_interface, multicast_address, port, tsi, receiver_io);
         LibFlute::Transmitter transmitter(
-            receiver_transmitter_address,
-            kPort,
-            kTsi,
-            kMtu,
+            multicast_address,
+            port,
+            tsi,
+            mtu,
             0,
             transmitter_io,
             tunnel_runtime.endpoint,
@@ -472,7 +477,7 @@ namespace
             ASSERT_TRUE(tunnel_runtime.stats.error.empty()) << tunnel_runtime.stats.error;
             EXPECT_GT(tunnel_runtime.stats.received_packet_count, 0U);
             EXPECT_GT(tunnel_runtime.stats.forwarded_packet_count, 0U);
-            EXPECT_LE(tunnel_runtime.stats.max_tunnel_payload_size, kTunnelPayloadLimit);
+            EXPECT_LE(tunnel_runtime.stats.max_tunnel_payload_size, tunnel_payload_limit);
         }
     }
 } // namespace
@@ -490,7 +495,7 @@ TEST(FluteEndToEndTest, TransmitsFileToReceiver)
 }
 
 // Verifies tunneled transmission end to end: the transmitter encapsulates the
-// FLUTE packet inside an inner IPv4+UDP packet, the tunnel bridge detunnels it,
+// FLUTE packet inside an inner IPv4+UDP packet, the tunnel bridge de-tunnels it,
 // and the receiver still reconstructs the original file correctly.
 TEST(FluteEndToEndTest, TransmitsFileToReceiverThroughUdpTunnel)
 {
