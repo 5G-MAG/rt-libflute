@@ -430,6 +430,13 @@ namespace
             std::cerr << "Timed out waiting for end-to-end completion. transmitted_ready="
                 << (transmitted_ready == std::future_status::ready)
                 << ", received_ready=" << (received_ready == std::future_status::ready) << std::endl;
+            if (options.tunneled)
+            {
+                std::cerr << "Tunnel bridge stats: error='" << tunnel_runtime.stats.error
+                    << "', received_packet_count=" << tunnel_runtime.stats.received_packet_count
+                    << ", forwarded_packet_count=" << tunnel_runtime.stats.forwarded_packet_count
+                    << ", max_tunnel_payload_size=" << tunnel_runtime.stats.max_tunnel_payload_size << std::endl;
+            }
             transmitter.deactivate();
             transmitter_io.stop();
             receiver.stop();
@@ -447,6 +454,7 @@ namespace
 
         if (options.tunneled)
         {
+            ASSERT_TRUE(tunnel_runtime.stats.error.empty()) << tunnel_runtime.stats.error;
             tunnel_runtime.stop_requested.store(true);
             if (tunnel_runtime.thread.joinable())
             {
