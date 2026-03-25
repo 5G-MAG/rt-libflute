@@ -725,25 +725,31 @@ auto Transmitter::send_next_packet() -> void
       bytes_queued += packet->size();
 
       boost::asio::ip::udp::endpoint send_endpoint;
-      char *data = nullptr;
+      const char *data = nullptr;
       size_t data_size = 0;
+      std::shared_ptr<std::vector<char>> tunnel_data;
       if (_tunnel_endpoint) {
         send_endpoint = _tunnel_endpoint.value();
         data_size = packet->size() + 20 /* IP header */ + 8 /* UDP header */;
-        data = new char[data_size];
-        create_udp_pkt(data+20, _endpoint, packet->data(), packet->size(), _tunnel_local_address);
-        create_ip_hdr(data, _endpoint, data_size, _tunnel_local_address);
+        tunnel_data = std::make_shared<std::vector<char>>(data_size);
+        data = tunnel_data->data();
+        create_udp_pkt(const_cast<char*>(data) + 20, _endpoint, packet->data(), packet->size(), _tunnel_local_address);
+        create_ip_hdr(const_cast<char*>(data), _endpoint, data_size, _tunnel_local_address);
       } else {
         send_endpoint = _endpoint;
         data = packet->data();
         data_size = packet->size();
       }
       _socket.async_send_to(
-          boost::asio::buffer(data, data_size), send_endpoint,
-          [file, symbols, packet, this](
+          boost::asio::buffer(data, data_size),
+          send_endpoint,
+          [file, symbols, packet, tunnel_data, this](
               const boost::system::error_code& error,
               std::size_t bytes_transferred)
           {
+            (void)packet;
+            (void)tunnel_data;
+            (void)bytes_transferred;
             if (error) {
               spdlog::debug("sent_to error: {}", error.message());
             } else {
@@ -753,9 +759,6 @@ auto Transmitter::send_next_packet() -> void
               }
             }
           });
-      if (_tunnel_endpoint) {
-        delete[] data;
-      }
     }
   }
   if (_active) {
@@ -858,7 +861,7 @@ static uint16_t calculate_sum(uint16_t *buffer, size_t len)
   if (len > 0) {
     cksum += (*reinterpret_cast<uint8_t*>(buffer)) << 8;
   }
-  
+
   while (cksum >> 16) {
     cksum = (cksum & 0xFFFF) + (cksum >> 16);
   }
@@ -869,4 +872,3 @@ static uint16_t calculate_sum(uint16_t *buffer, size_t len)
 }
 
 } // End namespace LibFlute
-
