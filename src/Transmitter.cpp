@@ -52,7 +52,9 @@ static void create_udp_pkt( char *udp_buffer, const boost::asio::ip::udp::endpoi
                             const boost::asio::ip::address &local_address );
 static void create_ip_hdr( char *ip_buffer, const boost::asio::ip::udp::endpoint &endpoint, size_t pkt_size,
                            const boost::asio::ip::address &local_address );
-static uint16_t calculate_sum( uint16_t *buffer, size_t len );
+static uint16_t calculate_sum( const uint8_t *buffer, size_t len );
+static void write_uint16_be( uint8_t *buffer, uint16_t value );
+static void write_uint32_be( uint8_t *buffer, uint32_t value );
 
 /*****************************************************************************
  * Transmitter::FileDescription class
@@ -806,69 +808,77 @@ auto Transmitter::start_fdt_repeat_timer() -> void
 
 static void create_udp_pkt(char *udp_buffer, const boost::asio::ip::udp::endpoint &endpoint, const char *data, size_t data_len, const boost::asio::ip::address &local_address)
 {
-  struct udp_pseudo_hdr {
-    in_addr_t source;
-    in_addr_t dest;
-    uint8_t reserved;
-    uint8_t protocol;
-    uint16_t length;
-  } *pseudo_hdr = reinterpret_cast<struct udp_pseudo_hdr*>(udp_buffer - sizeof(*pseudo_hdr));
-  struct udphdr *udp_hdr = reinterpret_cast<struct udphdr*>(udp_buffer);
+  auto *udp_bytes = reinterpret_cast<uint8_t*>(udp_buffer);
+  const auto udp_length = static_cast<uint16_t>(data_len + 8);
+  const auto source_address = local_address.to_v4().to_uint();
+  const auto destination_address = endpoint.address().to_v4().to_uint();
 
-  pseudo_hdr->source = htonl(local_address.to_v4().to_uint());
-  pseudo_hdr->dest = htonl(endpoint.address().to_v4().to_uint());
-  pseudo_hdr->reserved = 0;
-  pseudo_hdr->protocol = endpoint.protocol().protocol();
-  pseudo_hdr->length = htons(data_len + 8);
+  write_uint16_be(udp_bytes, endpoint.port());
+  write_uint16_be(udp_bytes + 2, endpoint.port());
+  write_uint16_be(udp_bytes + 4, udp_length);
+  write_uint16_be(udp_bytes + 6, 0);
+  memcpy(udp_buffer + 8, data, data_len);
 
-  udp_hdr->uh_sport = htons(endpoint.port());
-  udp_hdr->uh_dport = udp_hdr->uh_sport;
-  udp_hdr->uh_ulen = pseudo_hdr->length;
-  udp_hdr->uh_sum = 0;
-  memcpy(udp_buffer+8, data, data_len);
+  std::vector<uint8_t> checksum_bytes(12 + udp_length);
+  write_uint32_be(checksum_bytes.data(), source_address);
+  write_uint32_be(checksum_bytes.data() + 4, destination_address);
+  checksum_bytes[8] = 0;
+  checksum_bytes[9] = endpoint.protocol().protocol();
+  write_uint16_be(checksum_bytes.data() + 10, udp_length);
+  memcpy(checksum_bytes.data() + 12, udp_bytes, udp_length);
 
-  udp_hdr->uh_sum = calculate_sum(reinterpret_cast<uint16_t*>(pseudo_hdr), data_len + 8 + 12);
+  write_uint16_be(udp_bytes + 6, calculate_sum(checksum_bytes.data(), checksum_bytes.size()));
 }
 
 static void create_ip_hdr(char *ip_buffer, const boost::asio::ip::udp::endpoint &endpoint, size_t pkt_size, const boost::asio::ip::address &local_address)
 {
-  struct iphdr *ip_hdr = reinterpret_cast<struct iphdr*>(ip_buffer);
+  auto *ip_bytes = reinterpret_cast<uint8_t*>(ip_buffer);
 
-  ip_hdr->version = IPVERSION;
-  ip_hdr->ihl = 5; // 20 bytes
-  ip_hdr->tos = 0;
-  ip_hdr->tot_len = htons(pkt_size);
-  ip_hdr->id = 0;
-  ip_hdr->frag_off = 0; // not fragmenting
-  ip_hdr->ttl = 63; // TTL 63 hops
-  ip_hdr->protocol = endpoint.protocol().protocol();
-  ip_hdr->check = 0;
-  ip_hdr->saddr = htonl(local_address.to_v4().to_uint());
-  ip_hdr->daddr = htonl(endpoint.address().to_v4().to_uint());
-
-  ip_hdr->check = calculate_sum(reinterpret_cast<uint16_t*>(ip_hdr), 20);
+  memset(ip_bytes, 0, 20);
+  ip_bytes[0] = 0x45; // IPv4, 20-byte header
+  ip_bytes[1] = 0;
+  write_uint16_be(ip_bytes + 2, static_cast<uint16_t>(pkt_size));
+  write_uint16_be(ip_bytes + 4, 0);
+  write_uint16_be(ip_bytes + 6, 0);
+  ip_bytes[8] = 63;
+  ip_bytes[9] = endpoint.protocol().protocol();
+  write_uint32_be(ip_bytes + 12, local_address.to_v4().to_uint());
+  write_uint32_be(ip_bytes + 16, endpoint.address().to_v4().to_uint());
+  write_uint16_be(ip_bytes + 10, calculate_sum(ip_bytes, 20));
 }
 
-static uint16_t calculate_sum(uint16_t *buffer, size_t len)
+static uint16_t calculate_sum(const uint8_t *buffer, size_t len)
 {
   uint32_t cksum = 0;
 
   while (len > 1) {
-    cksum += ntohs(*buffer);
+    cksum += (static_cast<uint32_t>(buffer[0]) << 8) | static_cast<uint32_t>(buffer[1]);
     len -= 2;
-    buffer++;
+    buffer += 2;
   }
   if (len > 0) {
-    cksum += (*reinterpret_cast<uint8_t*>(buffer)) << 8;
+    cksum += static_cast<uint32_t>(buffer[0]) << 8;
   }
 
   while (cksum >> 16) {
     cksum = (cksum & 0xFFFF) + (cksum >> 16);
   }
 
-  uint16_t result = htons(static_cast<uint16_t>(~cksum));
+  return static_cast<uint16_t>(~cksum);
+}
 
-  return result;
+static void write_uint16_be(uint8_t *buffer, uint16_t value)
+{
+  buffer[0] = static_cast<uint8_t>((value >> 8) & 0xFF);
+  buffer[1] = static_cast<uint8_t>(value & 0xFF);
+}
+
+static void write_uint32_be(uint8_t *buffer, uint32_t value)
+{
+  buffer[0] = static_cast<uint8_t>((value >> 24) & 0xFF);
+  buffer[1] = static_cast<uint8_t>((value >> 16) & 0xFF);
+  buffer[2] = static_cast<uint8_t>((value >> 8) & 0xFF);
+  buffer[3] = static_cast<uint8_t>(value & 0xFF);
 }
 
 } // End namespace LibFlute

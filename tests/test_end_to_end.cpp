@@ -454,12 +454,12 @@ namespace
 
         if (options.tunneled)
         {
-            ASSERT_TRUE(tunnel_runtime.stats.error.empty()) << tunnel_runtime.stats.error;
             tunnel_runtime.stop_requested.store(true);
             if (tunnel_runtime.thread.joinable())
             {
                 tunnel_runtime.thread.join();
             }
+            ASSERT_TRUE(tunnel_runtime.stats.error.empty()) << tunnel_runtime.stats.error;
         }
 
         ASSERT_EQ(transmitted_ready, std::future_status::ready);
