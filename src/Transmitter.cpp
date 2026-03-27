@@ -696,7 +696,7 @@ auto Transmitter::file_transmitted(uint32_t toi) -> void
     }
   }
 
-  if (_deactivate_when_files_done && !_has_queued_transmissions()) {
+  if (_deactivate_when_all_files_sent && !_has_queued_transmissions()) {
     _complete_deactivation();
   }
 }
@@ -783,7 +783,7 @@ auto Transmitter::send_next_packet() -> void
 
 auto Transmitter::activate() -> void
 {
-  _deactivate_when_files_done = false;
+  _deactivate_when_all_files_sent = false;
   if (!_active) {
     _active = true;
     start_fdt_repeat_timer();
@@ -795,7 +795,7 @@ auto Transmitter::deactivate(bool finish_file_transmissions) -> void
 {
   if (_active) {
     if (finish_file_transmissions && _has_queued_transmissions()) {
-      _deactivate_when_files_done = true;
+      _deactivate_when_all_files_sent = true;
       return;
     }
 
@@ -805,7 +805,7 @@ auto Transmitter::deactivate(bool finish_file_transmissions) -> void
 
 auto Transmitter::_complete_deactivation() -> void
 {
-  _deactivate_when_files_done = false;
+  _deactivate_when_all_files_sent = false;
   _active = false;
   _fdt_timer.cancel();
   _send_timer.cancel();

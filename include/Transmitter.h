@@ -633,7 +633,7 @@ namespace LibFlute {
       boost::asio::ip::address _tunnel_local_address;
 
       bool _active;
-      bool _deactivate_when_files_done = false;
+      bool _deactivate_when_all_files_sent = false;
   };
 
 } // end namespace LibFlute
