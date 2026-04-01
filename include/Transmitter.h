@@ -381,9 +381,10 @@ namespace LibFlute {
           short port, uint64_t tsi, unsigned short mtu,
           uint32_t rate_limit,
           boost::asio::io_context& io_context,
-          const std::optional<boost::asio::ip::udp::endpoint> &tunnel_endpoint = std::nullopt,
+          const std::optional<boost::asio::ip::udp::endpoint>& tunnel_endpoint = std::nullopt,
           FdtNamespace fdt_namespace = FileDeliveryTable::FDT_NS_NONE,
-          bool active = true);
+          bool active = true,
+          const std::optional<std::string>& source_address = std::nullopt);
 
      /**
       *  Default destructor.
@@ -506,6 +507,29 @@ namespace LibFlute {
      /**@}*/
 
      /**
+      * Get the optional source address for the FLUTE session
+      *
+      * @return The optional source address being used.
+      */
+      const std::optional<boost::asio::ip::address> &source_address() const { return _source_address; };
+
+     /**@{*/
+     /**
+      * Set the source address for FLUTE session
+      *
+      * Sets the optional source address to use for FLUTE session packets. If the UDP Tunnel Address is not set then the outgoing
+      * socket will be bound to this address, if set. When a UDP Tunnel Address is set then this provides the source address for
+      * encapsulated packets. If the source address is not set then a local address will be selected automatically.
+      *
+      * @param source The IP source address to use for FLUTE packets.
+      *
+      * @return This Transmitter object.
+      */
+      Transmitter &source_address(const std::optional<boost::asio::ip::address> &source);
+      Transmitter &source_address(std::optional<boost::asio::ip::address> &&source);
+     /**@}*/
+
+     /**
       *  Enable IPSEC ESP encryption of FLUTE payloads.
       *
       *  @param spi Security Parameter Index value to use
@@ -601,6 +625,7 @@ namespace LibFlute {
 
       void handle_send_to(const boost::system::error_code& error);
       boost::asio::ip::udp::endpoint _endpoint;
+      std::optional<boost::asio::ip::address> _source_address;
       boost::asio::ip::udp::socket _socket;
       boost::asio::io_context& _io_context;
       boost::asio::deadline_timer _send_timer;
