@@ -456,13 +456,13 @@ void Transmitter::FileDescription::_calculate_file_entry()
  * Transmitter class
  *****************************************************************************/
 
-Transmitter::Transmitter ( const std::string& address, short port,
+Transmitter::Transmitter ( const std::string& destination_address, short port,
                            uint64_t tsi, unsigned short mtu, uint32_t rate_limit,
                            boost::asio::io_context& io_context,
                            const std::optional<boost::asio::ip::udp::endpoint> &tunnel_endpoint,
                            Transmitter::FdtNamespace fdt_namespace, bool active,
                            const std::optional<std::string> &source_address )
-    : _endpoint(boost::asio::ip::make_address(address), port)
+    : _endpoint(boost::asio::ip::make_address(destination_address), port)
     , _source_address()
     , _socket(io_context, _endpoint.protocol())
     , _io_context(io_context)
@@ -472,7 +472,7 @@ Transmitter::Transmitter ( const std::string& address, short port,
     , _mtu(mtu)
     , _files()
     , _files_mutex()
-    , _mcast_address(address)
+    , _mcast_address(destination_address)
     , _rate_limit(rate_limit)
     , _tunnel_endpoint(tunnel_endpoint)
     , _tunnel_local_address()
@@ -582,12 +582,18 @@ auto Transmitter::endpoint(boost::asio::ip::udp::endpoint &&destination) -> Tran
 auto Transmitter::source_address(const std::optional<boost::asio::ip::address> &source_address) -> Transmitter&
 {
   _source_address = source_address;
+  if (_source_address && !_tunnel_endpoint) {
+    _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
+  }
   return *this;
 }
 
 auto Transmitter::source_address(std::optional<boost::asio::ip::address> &&source_address) -> Transmitter&
 {
   _source_address = std::move(source_address);
+  if (_source_address && !_tunnel_endpoint) {
+    _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
+  }
   return *this;
 }
 
