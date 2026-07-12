@@ -263,7 +263,20 @@ auto LibFlute::Receiver::handle_tunnel_receive_from(const boost::system::error_c
   }
   else
   {
-    spdlog::error("tunnel receive_from error: {}", error.message());
+    // BUG FIX (found live, 2026-08-11): this used to just log and return, never re-arming --
+    // a single transient socket error (e.g. an ICMP port-unreachable surfacing as a UDP
+    // socket error on a subsequent read, confirmed live with the raw-capture-relay's
+    // loopback sendto() path) permanently killed tunnel reception for the rest of the
+    // process's life, with no further log output and no way to recover short of restarting
+    // rt-mbs-client. operation_aborted is the one error that means "don't re-arm" (this
+    // Receiver, or its socket, is being torn down -- re-arming here would race the
+    // destructor); every other error is presumed transient and worth retrying.
+    if (error != boost::asio::error::operation_aborted) {
+      spdlog::error("tunnel receive_from error: {} -- re-arming", error.message());
+      arm_tunnel_receive();
+    } else {
+      spdlog::error("tunnel receive_from error: {}", error.message());
+    }
   }
 }
 
@@ -284,7 +297,14 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
   }
   else
   {
-    spdlog::error("receive_from error: {}", error.message());
+    // BUG FIX: see the matching NOTE in handle_tunnel_receive_from() -- same "never re-arms
+    // on error" bug, same fix (re-arm on anything except operation_aborted).
+    if (error != boost::asio::error::operation_aborted) {
+      spdlog::error("receive_from error: {} -- re-arming", error.message());
+      arm_receive();
+    } else {
+      spdlog::error("receive_from error: {}", error.message());
+    }
   }
 }
 
