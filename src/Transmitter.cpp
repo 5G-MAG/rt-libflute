@@ -926,3 +926,4 @@ static uint16_t calculate_sum(uint16_t *buffer, size_t len)
 }
 
 } // End namespace LibFlute
+
