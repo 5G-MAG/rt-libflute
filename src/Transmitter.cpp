@@ -794,9 +794,12 @@ auto Transmitter::activate() -> void
 auto Transmitter::deactivate(bool finish_file_transmissions) -> void
 {
   if (_active) {
-    if (finish_file_transmissions && _has_queued_transmissions()) {
-      _deactivate_when_all_files_sent = true;
-      return;
+    if (finish_file_transmissions) {
+      std::lock_guard guard(_files_mutex);
+      if (!_files.empty()) {
+        _deactivate_when_all_files_sent = true;
+        return;
+      }
     }
 
     _complete_deactivation();

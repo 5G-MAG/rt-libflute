@@ -17,6 +17,7 @@
 #pragma once
 #include <boost/asio.hpp>
 #include <boost/bind/bind.hpp>
+#include <atomic>
 #include <chrono>
 #include <queue>
 #include <string>
@@ -632,8 +633,8 @@ namespace LibFlute {
       std::optional<boost::asio::ip::udp::endpoint> _tunnel_endpoint = std::nullopt;
       boost::asio::ip::address _tunnel_local_address;
 
-      bool _active;
-      bool _deactivate_when_all_files_sent = false;
+      std::atomic<bool> _active;
+      std::atomic<bool> _deactivate_when_all_files_sent = false;
   };
 
 } // end namespace LibFlute
