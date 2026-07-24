@@ -456,12 +456,14 @@ void Transmitter::FileDescription::_calculate_file_entry()
  * Transmitter class
  *****************************************************************************/
 
-Transmitter::Transmitter ( const std::string& address, short port,
+Transmitter::Transmitter ( const std::string& destination_address, short port,
                            uint64_t tsi, unsigned short mtu, uint32_t rate_limit,
                            boost::asio::io_context& io_context,
                            const std::optional<boost::asio::ip::udp::endpoint> &tunnel_endpoint,
-                           Transmitter::FdtNamespace fdt_namespace, bool active )
-    : _endpoint(boost::asio::ip::make_address(address), port)
+                           Transmitter::FdtNamespace fdt_namespace, bool active,
+                           const std::optional<std::string> &source_address )
+    : _endpoint(boost::asio::ip::make_address(destination_address), port)
+    , _source_address()
     , _socket(io_context, _endpoint.protocol())
     , _io_context(io_context)
     , _send_timer(io_context)
@@ -470,12 +472,15 @@ Transmitter::Transmitter ( const std::string& address, short port,
     , _mtu(mtu)
     , _files()
     , _files_mutex()
-    , _mcast_address(address)
+    , _mcast_address(destination_address)
     , _rate_limit(rate_limit)
     , _tunnel_endpoint(tunnel_endpoint)
     , _tunnel_local_address()
     , _active(active)
 {
+  if (source_address) {
+    _source_address = boost::asio::ip::make_address(source_address.value());
+  }
   _max_payload = mtu -
     20 - // IPv4 header
      8 - // UDP header
@@ -493,6 +498,10 @@ Transmitter::Transmitter ( const std::string& address, short port,
 
   _socket.set_option(boost::asio::ip::multicast::enable_loopback(true));
   _socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
+
+  if (_source_address && !_tunnel_endpoint) {
+    _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
+  }
 
   _fec_oti = FecOti{
     .encoding_id = FecScheme::CompactNoCode,
@@ -567,6 +576,24 @@ auto Transmitter::endpoint(const boost::asio::ip::udp::endpoint &destination) ->
 auto Transmitter::endpoint(boost::asio::ip::udp::endpoint &&destination) -> Transmitter&
 {
   _endpoint = std::move(destination);
+  return *this;
+}
+
+auto Transmitter::source_address(const std::optional<boost::asio::ip::address> &source_address) -> Transmitter&
+{
+  _source_address = source_address;
+  if (_source_address && !_tunnel_endpoint) {
+    _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
+  }
+  return *this;
+}
+
+auto Transmitter::source_address(std::optional<boost::asio::ip::address> &&source_address) -> Transmitter&
+{
+  _source_address = std::move(source_address);
+  if (_source_address && !_tunnel_endpoint) {
+    _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
+  }
   return *this;
 }
 
@@ -738,8 +765,8 @@ auto Transmitter::send_next_packet() -> void
         send_endpoint = _tunnel_endpoint.value();
         data_size = packet->size() + 20 /* IP header */ + 8 /* UDP header */;
         data = new char[data_size];
-        create_udp_pkt(data+20, _endpoint, packet->data(), packet->size(), _tunnel_local_address);
-        create_ip_hdr(data, _endpoint, data_size, _tunnel_local_address);
+        create_udp_pkt(data+20, _endpoint, packet->data(), packet->size(), _source_address?_source_address.value():_tunnel_local_address);
+        create_ip_hdr(data, _endpoint, data_size, _source_address?_source_address.value():_tunnel_local_address);
       } else {
         send_endpoint = _endpoint;
         data = packet->data();
