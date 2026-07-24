@@ -90,19 +90,22 @@ TEST(TransmitterLifecycleTest, DeferredDeactivationDrainsQueuedFilesAndStopsFutu
 
   std::promise<void> first_completion_promise;
   std::promise<void> second_completion_promise;
+  std::promise<void> lifecycle_settled_promise;
   auto first_completion = first_completion_promise.get_future();
   auto second_completion = second_completion_promise.get_future();
+  auto lifecycle_settled = lifecycle_settled_promise.get_future();
 
   tx.register_completion_callback(
       [&](const uint32_t toi) {
         if (toi == 1) {
           first_completion_promise.set_value();
+          boost::asio::post(io, [&lifecycle_settled_promise]() {
+            lifecycle_settled_promise.set_value();
+          });
         } else if (toi == 2) {
           second_completion_promise.set_value();
         }
       });
-
-  std::thread io_thread([&io]() { io.run(); });
 
   const std::vector<char> first_payload{'f', 'i', 'r', 's', 't'};
   const std::vector<char> second_payload{'s', 'e', 'c', 'o', 'n', 'd'};
@@ -113,7 +116,11 @@ TEST(TransmitterLifecycleTest, DeferredDeactivationDrainsQueuedFilesAndStopsFutu
 
   EXPECT_EQ(tx.send(first_file), 1);
   tx.deactivate(true);
+  tx.activate();
+
+  std::thread io_thread([&io]() { io.run(); });
   EXPECT_EQ(first_completion.wait_for(2s), std::future_status::ready);
+  EXPECT_EQ(lifecycle_settled.wait_for(2s), std::future_status::ready);
 
   EXPECT_EQ(tx.send(second_file), 2);
   EXPECT_EQ(second_completion.wait_for(250ms), std::future_status::timeout);
