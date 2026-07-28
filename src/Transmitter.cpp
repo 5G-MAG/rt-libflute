@@ -236,6 +236,17 @@ size_t Transmitter::FileDescription::data_length()
   return _data_length;
 }
 
+void Transmitter::FileDescription::_reset_toi()
+{
+  // Remembers the TOI being vacated so Transmitter::send() can remove its now-stale FDT entry
+  // when it assigns a new one -- without this, a FileDescription whose content genuinely
+  // changes (as opposed to being resent unchanged) leaves the FDT entry for its previous TOI
+  // orphaned forever, since nothing else ever points at that old TOI again to clean it up.
+  // The FDT grows without bound as a result, one orphaned entry per content change.
+  if (_file_entry.toi != 0) _previous_toi = _file_entry.toi;
+  _file_entry.toi = 0;
+}
+
 Transmitter::FileDescription &Transmitter::FileDescription::set_compression(
 								Transmitter::FileDescription::CompressionAlgorithm compression)
 {
@@ -253,7 +264,7 @@ Transmitter::FileDescription &Transmitter::FileDescription::set_compression(
       break;
     }
     /* change in compression will change transmitted data, reset the TOI */
-    _file_entry.toi = 0;
+    _reset_toi();
     _calculate_file_entry();
   }
 
@@ -273,7 +284,7 @@ Transmitter::FileDescription &Transmitter::FileDescription::set_content(const st
     _free_file_data();
     _attach_file(filename);
     /* Assume a change of filename changes the contents too and zero the TOI */
-    _file_entry.toi = 0;
+    _reset_toi();
     _calculate_file_entry();
   }
 
@@ -287,12 +298,12 @@ Transmitter::FileDescription &Transmitter::FileDescription::set_content(const ch
     /* data area has changed in some way, do we need to reset the TOI? */
     if (_data_length != data_length) {
       /* data length has changed, reset the TOI */
-      _file_entry.toi = 0;
+      _reset_toi();
     } else if (data) {
       if (!_data) {
 	if (data_length) {
           /* data being added, reset the TOI */
-          _file_entry.toi = 0;
+          _reset_toi();
         }
       } else if (data_length) {
         /* had data before and have new data now, but are they the same? */
@@ -300,12 +311,12 @@ Transmitter::FileDescription &Transmitter::FileDescription::set_content(const ch
         MD5(reinterpret_cast<const unsigned char*>(data), data_length, md5);
         if (_file_entry.content_md5 != base64_encode(md5, sizeof(md5))) {
           /* data contents are different, reset TOI */
-          _file_entry.toi = 0;
+          _reset_toi();
         }
       }
     } else if (_data) {
       /* data being removed, reset the TOI */
-      _file_entry.toi = 0;
+      _reset_toi();
     }
 
     _free_file_data();
@@ -686,6 +697,14 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
   file_description->tsi(_tsi);
   bool is_resend = (file_description->toi() != 0);
   if (file_description->toi() == 0) {
+    if (file_description->_previous_toi != 0) {
+      // This FileDescription's content changed since its last send (set_content()/
+      // set_compression() zeroed its TOI for exactly this reason) -- the FDT entry for its
+      // old TOI is otherwise never revisited once a new TOI is assigned below, and would sit
+      // in the FDT forever, growing it by one stale entry per content change.
+      _fdt->remove(file_description->_previous_toi);
+      file_description->_previous_toi = 0;
+    }
     file_description->toi(_toi);
     _toi++;
     if (_toi == 0) _toi = 1; // clamp to >= 1 in case it wraps

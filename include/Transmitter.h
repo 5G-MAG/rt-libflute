@@ -347,6 +347,7 @@ namespace LibFlute {
         void _attach_file(const std::string &filename);
         void _free_file_data();
         void _calculate_file_entry();
+        void _reset_toi(); //< Zero the TOI for reassignment, remembering the old value in _previous_toi
 
         std::optional<uint64_t> _tsi; //< The last TSI this file was associated with
         FileDeliveryTable::FileEntry _file_entry; //< The FDT File entry values to use
@@ -355,6 +356,9 @@ namespace LibFlute {
         int _file_handle;                         //< The file handle of the open _filename
         const char *_data;                        //< The uncompressed file contents (may be mapped file)
         size_t _data_length;                      //< The length of the uncompressed file contents
+        uint32_t _previous_toi = 0;                //< TOI this description held before a content/compression
+                                                    //< change zeroed it for reassignment, so the Transmitter can
+                                                    //< remove that now-orphaned FDT entry; 0 once consumed
       };
 
      /**
