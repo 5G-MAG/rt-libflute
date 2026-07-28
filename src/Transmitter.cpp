@@ -141,7 +141,7 @@ Transmitter::FileDescription::FileDescription(const Transmitter::FileDescription
     // copy the file contents into a new memory block
     char *data = new char[_data_length];
     _data = data;
-    memcpy(_data, other._data, _data_length);
+    memcpy(data, other._data, _data_length);
 #endif
   }
 }
@@ -186,7 +186,7 @@ Transmitter::FileDescription &Transmitter::FileDescription::operator=(const Tran
     // copy the file contents into a new memory block
     char *data = new char[_data_length];
     _data = data;
-    memcpy(_data, other._data, _data_length);
+    memcpy(data, other._data, _data_length);
 #endif
   }
 
@@ -417,7 +417,10 @@ void Transmitter::FileDescription::_attach_file(const std::string &filename)
   // Load the file contents into memory
   char *data = new char[_data_length];
   _data = data;
-  read(_file_handle, data, _data_length);
+  ssize_t nread = read(_file_handle, data, _data_length);
+  if (nread < 0 || static_cast<size_t>(nread) != _data_length) {
+    throw std::system_error(errno, std::generic_category(), "Could not read the file contents");
+  }
   close(_file_handle);
   _file_handle = -1;
 #endif
@@ -804,7 +807,7 @@ auto Transmitter::send_next_packet() -> void
   }
   if (_active) {
     if (!bytes_queued) {
-      _send_timer.expires_from_now(boost::posix_time::milliseconds(10));
+      _send_timer.expires_after(std::chrono::milliseconds(10));
       _send_timer.async_wait( boost::bind(&Transmitter::send_next_packet, this));
     } else {
       if (_rate_limit == 0) {
@@ -813,7 +816,7 @@ auto Transmitter::send_next_packet() -> void
         auto send_duration = ((bytes_queued * 8.0) / (double)_rate_limit/1000.0) * 1000.0 * 1000.0;
         spdlog::trace("Rate limiter: queued {} bytes, limit {} kbps, next send in {} us",
             bytes_queued, _rate_limit, send_duration);
-        _send_timer.expires_from_now(boost::posix_time::microseconds(
+        _send_timer.expires_after(std::chrono::microseconds(
               static_cast<int>(ceil(send_duration))));
         _send_timer.async_wait( boost::bind(&Transmitter::send_next_packet, this));
       }
@@ -859,7 +862,7 @@ auto Transmitter::_complete_deactivation() -> void
 
 auto Transmitter::start_fdt_repeat_timer() -> void
 {
-    _fdt_timer.expires_from_now(boost::posix_time::seconds(_fdt_repeat_interval));
+    _fdt_timer.expires_after(std::chrono::seconds(_fdt_repeat_interval));
     _fdt_timer.async_wait( boost::bind(&Transmitter::fdt_send_tick, this, boost::placeholders::_1));
 }
 
