@@ -682,6 +682,7 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
 
   // Set the TSI and TOI for the FileDescription
   file_description->tsi(_tsi);
+  bool is_resend = (file_description->toi() != 0);
   if (file_description->toi() == 0) {
     file_description->toi(_toi);
     _toi++;
@@ -695,7 +696,18 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
   auto file = std::make_shared<File>(file_description);
   {
     std::lock_guard<std::mutex> guard(_files_mutex);
-    _files.insert({file_description->toi(), file});
+    // A reused (carousel-repeat) FileDescription keeps the same TOI, but map::insert() is a
+    // no-op if that key is already present -- silently keeping the stale File and discarding
+    // the just-built one with the updated content. Use assignment so a resend actually
+    // replaces it.
+    _files[file_description->toi()] = file;
+  }
+  if (is_resend) {
+    // Without this, add() below unconditionally appends another <File> entry for the same
+    // TOI on every single carousel repetition, without ever removing the previous one (the
+    // FDT has no other dedup by TOI) -- the FDT grows without bound the longer the object
+    // stays in the carousel, and eventually becomes too large to serialise/parse correctly.
+    _fdt->remove(file_description->toi());
   }
   _fdt->add(file->meta());
   send_fdt();
