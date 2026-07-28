@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
+#include <stdexcept>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -28,7 +29,7 @@ auto LibFlute::EncodingSymbol::from_payload(char* encoded_data, size_t data_len,
   std::vector<EncodingSymbol> symbols;
 
   if (encoding != ContentEncoding::NONE && encoding != ContentEncoding::GZIP) {
-    throw "Only unencoded or gzipped content is supported";
+    throw std::runtime_error("Only unencoded or gzipped content is supported");
   }
 
   if (fec_oti.encoding_id == FecScheme::CompactNoCode) {
@@ -38,7 +39,7 @@ auto LibFlute::EncodingSymbol::from_payload(char* encoded_data, size_t data_len,
     encoded_data += 2;
     data_len -= 4;
   } else {
-    throw "Only compact no-code FEC is supported";
+    throw std::runtime_error("Only compact no-code FEC is supported");
   }
 
   int nof_symbols = std::ceil((float)data_len / (float)fec_oti.encoding_symbol_length);
@@ -66,7 +67,7 @@ auto LibFlute::EncodingSymbol::to_payload(const std::vector<EncodingSymbol>& sym
     len += 4;
     data_len -= 4;
   } else {
-    throw "Only compact no-code FEC is supported";
+    throw std::runtime_error("Only compact no-code FEC is supported");
   }
 
   for (const auto& symbol : symbols) {

@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
+#include <stdexcept>
 #include <string>
 #include <cstring>
 #include <iostream>
@@ -94,31 +95,28 @@ namespace LibFlute::IpSec {
     xsinfo.family = AF_INET;
     xsinfo.mode = XFRM_MODE_TRANSPORT;
 
+    std::vector<char> algo_buf(sizeof(struct xfrm_algo) + 512, 0);
+    auto* algo = reinterpret_cast<struct xfrm_algo*>(algo_buf.data());
 
     std::vector<char> binary_key;
     for (unsigned int i = 0; i < key.length(); i += 2) {
       binary_key.emplace_back((char)strtol(key.substr(i, 2).c_str(), nullptr, 16));
     }
     if (binary_key.size() > 512) {
-      throw "Key is too long";
+      throw std::runtime_error("Key is too long");
     }
-    size_t algo_size = sizeof(struct xfrm_algo) + binary_key.size();
-    void *algo_mem = std::malloc(algo_size);
-    struct xfrm_algo *algo = new(algo_mem) struct xfrm_algo;
-
     strcpy(algo->alg_name, "aes");
     algo->alg_key_len = binary_key.size() * 8;
     memcpy(algo->alg_key, &binary_key[0], binary_key.size());
 
     msg = nlmsg_alloc_simple(XFRM_MSG_NEWSA, 0);
     nlmsg_append(msg, &xsinfo, sizeof(xsinfo), NLMSG_ALIGNTO);
-    nla_put(msg, XFRMA_ALG_CRYPT, algo_size, algo);
+    nla_put(msg, XFRMA_ALG_CRYPT, algo_buf.size(), algo);
 
     sk = nl_socket_alloc();
     nl_connect(sk, NETLINK_XFRM);
     nl_send_auto(sk, msg);
     nlmsg_free(msg);
-    std::free(algo);
   }
 
   void enable_esp(uint32_t spi, const std::string& dest_address, Direction direction, const std::string& key)

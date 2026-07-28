@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
+#include <stdexcept>
 #include <cstring>
 #include <iostream>
 #include <arpa/inet.h>
@@ -21,23 +22,23 @@
 LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
 {
   if (len < 4) {
-    throw "Packet too short";
+    throw std::runtime_error("Packet too short");
   }
 
   std::memcpy(&_lct_header, data, 4);
   if (_lct_header.version != 1) {
-    throw "Unsupported LCT version";
+    throw std::runtime_error("Unsupported LCT version");
   }
 
   char* hdr_ptr = data + 4;
   if (_lct_header.congestion_control_flag != 0) {
-    throw "Unsupported CCI field length";
+    throw std::runtime_error("Unsupported CCI field length");
   }
   // [TODO] read CCI
   hdr_ptr += 4;
 
   if (_lct_header.half_word_flag == 0 && _lct_header.tsi_flag == 0) {
-    throw "TSI field not present";
+    throw std::runtime_error("TSI field not present");
   }
   auto tsi_shift = 0;
   if(_lct_header.half_word_flag == 1) {
@@ -51,7 +52,7 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
   } 
 
   if ( _lct_header.close_session_flag == 0 && _lct_header.half_word_flag == 0 && _lct_header.toi_flag == 0) {
-    throw "TOI field not present";
+    throw std::runtime_error("TOI field not present");
   }
   auto toi_shift = 0;
   if(_lct_header.half_word_flag == 1) {
@@ -67,7 +68,7 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
         break;
       case 2:
         if (toi_shift > 0) {
-          throw "TOI fields over 64 bits in length are not supported";
+          throw std::runtime_error("TOI fields over 64 bits in length are not supported");
         } else {
           _toi = ntohl(*(uint32_t*)hdr_ptr);
           hdr_ptr += 4;
@@ -76,13 +77,13 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
         }
         break;
       default:
-        throw "TOI fields over 64 bits in length are not supported";
+        throw std::runtime_error("TOI fields over 64 bits in length are not supported");
   } 
 
   if (_lct_header.codepoint == 0) {
     _fec_oti.encoding_id = FecScheme::CompactNoCode;
   } else {
-    throw "Only Compact No-Code FEC is supported";
+    throw std::runtime_error("Only Compact No-Code FEC is supported");
   }
 
   auto expected_header_len = 2 +
@@ -105,7 +106,7 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
     }
 
     if (ext_len > ext_header_len) {
-      throw "Header extension length exceeds remaining header length";
+      throw std::runtime_error("Header extension length exceeds remaining header length");
     }
 
     switch ((AlcPacket::HeaderExtension)het) {
@@ -117,7 +118,7 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
       case EXT_FTI: {
                       if (_fec_oti.encoding_id == FecScheme::CompactNoCode) {
                         if (hel != 4) {
-                          throw "Invalid length for EXT_FTI header extension";
+                          throw std::runtime_error("Invalid length for EXT_FTI header extension");
                         }
                         _fec_oti.transfer_length = (uint64_t)(ntohs(*(uint16_t*)ext_ptr)) << 32;
                         ext_ptr += 2;
@@ -133,7 +134,7 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
       case EXT_FDT: {
                       uint8_t flute_version = (*ext_ptr & 0xF0) >> 4;
                       if (flute_version > 2) {
-                        throw "Unsupported FLUTE version";
+                        throw std::runtime_error("Unsupported FLUTE version");
                       }
                       _fdt_instance_id =  (*ext_ptr & 0x0F) << 16;
                       ext_ptr++;
@@ -203,9 +204,15 @@ LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_
     hdr_ptr += 1;
     *((uint8_t*)hdr_ptr) = 4; // HEL
     hdr_ptr += 1;
-    *((uint16_t*)hdr_ptr) = htons((_fec_oti.transfer_length & 0x00FF0000) >> 32);
+    // EXT_FTI Transfer Length is a 48-bit field (RFC 5052 Compact No-Code FTI):
+    // high 16 bits then low 32 bits, matching the decoder above
+    // ((hi16 << 32) | lo32). The previous masks (& 0x00FF0000) >> 32 (always 0)
+    // and & 0x0000FFFF (low 16 bits only) truncated the length to 16 bits, so any
+    // object > 64 KB was signalled with a bogus tiny length -> the receiver
+    // under-allocated source blocks and rejected the real symbols.
+    *((uint16_t*)hdr_ptr) = htons(static_cast<uint16_t>((_fec_oti.transfer_length >> 32) & 0xFFFF));
     hdr_ptr += 2;
-    *((uint32_t*)hdr_ptr) = htonl(_fec_oti.transfer_length & 0x0000FFFF);
+    *((uint32_t*)hdr_ptr) = htonl(static_cast<uint32_t>(_fec_oti.transfer_length & 0xFFFFFFFF));
     hdr_ptr += 4;
     hdr_ptr += 2; // reserved
     *((uint16_t*)hdr_ptr) = htons(_fec_oti.encoding_symbol_length);

@@ -647,8 +647,8 @@ namespace LibFlute {
       std::optional<boost::asio::ip::address> _source_address;
       boost::asio::ip::udp::socket _socket;
       boost::asio::io_context& _io_context;
-      boost::asio::deadline_timer _send_timer;
-      boost::asio::deadline_timer _fdt_timer;
+      boost::asio::steady_timer _send_timer;
+      boost::asio::steady_timer _fdt_timer;
 
       uint64_t _tsi;
       uint16_t _mtu;

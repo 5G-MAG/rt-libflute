@@ -14,6 +14,8 @@
 // under the License.
 //
 #include <cstdio>
+#include <cstring>
+#include <cerrno>
 #include <iostream>
 #include <argp.h>
 
@@ -173,7 +175,20 @@ auto main(int argc, char **argv) -> int {
 
         spdlog::info("{} (TOI {}) has been received",
                      out_file, file->meta().toi);
+        // content_location is a URL path (e.g. "out/u/bbb/qxa/manifest.m3u8")
+        // and its directory component doesn't necessarily exist relative to
+        // the current working directory - create it first, and don't
+        // dereference a null FILE* if fopen() still fails (e.g. content
+        // path with characters invalid in a filename, such as a "?query").
+        std::filesystem::path out_path(out_file);
+        if (out_path.has_parent_path()) {
+          std::filesystem::create_directories(out_path.parent_path());
+        }
         FILE *fd = fopen(out_file.c_str(), "wb");
+        if (!fd) {
+          spdlog::warn("Failed to open {} for writing: {}", out_file, strerror(errno));
+          return;
+        }
         fwrite(file->buffer(), 1, file->length(), fd);
         fclose(fd);
       });
