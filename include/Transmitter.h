@@ -623,20 +623,15 @@ namespace LibFlute {
        * If the Transmitter is currently active then the FLUTE stream is halted and the state is changed to deactivated. Sending of
        * packets will be halted until the activate() method is called. Note that this will pause File transmission part way through
        * if a File is currently being transmitted.
-       */
-      void deactivate();
-
-      /**
-       * Deactivate the FLUTE session
        *
        * When @a finish_file_transmissions is `true` the Transmitter will remain active until the queued transmissions have
        * completed and will then become inactive. This allows applications to request deactivation without waiting for completion
        * callbacks and checking number_of_files().
        *
-       * @param finish_file_transmissions If `true`, defer deactivation until all queued transmissions complete. If `false`, halt
-       *        transmission immediately.
+       * @param finish_file_transmissions If `true`, defer deactivation until all queued transmissions complete. If `false`
+       *        (default), halt transmission immediately.
        */
-      void deactivate(bool finish_file_transmissions);
+      void deactivate(bool finish_file_transmissions = false);
 
      /**
       * Get number of files currently in queue for sending

@@ -821,11 +821,6 @@ auto Transmitter::activate() -> void
   }
 }
 
-auto Transmitter::deactivate() -> void
-{
-  deactivate(false);
-}
-
 auto Transmitter::deactivate(bool finish_file_transmissions) -> void
 {
   if (_active) {
