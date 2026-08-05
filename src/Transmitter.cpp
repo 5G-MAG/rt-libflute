@@ -722,6 +722,13 @@ auto Transmitter::file_transmitted(uint32_t toi) -> void
       _completion_cb(toi);
     }
   }
+
+  {
+    std::lock_guard<std::mutex> guard(_files_mutex);
+    if (_deactivate_when_all_files_sent && _files.empty()) {
+      _complete_deactivation();
+    }
+  }
 }
 
 auto Transmitter::send_next_packet() -> void
@@ -807,19 +814,37 @@ auto Transmitter::send_next_packet() -> void
 auto Transmitter::activate() -> void
 {
   if (!_active) {
+    _deactivate_when_all_files_sent = false;
     _active = true;
     start_fdt_repeat_timer();
     send_next_packet();
   }
 }
 
-auto Transmitter::deactivate() -> void
+auto Transmitter::deactivate(bool finish_file_transmissions) -> void
 {
   if (_active) {
-    _active = false;
-    _fdt_timer.cancel();
-    _send_timer.cancel();
+    if (finish_file_transmissions) {
+      std::lock_guard<std::mutex> guard(_files_mutex);
+      if (!_files.empty()) {
+        _deactivate_when_all_files_sent = true;
+        return;
+      }
+
+      _complete_deactivation();
+      return;
+    }
+
+    _complete_deactivation();
   }
+}
+
+auto Transmitter::_complete_deactivation() -> void
+{
+  _deactivate_when_all_files_sent = false;
+  _active = false;
+  _fdt_timer.cancel();
+  _send_timer.cancel();
 }
 
 auto Transmitter::start_fdt_repeat_timer() -> void

@@ -17,6 +17,7 @@
 #pragma once
 #include <boost/asio.hpp>
 #include <boost/bind/bind.hpp>
+#include <atomic>
 #include <chrono>
 #include <queue>
 #include <string>
@@ -616,16 +617,21 @@ namespace LibFlute {
       */
       void activate();
 
-     /**
-      * Deactivate the FLUTE session
-      *
-      * If the Transmitter is currently active then the FLUTE stream is halted and the state is changed to deactivated. Sending of
-      * packets will be halted until the activate() method is called. Note that this will pause File transmission part way through
-      * if a File is currently being transmitted. If the application wishes for deactivation once Files have finished sending then
-      * it should only deactivate() when the completion callback is called and number_of_files() equals 0 to ensure all Files have
-      * been completely transmitted.
-      */
-      void deactivate();
+      /**
+       * Deactivate the FLUTE session
+       *
+       * If the Transmitter is currently active then the FLUTE stream is halted and the state is changed to deactivated. Sending of
+       * packets will be halted until the activate() method is called. Note that this will pause File transmission part way through
+       * if a File is currently being transmitted.
+       *
+       * When @a finish_file_transmissions is `true` the Transmitter will remain active until the queued transmissions have
+       * completed and will then become inactive. This allows applications to request deactivation without waiting for completion
+       * callbacks and checking number_of_files().
+       *
+       * @param finish_file_transmissions If `true`, defer deactivation until all queued transmissions complete. If `false`
+       *        (default), halt transmission immediately.
+       */
+      void deactivate(bool finish_file_transmissions = false);
 
      /**
       * Get number of files currently in queue for sending
@@ -639,6 +645,8 @@ namespace LibFlute {
       void send_next_packet();
       void fdt_send_tick(const boost::system::error_code& error);
       void start_fdt_repeat_timer();
+
+      void _complete_deactivation();
 
       void file_transmitted(uint32_t toi);
 
@@ -670,7 +678,8 @@ namespace LibFlute {
       std::optional<boost::asio::ip::udp::endpoint> _tunnel_endpoint = std::nullopt;
       boost::asio::ip::address _tunnel_local_address;
 
-      bool _active;
+      std::atomic<bool> _active;
+      std::atomic<bool> _deactivate_when_all_files_sent = false;
   };
 
 } // end namespace LibFlute
