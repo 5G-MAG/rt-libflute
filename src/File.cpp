@@ -29,6 +29,7 @@
 
 #include "base64.h"
 #include "spdlog/spdlog.h"
+#include "spdlog/fmt/fmt.h"
 #include "Transmitter.h"
 #include "File.h"
 
@@ -150,16 +151,15 @@ auto File::put_symbol( const EncodingSymbol& symbol ) -> void
   // object whose on-air symbol layout exceeds its FDT-declared FEC-OTI -- is
   // dropped and logged by the caller instead of crashing the client.
   if (symbol.source_block_number() >= _source_blocks.size()) {
-    throw std::runtime_error("FLUTE: source block number " + std::to_string(symbol.source_block_number()) +
-                             " out of range (have " + std::to_string(_source_blocks.size()) + " blocks)");
+    throw std::runtime_error(fmt::format("FLUTE: source block number {} out of range (have {} blocks)",
+                                          symbol.source_block_number(), _source_blocks.size()));
   }
 
   SourceBlock& source_block = _source_blocks[ symbol.source_block_number() ];
 
   if (symbol.id() >= source_block.symbols.size()) {
-    throw std::runtime_error("FLUTE: encoding symbol id " + std::to_string(symbol.id()) + " out of range (block " +
-                             std::to_string(symbol.source_block_number()) + " has " +
-                             std::to_string(source_block.symbols.size()) + " symbols)");
+    throw std::runtime_error(fmt::format("FLUTE: encoding symbol id {} out of range (block {} has {} symbols)",
+                                          symbol.id(), symbol.source_block_number(), source_block.symbols.size()));
   }
 
   SourceBlock::Symbol& target_symbol = source_block.symbols[symbol.id()];

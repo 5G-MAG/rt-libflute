@@ -334,6 +334,20 @@ namespace LibFlute {
         FileDescription &toi(uint32_t val) { _file_entry.toi = val; return *this; };
 
        /**
+        * Get the TOI before reset
+        *
+        * @return The TOI as it was before the TOI was reset for file changes. 0 means no previous TOI.
+        */
+        uint32_t previous_toi() const { return _previous_toi; };
+
+       /**
+        * Reset the previous TOI value
+        *
+        * @return this file description
+        */
+        FileDescription &reset_previous_toi() { _previous_toi = 0; return *this; };
+
+       /**
         * Merge the FecOti values
         *
         * Takes any values that are unset in _file_entry.fec_oti from @p fec_oti.
