@@ -697,13 +697,13 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
   file_description->tsi(_tsi);
   bool is_resend = (file_description->toi() != 0);
   if (file_description->toi() == 0) {
-    if (file_description->_previous_toi != 0) {
+    if (file_description->previous_toi() != 0) {
       // This FileDescription's content changed since its last send (set_content()/
       // set_compression() zeroed its TOI for exactly this reason) -- the FDT entry for its
       // old TOI is otherwise never revisited once a new TOI is assigned below, and would sit
       // in the FDT forever, growing it by one stale entry per content change.
-      _fdt->remove(file_description->_previous_toi);
-      file_description->_previous_toi = 0;
+      _fdt->remove(file_description->previous_toi());
+      file_description->reset_previous_toi();
     }
     file_description->toi(_toi);
     _toi++;
