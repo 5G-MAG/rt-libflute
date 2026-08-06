@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project (libflute VERSION 0.12.2)
+project (libflute VERSION 0.12.4)
 
 include(CheckCXXSymbolExists)
 

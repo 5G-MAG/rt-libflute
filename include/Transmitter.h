@@ -17,6 +17,7 @@
 #pragma once
 #include <boost/asio.hpp>
 #include <boost/bind/bind.hpp>
+#include <atomic>
 #include <chrono>
 #include <queue>
 #include <string>
@@ -367,7 +368,20 @@ namespace LibFlute {
      /**
       *  Constructor.
       *
-      *  @param address Target multicast address
+      *  Creates a Transmitter object.
+      *
+      *  If @p tunnel_endpoint is given a value then:
+      *  - @p destination_address is the encapsulated destination IP addresses.
+      *  - If @p source_address has a value then this is used as the encapsulated source IP address, if not then the source
+      *    address of the connection to @p tunnel_endpoint is used.
+      *
+      *  If @p tunnel_endpoint is not given a value then:
+      *  - @p destination_address is the destination address for the connection.
+      *  - If @p source_address has a value then an attempt will be made to bind the local end of the connection to this address.
+      *    If the attempt is unsuccessful then a std::runtime_error exception will be thrown.
+      *
+      *  @param destination_address Target (multicast) address, if @p tunnel_endpoint is given then this is the encapsulated
+      *                             destination IP address
       *  @param port Target port
       *  @param tsi TSI value for the session
       *  @param mtu Path MTU to size FLUTE packets for
@@ -376,14 +390,19 @@ namespace LibFlute {
       *  @param tunnel_endpoint Tunnelling endpoint address (default: no tunnelling)
       *  @param fdt_namespace Which XML namespace to use for the FDT (default: none)
       *  @param active Start as active/inactive FLUTE session (default: active)
+      *  @param source_address Source address (default: automatically assign source address)
+      *
+      *  @throw boost::system::system_error When @p source_address is given a value and @p tunnel_endpoint has no value and the
+      *                            address in @p source_address could not be bound as the local end of the connection.
       */
-      Transmitter( const std::string& address,
+      Transmitter( const std::string& destination_address,
           short port, uint64_t tsi, unsigned short mtu,
           uint32_t rate_limit,
           boost::asio::io_context& io_context,
-          const std::optional<boost::asio::ip::udp::endpoint> &tunnel_endpoint = std::nullopt,
+          const std::optional<boost::asio::ip::udp::endpoint>& tunnel_endpoint = std::nullopt,
           FdtNamespace fdt_namespace = FileDeliveryTable::FDT_NS_NONE,
-          bool active = true);
+          bool active = true,
+          const std::optional<std::string>& source_address = std::nullopt);
 
      /**
       *  Default destructor.
@@ -506,10 +525,35 @@ namespace LibFlute {
      /**@}*/
 
      /**
+      * Get the optional source address for the FLUTE session
+      *
+      * @return The optional source address being used.
+      */
+      const std::optional<boost::asio::ip::address> &source_address() const { return _source_address; };
+
+     /**@{*/
+     /**
+      * Set the source address for FLUTE session
+      *
+      * Sets the optional source address to use for FLUTE session packets. If the UDP Tunnel Address is not set then the outgoing
+      * socket will be bound to this address, if set. When a UDP Tunnel Address is set then this provides the source address for
+      * encapsulated packets. If the source address is not set then a local address will be selected automatically.
+      *
+      * @param source The IP source address to use for FLUTE packets.
+      *
+      * @return This Transmitter object.
+      *
+      * @throw boost::system::system_error If UDP tunnel is not used and the UDP socket cannot be bound to @p source.
+      */
+      Transmitter &source_address(const std::optional<boost::asio::ip::address> &source);
+      Transmitter &source_address(std::optional<boost::asio::ip::address> &&source);
+     /**@}*/
+
+     /**
       *  Enable IPSEC ESP encryption of FLUTE payloads.
       *
       *  @param spi Security Parameter Index value to use
-      *  @param key AES key as a hex string (without leading 0x). Must be an even number of characters long.
+      *  @param aes_key AES key as a hex string (without leading 0x). Must be an even number of characters long.
       */
       void enable_ipsec( uint32_t spi, const std::string& aes_key);
 
@@ -573,16 +617,21 @@ namespace LibFlute {
       */
       void activate();
 
-     /**
-      * Deactivate the FLUTE session
-      *
-      * If the Transmitter is currently active then the FLUTE stream is halted and the state is changed to deactivated. Sending of
-      * packets will be halted until the activate() method is called. Note that this will pause File transmission part way through
-      * if a File is currently being transmitted. If the application wishes for deactivation once Files have finished sending then
-      * it should only deactivate() when the completion callback is called and number_of_files() equals 0 to ensure all Files have
-      * been completely transmitted.
-      */
-      void deactivate();
+      /**
+       * Deactivate the FLUTE session
+       *
+       * If the Transmitter is currently active then the FLUTE stream is halted and the state is changed to deactivated. Sending of
+       * packets will be halted until the activate() method is called. Note that this will pause File transmission part way through
+       * if a File is currently being transmitted.
+       *
+       * When @a finish_file_transmissions is `true` the Transmitter will remain active until the queued transmissions have
+       * completed and will then become inactive. This allows applications to request deactivation without waiting for completion
+       * callbacks and checking number_of_files().
+       *
+       * @param finish_file_transmissions If `true`, defer deactivation until all queued transmissions complete. If `false`
+       *        (default), halt transmission immediately.
+       */
+      void deactivate(bool finish_file_transmissions = false);
 
      /**
       * Get number of files currently in queue for sending
@@ -597,10 +646,13 @@ namespace LibFlute {
       void fdt_send_tick(const boost::system::error_code& error);
       void start_fdt_repeat_timer();
 
+      void _complete_deactivation();
+
       void file_transmitted(uint32_t toi);
 
       void handle_send_to(const boost::system::error_code& error);
       boost::asio::ip::udp::endpoint _endpoint;
+      std::optional<boost::asio::ip::address> _source_address;
       boost::asio::ip::udp::socket _socket;
       boost::asio::io_context& _io_context;
       boost::asio::deadline_timer _send_timer;
@@ -626,7 +678,8 @@ namespace LibFlute {
       std::optional<boost::asio::ip::udp::endpoint> _tunnel_endpoint = std::nullopt;
       boost::asio::ip::address _tunnel_local_address;
 
-      bool _active;
+      std::atomic<bool> _active;
+      std::atomic<bool> _deactivate_when_all_files_sent = false;
   };
 
 } // end namespace LibFlute
