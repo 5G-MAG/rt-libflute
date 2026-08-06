@@ -51,6 +51,8 @@ endif()
 target_sources(flute
   PRIVATE
   src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp src/IpSec.cpp
+  src/fec/GF2LinearSystem.cpp src/fec/RaptorCodec.cpp
+  src/fec/GF256LinearSystem.cpp src/fec/RaptorQCodec.cpp
     utils/base64.cpp
   PUBLIC
     include/Receiver.h include/Transmitter.h include/File.h

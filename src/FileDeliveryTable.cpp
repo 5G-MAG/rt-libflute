@@ -209,6 +209,24 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     _global_fec_oti.max_number_of_encoding_symbols = strtoul(val->Value(), nullptr, 0);
   }
 
+  // Raptor/RaptorQ scheme-specific OTI (RFC 5053 §3.2.3, RFC 6330 §4.2):
+  // Z (source blocks), N (sub-blocks), Al (symbol alignment). Absent for
+  // FecScheme::CompactNoCode.
+  val = root_ns.findAttribute(fdt_instance, "FEC-OTI-Number-Of-Source-Blocks", fdt_ns);
+  if (val != nullptr) {
+    _global_fec_oti.nof_source_blocks = strtoul(val->Value(), nullptr, 0);
+  }
+
+  val = root_ns.findAttribute(fdt_instance, "FEC-OTI-Number-Of-Sub-Blocks", fdt_ns);
+  if (val != nullptr) {
+    _global_fec_oti.nof_sub_blocks = strtoul(val->Value(), nullptr, 0);
+  }
+
+  val = root_ns.findAttribute(fdt_instance, "FEC-OTI-Symbol-Alignment-Parameter", fdt_ns);
+  if (val != nullptr) {
+    _global_fec_oti.symbol_alignment = strtoul(val->Value(), nullptr, 0);
+  }
+
   for (auto file = root_ns.findChildElement(fdt_instance, "File", fdt_ns);
       file != nullptr; file = root_ns.findSiblingElement(file, "File", fdt_ns)) {
 
@@ -289,6 +307,24 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
       max_number_of_encoding_symbols = strtoul(val->Value(), nullptr, 0);
     }
 
+    auto nof_source_blocks = _global_fec_oti.nof_source_blocks;
+    val = file_ns.findAttribute(file, "FEC-OTI-Number-Of-Source-Blocks", fdt_ns);
+    if (val != nullptr) {
+      nof_source_blocks = strtoul(val->Value(), nullptr, 0);
+    }
+
+    auto nof_sub_blocks = _global_fec_oti.nof_sub_blocks;
+    val = file_ns.findAttribute(file, "FEC-OTI-Number-Of-Sub-Blocks", fdt_ns);
+    if (val != nullptr) {
+      nof_sub_blocks = strtoul(val->Value(), nullptr, 0);
+    }
+
+    auto symbol_alignment = _global_fec_oti.symbol_alignment;
+    val = file_ns.findAttribute(file, "FEC-OTI-Symbol-Alignment-Parameter", fdt_ns);
+    if (val != nullptr) {
+      symbol_alignment = strtoul(val->Value(), nullptr, 0);
+    }
+
     auto mbms2012_file_etag = "";
     val = file_ns.findAttribute(file, "File-ETag", mbms2012_ns);
     if (val != nullptr) {
@@ -328,7 +364,10 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
       .transfer_length = transfer_length,
       .encoding_symbol_length = encoding_symbol_length,
       .max_source_block_length = max_source_block_length,
-      .max_number_of_encoding_symbols = max_number_of_encoding_symbols
+      .max_number_of_encoding_symbols = max_number_of_encoding_symbols,
+      .nof_source_blocks = nof_source_blocks,
+      .nof_sub_blocks = nof_sub_blocks,
+      .symbol_alignment = symbol_alignment
     };
 
     FileEntry fe{
@@ -397,6 +436,12 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
   if (_global_fec_oti.instance_id) root->SetAttribute("FEC-OTI-FEC-Instance-ID", (unsigned)_global_fec_oti.instance_id);
   root->SetAttribute("FEC-OTI-Maximum-Source-Block-Length", (unsigned)_global_fec_oti.max_source_block_length);
   root->SetAttribute("FEC-OTI-Encoding-Symbol-Length", (unsigned)_global_fec_oti.encoding_symbol_length);
+  if (_global_fec_oti.encoding_id == FecScheme::Raptor || _global_fec_oti.encoding_id == FecScheme::RaptorQ) {
+    // Raptor/RaptorQ scheme-specific OTI (RFC 5053 §3.2.3, RFC 6330 §4.2)
+    root->SetAttribute("FEC-OTI-Number-Of-Source-Blocks", (unsigned)_global_fec_oti.nof_source_blocks);
+    root->SetAttribute("FEC-OTI-Number-Of-Sub-Blocks", (unsigned)_global_fec_oti.nof_sub_blocks);
+    root->SetAttribute("FEC-OTI-Symbol-Alignment-Parameter", (unsigned)_global_fec_oti.symbol_alignment);
+  }
   root->SetAttribute("xmlns:mbms2007", "urn:3GPP:metadata:2007:MBMS:FLUTE:FDT"); // 3GPP TS 26.346 Clause 7.2.10.2
   root->SetAttribute("xmlns:mbms2012", "urn:3GPP:metadata:2012:MBMS:FLUTE:FDT"); // 3GPP TS 26.346 Clause 7.2.10.2
   doc.InsertEndChild(root);
@@ -420,6 +465,14 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
     if (file.fec_oti.encoding_symbol_length != 0 &&
         file.fec_oti.encoding_symbol_length != _global_fec_oti.encoding_symbol_length)
       f->SetAttribute("FEC-OTI-Encoding-Symbol-Length", (unsigned)file.fec_oti.encoding_symbol_length);
+    if (file.fec_oti.encoding_id == FecScheme::Raptor || file.fec_oti.encoding_id == FecScheme::RaptorQ) {
+      if (file.fec_oti.nof_source_blocks != _global_fec_oti.nof_source_blocks)
+        f->SetAttribute("FEC-OTI-Number-Of-Source-Blocks", (unsigned)file.fec_oti.nof_source_blocks);
+      if (file.fec_oti.nof_sub_blocks != _global_fec_oti.nof_sub_blocks)
+        f->SetAttribute("FEC-OTI-Number-Of-Sub-Blocks", (unsigned)file.fec_oti.nof_sub_blocks);
+      if (file.fec_oti.symbol_alignment != _global_fec_oti.symbol_alignment)
+        f->SetAttribute("FEC-OTI-Symbol-Alignment-Parameter", (unsigned)file.fec_oti.symbol_alignment);
+    }
     if (!file.etag.empty()) f->SetAttribute("mbms2012:File-ETag", file.etag.c_str());
     if (file.cache_control.no_cache || file.cache_control.cache_expires) {
       auto cc = doc.NewElement("mbms2007:Cache-Control");

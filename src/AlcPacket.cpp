@@ -80,10 +80,15 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
         throw std::runtime_error("TOI fields over 64 bits in length are not supported");
   } 
 
-  if (_lct_header.codepoint == 0) {
-    _fec_oti.encoding_id = FecScheme::CompactNoCode;
-  } else {
-    throw std::runtime_error("Only Compact No-Code FEC is supported");
+  // The LCT Codepoint (CP) field carries the FEC Encoding ID of the scheme in
+  // use for this packet's content (RFC 5651 §4.2); this library sets it to
+  // the same numeric values as FecScheme's IANA-registered ones (0, 1, 6),
+  // so the mapping back is direct.
+  switch (_lct_header.codepoint) {
+    case 0: _fec_oti.encoding_id = FecScheme::CompactNoCode; break;
+    case 1: _fec_oti.encoding_id = FecScheme::Raptor; break;
+    case 6: _fec_oti.encoding_id = FecScheme::RaptorQ; break;
+    default: throw std::runtime_error("Unsupported FEC scheme (codepoint " + std::to_string(_lct_header.codepoint) + ")");
   }
 
   auto expected_header_len = 2 +
@@ -116,18 +121,48 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                         break; // ignored
                       }
       case EXT_FTI: {
+                      // Common FEC OTI (RFC 5052 §5.2): 10 octets of Transfer
+                      // Length (48 bits, in the high bits of a 6-octet field),
+                      // 16 reserved bits, and Encoding Symbol Length (16
+                      // bits) -- the same for every scheme. hel covers this
+                      // plus 4 octets of scheme-specific OTI (hel==4 total).
+                      if (hel != 4) {
+                        throw std::runtime_error("Invalid length for EXT_FTI header extension");
+                      }
+                      _fec_oti.transfer_length = (uint64_t)(ntohs(*(uint16_t*)ext_ptr)) << 32;
+                      ext_ptr += 2;
+                      _fec_oti.transfer_length |= (uint64_t)(ntohl(*(uint32_t*)ext_ptr));
+                      ext_ptr += 4;
+                      ext_ptr += 2; // reserved
+                      _fec_oti.encoding_symbol_length = ntohs(*(uint16_t*)ext_ptr);
+                      ext_ptr += 2;
+
                       if (_fec_oti.encoding_id == FecScheme::CompactNoCode) {
-                        if (hel != 4) {
-                          throw std::runtime_error("Invalid length for EXT_FTI header extension");
-                        }
-                        _fec_oti.transfer_length = (uint64_t)(ntohs(*(uint16_t*)ext_ptr)) << 32;
-                        ext_ptr += 2;
-                        _fec_oti.transfer_length |= (uint64_t)(ntohl(*(uint32_t*)ext_ptr));
-                        ext_ptr += 4;
-                        ext_ptr += 2; // reserved
-                        _fec_oti.encoding_symbol_length = ntohs(*(uint16_t*)ext_ptr);
-                        ext_ptr += 2;
+                        // Scheme-specific OTI (RFC 5052 §5.1): 32-bit Maximum
+                        // Source Block Length.
                         _fec_oti.max_source_block_length = ntohl(*(uint32_t*)ext_ptr);
+                      } else if (_fec_oti.encoding_id == FecScheme::Raptor) {
+                        // Scheme-specific OTI (RFC 5053 §3.2.3): 16-bit Z
+                        // (number of source blocks), 8-bit N (sub-blocks,
+                        // always 1 in this implementation), 8-bit Al (symbol
+                        // alignment).
+                        _fec_oti.nof_source_blocks = ntohs(*(uint16_t*)ext_ptr);
+                        ext_ptr += 2;
+                        _fec_oti.nof_sub_blocks = *(uint8_t*)ext_ptr;
+                        ext_ptr += 1;
+                        _fec_oti.symbol_alignment = *(uint8_t*)ext_ptr;
+                      } else if (_fec_oti.encoding_id == FecScheme::RaptorQ) {
+                        // Scheme-specific OTI (RFC 6330 §3.3.3): note the
+                        // field widths differ from Raptor's despite the
+                        // same 4-octet total -- 8-bit Z, 16-bit N (always 1
+                        // here), 8-bit Al.
+                        _fec_oti.nof_source_blocks = *(uint8_t*)ext_ptr;
+                        ext_ptr += 1;
+                        _fec_oti.nof_sub_blocks = ntohs(*(uint16_t*)ext_ptr);
+                        ext_ptr += 2;
+                        _fec_oti.symbol_alignment = *(uint8_t*)ext_ptr;
+                      } else {
+                        throw std::runtime_error("EXT_FTI parsing not implemented for this FEC scheme yet");
                       }
                       break;
                     }

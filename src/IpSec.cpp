@@ -67,6 +67,7 @@ namespace LibFlute::IpSec {
     nl_connect(sk, NETLINK_XFRM);
     nl_send_auto(sk, msg);
     nlmsg_free(msg);
+    nl_socket_free(sk); // BUG FIX: was never freed, leaking a netlink socket/fd on every call
   }
   void configure_state(uint32_t spi, const std::string& dest_address, Direction direction, const std::string& key)
   {
@@ -117,6 +118,7 @@ namespace LibFlute::IpSec {
     nl_connect(sk, NETLINK_XFRM);
     nl_send_auto(sk, msg);
     nlmsg_free(msg);
+    nl_socket_free(sk); // BUG FIX: was never freed, leaking a netlink socket/fd on every call
   }
 
   void enable_esp(uint32_t spi, const std::string& dest_address, Direction direction, const std::string& key)

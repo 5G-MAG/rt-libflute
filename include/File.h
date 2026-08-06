@@ -22,6 +22,9 @@
 #include "FileDeliveryTable.h"
 #include "EncodingSymbol.h"
 #include "Transmitter.h"
+#include "fec/FecBlockCodec.h"
+#include "fec/RaptorCodec.h"
+#include "fec/RaptorQCodec.h"
 
 namespace LibFlute {
   /**
@@ -153,7 +156,12 @@ namespace LibFlute {
 
     private:
       void calculate_partitioning();
-      void create_blocks();
+      // have_source_data: true from the transmit-side constructors (the
+      // file's bytes are already in _buffer, so source symbols start out
+      // complete and, for Raptor/RaptorQ, the intermediate symbols get
+      // solved immediately); false from the receive-side constructor (empty
+      // buffer, everything arrives via put_symbol()).
+      void create_blocks(bool have_source_data);
 
       struct SourceBlock {
         bool complete = false;
@@ -163,13 +171,55 @@ namespace LibFlute {
           bool complete = false;
           bool queued = false;
         };
-        std::map<uint16_t, Symbol> symbols; 
+        std::map<uint16_t, Symbol> symbols;
       };
 
       void check_source_block_completion(SourceBlock& block);
       void check_file_completion();
 
-      std::map<uint16_t, SourceBlock> _source_blocks; 
+      // -- Raptor/RaptorQ support -------------------------------------------
+      // File keeps the same SourceBlock/Symbol bookkeeping above for every
+      // scheme (source symbols are always the file's raw bytes, chopped up
+      // identically -- Raptor/RaptorQ are systematic codes); a RaptorCodec
+      // per source block is the only extra state needed, handling the
+      // pre-coding/LT maths in complete isolation from this class. See
+      // fec/RaptorCodec.h for the codec itself.
+      //
+      // Encoder side: create_blocks() feeds all K source symbols of a block
+      // into its codec once and keeps the resulting intermediate symbols
+      // around (raptor_intermediate), so get_next_symbols() can manufacture
+      // any repair ESI on demand via RaptorCodec::generate_encoding_symbol().
+      //
+      // Decoder side: put_symbol() feeds every received symbol (source or
+      // repair) into the block's codec; the moment it becomes decodable, all
+      // of that block's source symbol slots are filled in one shot, whether
+      // or not they'd individually arrived.
+      bool is_raptor_family() const {
+        return _meta.fec_oti.encoding_id == FecScheme::Raptor || _meta.fec_oti.encoding_id == FecScheme::RaptorQ;
+      }
+      void calculate_partitioning_raptor();
+      void setup_raptor_codec_for_block(uint16_t sbn, uint32_t k);
+      // How many repair (ESI >= K) symbols to generate for a block of size k,
+      // beyond the K source symbols: the caller-supplied OTI budget
+      // (max_number_of_encoding_symbols, if set) minus K, or a built-in
+      // default (RFC 5053 gives no failure-probability guarantee at zero
+      // overhead -- see RaptorCodec.h -- so some overhead is always
+      // generated rather than leaving it to chance).
+      uint32_t nof_repair_symbols_for_block(uint32_t k) const;
+
+      std::map<uint16_t, std::shared_ptr<FecBlockCodec>> _raptor_codecs; // one per source block; Raptor or RaptorQ depending on fec_oti.encoding_id
+      std::map<uint16_t, std::vector<std::vector<uint8_t>>> _raptor_intermediate; // encoder side only, filled once per block
+      std::map<uint16_t, uint32_t> _raptor_repair_sent; // encoder side only: how many repair ESIs already queued for this block
+      // encoder side only: generated repair symbol bytes, cached so the
+      // pointers EncodingSymbol hands to the (possibly async) send path stay
+      // valid for as long as source-symbol pointers into _buffer do. Once
+      // queued a repair ESI is never regenerated or resent -- if that
+      // specific packet is lost in transit it's simply gone, same as any
+      // other repair symbol that was never received; the redundancy is in
+      // the overhead count as a whole, not in any one symbol.
+      std::map<uint16_t, std::map<uint32_t, std::vector<uint8_t>>> _raptor_repair_data;
+
+      std::map<uint16_t, SourceBlock> _source_blocks;
 
       bool _complete = false;;
 

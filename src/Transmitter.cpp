@@ -477,7 +477,8 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
                            boost::asio::io_context& io_context,
                            const std::optional<boost::asio::ip::udp::endpoint> &tunnel_endpoint,
                            Transmitter::FdtNamespace fdt_namespace, bool active,
-                           const std::optional<std::string> &source_address )
+                           const std::optional<std::string> &source_address,
+                           const std::optional<FecOti> &content_fec_oti )
     : _endpoint(boost::asio::ip::make_address(destination_address), port)
     , _source_address()
     , _socket(io_context, _endpoint.protocol())
@@ -515,14 +516,29 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
   _socket.set_option(boost::asio::ip::multicast::enable_loopback(true));
   _socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
 
-  if (_source_address && !_tunnel_endpoint) {
+  // BUG FIX: this used to skip binding whenever a tunnel was configured, on the assumption the
+  // socket was only ever used to reach the tunnel endpoint in that case. Now that a plain,
+  // untunnelled copy is also sent directly to the real multicast destination (see send_next_packet()
+  // below), that copy needs to originate from _source_address too, or an SSM-joined receiver
+  // filtering on the announced source address (e.g. the SDP's "a=source-filter") never sees it --
+  // confirmed live: without this, the plain copy left from the host's default outbound interface
+  // address instead of the configured source, and never matched the receiver's SSM filter.
+  if (_source_address) {
     _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
   }
 
-  _fec_oti = FecOti{
-    .encoding_id = FecScheme::CompactNoCode,
-    .encoding_symbol_length = _max_payload,
-    .max_source_block_length = max_source_block_length};
+  if (content_fec_oti.has_value() && content_fec_oti->encoding_id != FecScheme::CompactNoCode) {
+    _fec_oti = FecOti{
+      .encoding_id = content_fec_oti->encoding_id,
+      .encoding_symbol_length = _max_payload,
+      .max_source_block_length = content_fec_oti->max_source_block_length,
+      .max_number_of_encoding_symbols = content_fec_oti->max_number_of_encoding_symbols};
+  } else {
+    _fec_oti = FecOti{
+      .encoding_id = FecScheme::CompactNoCode,
+      .encoding_symbol_length = _max_payload,
+      .max_source_block_length = max_source_block_length};
+  }
   _fdt = std::make_unique<FileDeliveryTable>(1, _fec_oti, fdt_namespace);
 
   if (_active) {
@@ -607,7 +623,7 @@ auto Transmitter::source_address(const std::optional<boost::asio::ip::address> &
 auto Transmitter::source_address(std::optional<boost::asio::ip::address> &&source_address) -> Transmitter&
 {
   _source_address = std::move(source_address);
-  if (_source_address && !_tunnel_endpoint) {
+  if (_source_address) {
     _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
   }
   return *this;
@@ -635,15 +651,30 @@ auto Transmitter::seconds_since_epoch() -> uint64_t
 auto Transmitter::send_fdt() -> void {
   if (_fdt->file_entries().empty()) return;
   _fdt->set_expires(seconds_since_epoch() + _fdt_repeat_interval * 2);
-  auto fdt = _fdt->to_string();
+  // Store into the member, not a local - see _fdt_string_storage's own doc
+  // comment: the File below only keeps a raw pointer into this buffer, and
+  // that pointer is read later, asynchronously, by send_next_packet().
+  _fdt_string_storage = _fdt->to_string();
+  // The FDT itself always goes out as Compact No-Code, regardless of what
+  // FEC scheme protects this Transmitter's content: it's re-sent on its own
+  // repeat timer already (real redundancy without needing FEC), and
+  // Raptor/RaptorQ both have a minimum source-block size (K >= 4 for
+  // Raptor) that a small FDT's single source block can fall below --
+  // caught by testing a real Transmitter -> Receiver transfer, not by any
+  // in-process File/codec test, all of which constructed content Files
+  // directly and never exercised send_fdt()'s own File construction.
+  FecOti fdt_fec_oti{
+    .encoding_id = FecScheme::CompactNoCode,
+    .encoding_symbol_length = _fec_oti.encoding_symbol_length,
+    .max_source_block_length = 64};
   auto file = std::make_shared<File>(
         0,
-        _fec_oti,
+        fdt_fec_oti,
         "",
         "",
         seconds_since_epoch() + _fdt_repeat_interval * 2,
-        (char*)fdt.c_str(),
-        fdt.length(),
+        (char*)_fdt_string_storage.c_str(),
+        _fdt_string_storage.length(),
         true);
   if (file) {
     file->set_fdt_instance_id( _fdt->instance_id() );
@@ -794,46 +825,70 @@ auto Transmitter::send_next_packet() -> void
       auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id());
       bytes_queued += packet->size();
 
-      boost::asio::ip::udp::endpoint send_endpoint;
-      const char *data = nullptr;
-      size_t data_size = 0;
-      std::shared_ptr<std::vector<char>> tunnel_data;
+      // BUG FIX: this used to be if/else -- tunnel the packet to the N3mb GTP-U peer *instead
+      // of* sending a plain copy to the real multicast destination, whenever a tunnel_endpoint
+      // was configured. That meant any receiver doing a direct FLUTE-layer SSM join on the
+      // announced address (rather than sitting behind the RAN's GTP-U decapsulation) never saw
+      // a single packet -- confirmed live: continuous "Transmitted" log lines and real GTP-U
+      // traffic reaching the UPF, but zero packets ever reaching the plain destination address.
+      // Send both: the plain copy is what a direct SSM subscriber needs; the tunnelled copy is
+      // the real, spec-compliant N3mb path (TS 23.247) that the RAN's GTP-U decapsulation
+      // consumes. Completion (mark_completed/file_transmitted) is tracked from whichever send
+      // is the "primary" one for this configuration -- the tunnel send when tunnelling is
+      // active (preserving the exact completion timing tunnel-mode already had), otherwise the
+      // plain send (the only copy in that case). The other send, if any, is fire-and-forget.
       if (_tunnel_endpoint) {
-        send_endpoint = _tunnel_endpoint.value();
-        data_size = packet->size() + 20 /* IP header */ + 8 /* UDP header */;
-        // Own the encapsulated packet buffer via a shared_ptr held by the
-        // async_send_to completion lambda below, so it stays alive until the
-        // send actually completes (a raw new[] here with no matching delete[]
-        // would leak on every tunnelled packet).
-        tunnel_data = std::make_shared<std::vector<char>>(data_size);
-        data = tunnel_data->data();
-        auto local_address = _source_address ? _source_address.value() : _tunnel_local_address;
-        create_udp_pkt(const_cast<char*>(data) + 20, _endpoint, packet->data(), packet->size(), local_address);
-        create_ip_hdr(const_cast<char*>(data), _endpoint, data_size, local_address);
-      } else {
-        send_endpoint = _endpoint;
-        data = packet->data();
-        data_size = packet->size();
-      }
-      _socket.async_send_to(
-          boost::asio::buffer(data, data_size),
-          send_endpoint,
-          [file, symbols, packet, tunnel_data, this](
-              const boost::system::error_code& error,
-              std::size_t bytes_transferred)
-          {
-            (void)packet;
-            (void)tunnel_data;
-            (void)bytes_transferred;
-            if (error) {
-              spdlog::debug("sent_to error: {}", error.message());
-            } else {
-              file->mark_completed(symbols, !error);
-              if (file->complete()) {
-                file_transmitted(file->meta().toi);
+        // Fire-and-forget plain copy, in addition to the tunnelled one below.
+        _socket.async_send_to(
+            boost::asio::buffer(packet->data(), packet->size()), _endpoint,
+            [packet](const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
+            {
+              if (error) {
+                spdlog::debug("sent_to (plain) error: {}", error.message());
               }
-            }
-          });
+            });
+
+        // Own the encapsulated buffer via a shared_ptr captured by the completion handler --
+        // async_send_to is asynchronous, so the buffer must outlive the call. (The previous
+        // code called `delete[] data` immediately after issuing async_send_to, before the
+        // operation could have completed -- a use-after-free/dangling-buffer bug in its own
+        // right, fixed here as a side effect of restructuring this block.)
+        size_t data_size = packet->size() + 20 /* IP header */ + 8 /* UDP header */;
+        auto data = std::make_shared<std::vector<char>>(data_size);
+        create_udp_pkt(data->data() + 20, _endpoint, packet->data(), packet->size(), _source_address ? _source_address.value() : _tunnel_local_address);
+        create_ip_hdr(data->data(), _endpoint, data_size, _source_address ? _source_address.value() : _tunnel_local_address);
+        _socket.async_send_to(
+            boost::asio::buffer(*data), _tunnel_endpoint.value(),
+            [file, symbols, packet, data, this](
+                const boost::system::error_code& error,
+                std::size_t /*bytes_transferred*/)
+            {
+              if (error) {
+                spdlog::debug("sent_to (tunnel) error: {}", error.message());
+              } else {
+                file->mark_completed(symbols, !error);
+                if (file->complete()) {
+                  file_transmitted(file->meta().toi);
+                }
+              }
+            });
+      } else {
+        _socket.async_send_to(
+            boost::asio::buffer(packet->data(), packet->size()), _endpoint,
+            [file, symbols, packet, this](
+                const boost::system::error_code& error,
+                std::size_t /*bytes_transferred*/)
+            {
+              if (error) {
+                spdlog::debug("sent_to error: {}", error.message());
+              } else {
+                file->mark_completed(symbols, !error);
+                if (file->complete()) {
+                  file_transmitted(file->meta().toi);
+                }
+              }
+            });
+      }
     }
   }
   if (_active) {

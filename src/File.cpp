@@ -51,7 +51,7 @@ File::File(FileDeliveryTable::FileEntry entry)
   _own_buffer = true;
 
   this->calculate_partitioning();
-  this->create_blocks();
+  this->create_blocks(false /* receiving: no source data yet */);
 }
 
 File::File(const std::shared_ptr<Transmitter::FileDescription> &file_description)
@@ -70,8 +70,9 @@ File::File(const std::shared_ptr<Transmitter::FileDescription> &file_description
   memcpy(_buffer, _file_description->data(), length);
   _meta = _file_description->file_entry();
 
-  // for no-code
-  if (_meta.fec_oti.encoding_id == FecScheme::CompactNoCode) {
+  if (_meta.fec_oti.encoding_id == FecScheme::CompactNoCode ||
+      _meta.fec_oti.encoding_id == FecScheme::Raptor ||
+      _meta.fec_oti.encoding_id == FecScheme::RaptorQ) {
     _meta.fec_oti.transfer_length = length;
   } else {
     throw std::runtime_error("Unsupported FEC scheme");
@@ -80,7 +81,7 @@ File::File(const std::shared_ptr<Transmitter::FileDescription> &file_description
   encode();
 
   calculate_partitioning();
-  create_blocks();
+  create_blocks(true /* transmitting: source data already in _buffer */);
 }
 
 File::File(uint32_t toi,
@@ -120,15 +121,16 @@ File::File(uint32_t toi,
   _meta.expires = expires;
   _meta.fec_oti = fec_oti;
 
-  // for no-code
-  if (_meta.fec_oti.encoding_id == FecScheme::CompactNoCode) { 
+  if (_meta.fec_oti.encoding_id == FecScheme::CompactNoCode ||
+      _meta.fec_oti.encoding_id == FecScheme::Raptor ||
+      _meta.fec_oti.encoding_id == FecScheme::RaptorQ) {
     _meta.fec_oti.transfer_length = length;
   } else {
     throw std::runtime_error("Unsupported FEC scheme");
   }
 
   this->calculate_partitioning();
-  this->create_blocks();
+  this->create_blocks(true /* transmitting: source data already in _buffer */);
 }
 
 File::~File()
@@ -157,21 +159,78 @@ auto File::put_symbol( const EncodingSymbol& symbol ) -> void
 
   SourceBlock& source_block = _source_blocks[ symbol.source_block_number() ];
 
-  if (symbol.id() >= source_block.symbols.size()) {
-    throw std::runtime_error(fmt::format("FLUTE: encoding symbol id {} out of range (block {} has {} symbols)",
-                                          symbol.id(), symbol.source_block_number(), source_block.symbols.size()));
+  if (!is_raptor_family()) {
+    if (symbol.id() >= source_block.symbols.size()) {
+      throw std::runtime_error(fmt::format("FLUTE: encoding symbol id {} out of range (block {} has {} symbols)",
+                                            symbol.id(), symbol.source_block_number(), source_block.symbols.size()));
+    }
+
+    SourceBlock::Symbol& target_symbol = source_block.symbols[symbol.id()];
+
+    if (!target_symbol.complete) {
+      symbol.decode_to(target_symbol.data, target_symbol.length);
+      target_symbol.complete = true;
+
+      check_source_block_completion(source_block);
+      check_file_completion();
+    }
+    return;
   }
 
-  SourceBlock::Symbol& target_symbol = source_block.symbols[symbol.id()];
+  // Raptor/RaptorQ: unlike Compact No-Code, an ESI at or beyond K is
+  // meaningful -- it's a repair symbol, not an error -- so there's no upper
+  // bound to enforce here beyond not letting a malicious/corrupt sender grow
+  // our per-block state unboundedly.
+  auto k = (uint32_t)source_block.symbols.size();
+  const uint32_t kMaxEsiSlack = 100000; // generous; just a sanity backstop
+  if (symbol.id() >= k + kMaxEsiSlack) {
+    throw std::runtime_error(fmt::format("FLUTE: encoding symbol id {} implausibly far beyond block {}'s {} source symbols",
+                                          symbol.id(), symbol.source_block_number(), k));
+  }
 
-  if (!target_symbol.complete) {
-    symbol.decode_to(target_symbol.data, target_symbol.length);
-    target_symbol.complete = true;
+  bool is_source_esi = symbol.id() < k;
+  if (is_source_esi) {
+    SourceBlock::Symbol& target_symbol = source_block.symbols[symbol.id()];
+    if (!target_symbol.complete) {
+      symbol.decode_to(target_symbol.data, target_symbol.length);
+      target_symbol.complete = true;
+    }
+  }
 
+  auto codec_it = _raptor_codecs.find(symbol.source_block_number());
+  if (codec_it == _raptor_codecs.end()) {
+    return; // shouldn't happen: create_blocks() sets one up per block
+  }
+  auto& codec = codec_it->second;
+
+  if (!codec->can_decode()) {
+    // Zero-pad to a full T bytes for the same reason create_blocks() does on
+    // the encoder side: the codec's linear system requires every symbol to
+    // be the same length, but a literal source ESI's wire length can be
+    // shorter than T for the file's last, partial symbol.
+    auto T = _meta.fec_oti.encoding_symbol_length;
+    std::vector<uint8_t> data(symbol.len());
+    symbol.decode_to((char*)data.data(), data.size());
+    data.resize(T, 0);
+    codec->add_received_symbol(symbol.id(), data);
+  }
+
+  if (codec->can_decode()) {
+    bool any_missing = std::any_of(source_block.symbols.begin(), source_block.symbols.end(),
+                                    [](const auto& s) { return !s.second.complete; });
+    if (any_missing) {
+      auto decoded = codec->decode_source_symbols();
+      for (uint32_t i = 0; i < k; i++) {
+        auto& s = source_block.symbols[i];
+        if (!s.complete) {
+          memcpy(s.data, decoded[i].data(), std::min(s.length, decoded[i].size()));
+          s.complete = true;
+        }
+      }
+    }
     check_source_block_completion(source_block);
     check_file_completion();
   }
-
 }
 
 auto File::check_source_block_completion( SourceBlock& block ) -> void
@@ -206,7 +265,12 @@ auto File::check_file_completion() -> void
 
 auto File::calculate_partitioning() -> void
 {
-  // Calculate source block partitioning (RFC5052 9.1) 
+  if (is_raptor_family()) {
+    calculate_partitioning_raptor();
+    return;
+  }
+
+  // Calculate source block partitioning (RFC5052 9.1)
   _nof_source_symbols = ceil((double)_meta.fec_oti.transfer_length / (double)_meta.fec_oti.encoding_symbol_length);
   _nof_source_blocks = ceil((double)_nof_source_symbols / (double)_meta.fec_oti.max_source_block_length);
   _large_source_block_length = ceil((double)_nof_source_symbols / (double)_nof_source_blocks);
@@ -214,7 +278,75 @@ auto File::calculate_partitioning() -> void
   _nof_large_source_blocks = _nof_source_symbols - _small_source_block_length * _nof_source_blocks;
 }
 
-auto File::create_blocks() -> void
+auto File::calculate_partitioning_raptor() -> void
+{
+  // RFC 5053 §4.2 / RFC 6330 §4.4.1.2 partitioning (both schemes use the
+  // identical Partition[] function): Kt = ceil(F/T); (KL, KS, ZL, ZS) =
+  // Partition[Kt, Z], where Partition[I, J] = (IL, IS, JL, JS) with
+  // IL = ceil(I/J), IS = floor(I/J), JL = I - IS*J, JS = J - JL.
+  //
+  // We fix N (sub-blocks) = 1 and Al (symbol alignment) = 1 -- see
+  // FecOti::nof_sub_blocks's comment in flute_types.h -- so the second
+  // partition, Partition[T/Al, N], is trivial and doesn't need computing.
+  //
+  // K is capped well below either scheme's hard spec limit (Raptor: 8192,
+  // RFC 5053 §5.7; RaptorQ: 56403, RFC 6330 §5.6) by default, since both
+  // codecs' linear systems scale at least quadratically in block size (see
+  // GF2LinearSystem.h / GF256LinearSystem.h) -- a caller who actually wants
+  // larger blocks can ask for them via max_source_block_length, up to the
+  // scheme's real limit.
+  const uint32_t kSchemeMaxK = (_meta.fec_oti.encoding_id == FecScheme::RaptorQ) ? 56403 : 8192;
+  const uint32_t kDefaultK = 8192;
+  uint32_t k_cap = _meta.fec_oti.max_source_block_length;
+  if (k_cap == 0) k_cap = kDefaultK;
+  if (k_cap > kSchemeMaxK) k_cap = kSchemeMaxK;
+
+  uint32_t Kt = (uint32_t)ceil((double)_meta.fec_oti.transfer_length / (double)_meta.fec_oti.encoding_symbol_length);
+  if (Kt == 0) Kt = 1;
+  uint32_t Z = (uint32_t)ceil((double)Kt / (double)k_cap);
+  if (Z == 0) Z = 1;
+
+  // Partition[Kt, Z]
+  uint32_t IL = (uint32_t)ceil((double)Kt / (double)Z);
+  uint32_t IS = Kt / Z; // floor
+  uint32_t JL = Kt - IS * Z;
+  uint32_t JS = Z - JL;
+  (void)JS;
+
+  _nof_source_symbols = Kt;
+  _nof_source_blocks = Z;
+  _large_source_block_length = IL; // KL: size (in symbols) of the first JL blocks
+  _small_source_block_length = IS; // KS: size (in symbols) of the remaining JS blocks
+  _nof_large_source_blocks = JL;   // ZL
+
+  _meta.fec_oti.nof_source_blocks = Z;
+  _meta.fec_oti.nof_sub_blocks = 1;
+  _meta.fec_oti.symbol_alignment = 1;
+}
+
+auto File::setup_raptor_codec_for_block(uint16_t sbn, uint32_t k) -> void
+{
+  if (_meta.fec_oti.encoding_id == FecScheme::RaptorQ) {
+    _raptor_codecs[sbn] = std::make_shared<RaptorQ::RaptorQCodec>(k);
+  } else {
+    _raptor_codecs[sbn] = std::make_shared<Raptor::RaptorCodec>(k);
+  }
+}
+
+auto File::nof_repair_symbols_for_block(uint32_t k) const -> uint32_t
+{
+  auto budget = _meta.fec_oti.max_number_of_encoding_symbols;
+  if (budget > k) return budget - k;
+  // No explicit budget from the caller: default to a modest but real
+  // overhead. Per RFC 5053's own decoding-failure characteristics (see
+  // RaptorCodec.h), receiving exactly K symbols has a high failure
+  // probability, so *some* repair is generated unconditionally rather than
+  // leaving overhead at zero by default.
+  uint32_t relative = (uint32_t)std::ceil(k * 0.10);
+  return std::max<uint32_t>(4, relative);
+}
+
+auto File::create_blocks(bool have_source_data) -> void
 {
   // Create the required source blocks and encoding symbols
   auto buffer_ptr = _buffer;
@@ -229,15 +361,56 @@ auto File::create_blocks() -> void
       auto symbol_length = std::min(remaining_size, (size_t)_meta.fec_oti.encoding_symbol_length);
       assert(buffer_ptr + symbol_length <= _buffer + _meta.fec_oti.transfer_length);
 
+      // `complete` means different things on the two sides that reuse this
+      // same struct: "already sent" on the encoder side (see
+      // get_next_symbols()/mark_completed()), "data received" on the
+      // decoder side (see put_symbol()). Either way it starts false: an
+      // encoder-side symbol hasn't been sent yet even though its data is
+      // already known, and a decoder-side symbol's data obviously isn't in
+      // yet.
       SourceBlock::Symbol symbol{.data = buffer_ptr, .length = symbol_length, .complete = false};
       block.symbols[ symbol_id++ ] = symbol;
-      
+
       remaining_size -= symbol_length;
       buffer_ptr += symbol_length;
-      
+
       if (remaining_size <= 0) break;
     }
-    _source_blocks[number++] = block;
+
+    if (is_raptor_family()) {
+      uint16_t sbn = (uint16_t)number;
+      uint32_t k = (uint32_t)block.symbols.size();
+      setup_raptor_codec_for_block(sbn, k);
+
+      if (have_source_data) {
+        // Encoder side: solve for the intermediate symbols right away, so
+        // get_next_symbols() can hand out source or repair ESIs for this
+        // block on demand without redoing the pre-coding maths each time.
+        //
+        // Every symbol handed to the codec must be exactly T bytes: the
+        // last symbol of the file's last source block is normally shorter
+        // (transfer_length isn't usually an exact multiple of T), so it's
+        // zero-padded here purely for the FEC linear algebra -- this is
+        // internal to Raptor's maths, not a wire format change; a repair
+        // symbol generated from these padded intermediate symbols still
+        // comes out as a full T bytes, same as any other repair symbol.
+        auto T = _meta.fec_oti.encoding_symbol_length;
+        std::vector<std::vector<uint8_t>> source_symbols;
+        source_symbols.reserve(k);
+        for (auto& s : block.symbols) {
+          std::vector<uint8_t> padded((uint8_t*)s.second.data, (uint8_t*)s.second.data + s.second.length);
+          padded.resize(T, 0);
+          source_symbols.push_back(std::move(padded));
+        }
+        _raptor_intermediate[sbn] = _raptor_codecs[sbn]->compute_intermediate_symbols(source_symbols);
+        _raptor_repair_sent[sbn] = 0;
+      }
+      // Receive side (have_source_data == false): the codec is ready to
+      // accept received symbols via put_symbol(); nothing else to do yet.
+    }
+
+    _source_blocks[number] = block;
+    number++;
   }
 }
 
@@ -253,11 +426,35 @@ auto File::get_next_symbols(size_t max_size) -> std::vector<EncodingSymbol>
     if (!block.second.complete) {
       for (auto& symbol : block.second.symbols) {
         if (cnt >= nof_symbols) break;
-    
+
         if (!symbol.second.complete && !symbol.second.queued) {
           symbols.emplace_back(symbol.first, block.first, symbol.second.data, symbol.second.length, _meta.fec_oti.encoding_id);
           symbol.second.queued = true;
           cnt++;
+        }
+      }
+
+      if (is_raptor_family() && cnt < nof_symbols) {
+        bool all_source_queued = std::all_of(block.second.symbols.begin(), block.second.symbols.end(),
+                                              [](const auto& s) { return s.second.queued; });
+        if (all_source_queued) {
+          uint16_t sbn = block.first;
+          uint32_t k = (uint32_t)block.second.symbols.size();
+          uint32_t budget = nof_repair_symbols_for_block(k);
+          auto& sent = _raptor_repair_sent[sbn];
+          auto& cache = _raptor_repair_data[sbn];
+          auto& intermediate = _raptor_intermediate[sbn];
+          auto& codec = _raptor_codecs[sbn];
+          while (sent < budget && cnt < nof_symbols) {
+            uint32_t esi = k + sent;
+            auto it = cache.find(esi);
+            if (it == cache.end()) {
+              it = cache.emplace(esi, codec->generate_encoding_symbol(esi, intermediate)).first;
+            }
+            symbols.emplace_back(esi, sbn, (char*)it->second.data(), it->second.size(), _meta.fec_oti.encoding_id);
+            sent++;
+            cnt++;
+          }
         }
       }
     }
