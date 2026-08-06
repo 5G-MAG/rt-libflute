@@ -14,6 +14,7 @@
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
+#include <stdexcept>
 #include "FileDeliveryTable.h"
 #include "tinyxml2.h"
 #include <iostream>
@@ -149,10 +150,20 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
   tinyxml2::XMLDocument doc(true, tinyxml2::COLLAPSE_WHITESPACE);
   doc.Parse(buffer, len);
   auto fdt_instance = doc.RootElement();
+  // A malformed / truncated FDT buffer leaves no root element; every access
+  // below (elementNamespace, Name(), ...) would then dereference null and crash
+  // the receiver. Throw instead so Receiver::handle_receive_from's
+  // catch(std::exception&) drops the bad FDT and keeps the client alive.
+  if (doc.Error() || fdt_instance == nullptr) {
+    spdlog::warn("FDT parse failed ({}) at line {}, len={}",
+                 doc.ErrorName() ? doc.ErrorName() : "?", doc.ErrorLineNum(), len);
+    throw std::runtime_error(std::string("FDT XML parse failed: ") +
+                             (doc.ErrorName() ? doc.ErrorName() : "no root element"));
+  }
   XMLNamespaces root_ns(fdt_instance);
   auto fdt_ns = root_ns.elementNamespace(fdt_instance);
   if (!root_ns.matches(fdt_instance->Name(), "FDT-Instance", fdt_ns)) {
-    throw "Root element is not FDT-Instance";
+    throw std::runtime_error("Root element is not FDT-Instance");
   }
 
   if (fdt_ns == "") {
@@ -166,7 +177,7 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
   } else if (fdt_ns == "urn:3GPP:metadata:2022:FLUTE:FDT") { // 3GPP TS 26.346 Clause L.6.1
     _fdt_namespace = FDT_NS_3GPP_CONSOLIDATED_V2;
   } else {
-    throw "FDT namespace not recognised";
+    throw std::runtime_error("FDT namespace not recognised");
   }
 
   _expires = std::stoull(root_ns.findAttribute(fdt_instance, "Expires", fdt_ns)->Value());
@@ -206,13 +217,13 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     // File required attributes
     auto toi_str = file_ns.findAttribute(file, "TOI", fdt_ns);
     if (toi_str == nullptr) {
-      throw "Missing TOI attribute on File element";
+      throw std::runtime_error("Missing TOI attribute on File element");
     }
     uint32_t toi = strtoull(toi_str->Value(), nullptr, 0);
 
     auto content_location = file_ns.findAttribute(file, "Content-Location", fdt_ns);
     if (content_location == nullptr) {
-      throw "Missing Content-Location attribute on File element";
+      throw std::runtime_error("Missing Content-Location attribute on File element");
     }
 
     // File optional attributes

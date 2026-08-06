@@ -335,6 +335,20 @@ namespace LibFlute {
         FileDescription &toi(uint32_t val) { _file_entry.toi = val; return *this; };
 
        /**
+        * Get the TOI before reset
+        *
+        * @return The TOI as it was before the TOI was reset for file changes. 0 means no previous TOI.
+        */
+        uint32_t previous_toi() const { return _previous_toi; };
+
+       /**
+        * Reset the previous TOI value
+        *
+        * @return this file description
+        */
+        FileDescription &reset_previous_toi() { _previous_toi = 0; return *this; };
+
+       /**
         * Merge the FecOti values
         *
         * Takes any values that are unset in _file_entry.fec_oti from @p fec_oti.
@@ -347,6 +361,7 @@ namespace LibFlute {
         void _attach_file(const std::string &filename);
         void _free_file_data();
         void _calculate_file_entry();
+        void _reset_toi(); //< Zero the TOI for reassignment, remembering the old value in _previous_toi
 
         std::optional<uint64_t> _tsi; //< The last TSI this file was associated with
         FileDeliveryTable::FileEntry _file_entry; //< The FDT File entry values to use
@@ -355,6 +370,9 @@ namespace LibFlute {
         int _file_handle;                         //< The file handle of the open _filename
         const char *_data;                        //< The uncompressed file contents (may be mapped file)
         size_t _data_length;                      //< The length of the uncompressed file contents
+        uint32_t _previous_toi = 0;                //< TOI this description held before a content/compression
+                                                    //< change zeroed it for reassignment, so the Transmitter can
+                                                    //< remove that now-orphaned FDT entry; 0 once consumed
       };
 
      /**
@@ -655,8 +673,8 @@ namespace LibFlute {
       std::optional<boost::asio::ip::address> _source_address;
       boost::asio::ip::udp::socket _socket;
       boost::asio::io_context& _io_context;
-      boost::asio::deadline_timer _send_timer;
-      boost::asio::deadline_timer _fdt_timer;
+      boost::asio::steady_timer _send_timer;
+      boost::asio::steady_timer _fdt_timer;
 
       uint64_t _tsi;
       uint16_t _mtu;

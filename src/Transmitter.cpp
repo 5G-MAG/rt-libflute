@@ -141,7 +141,7 @@ Transmitter::FileDescription::FileDescription(const Transmitter::FileDescription
     // copy the file contents into a new memory block
     char *data = new char[_data_length];
     _data = data;
-    memcpy(_data, other._data, _data_length);
+    memcpy(data, other._data, _data_length);
 #endif
   }
 }
@@ -186,7 +186,7 @@ Transmitter::FileDescription &Transmitter::FileDescription::operator=(const Tran
     // copy the file contents into a new memory block
     char *data = new char[_data_length];
     _data = data;
-    memcpy(_data, other._data, _data_length);
+    memcpy(data, other._data, _data_length);
 #endif
   }
 
@@ -236,6 +236,17 @@ size_t Transmitter::FileDescription::data_length()
   return _data_length;
 }
 
+void Transmitter::FileDescription::_reset_toi()
+{
+  // Remembers the TOI being vacated so Transmitter::send() can remove its now-stale FDT entry
+  // when it assigns a new one -- without this, a FileDescription whose content genuinely
+  // changes (as opposed to being resent unchanged) leaves the FDT entry for its previous TOI
+  // orphaned forever, since nothing else ever points at that old TOI again to clean it up.
+  // The FDT grows without bound as a result, one orphaned entry per content change.
+  if (_file_entry.toi != 0) _previous_toi = _file_entry.toi;
+  _file_entry.toi = 0;
+}
+
 Transmitter::FileDescription &Transmitter::FileDescription::set_compression(
 								Transmitter::FileDescription::CompressionAlgorithm compression)
 {
@@ -253,7 +264,7 @@ Transmitter::FileDescription &Transmitter::FileDescription::set_compression(
       break;
     }
     /* change in compression will change transmitted data, reset the TOI */
-    _file_entry.toi = 0;
+    _reset_toi();
     _calculate_file_entry();
   }
 
@@ -273,7 +284,7 @@ Transmitter::FileDescription &Transmitter::FileDescription::set_content(const st
     _free_file_data();
     _attach_file(filename);
     /* Assume a change of filename changes the contents too and zero the TOI */
-    _file_entry.toi = 0;
+    _reset_toi();
     _calculate_file_entry();
   }
 
@@ -287,12 +298,12 @@ Transmitter::FileDescription &Transmitter::FileDescription::set_content(const ch
     /* data area has changed in some way, do we need to reset the TOI? */
     if (_data_length != data_length) {
       /* data length has changed, reset the TOI */
-      _file_entry.toi = 0;
+      _reset_toi();
     } else if (data) {
       if (!_data) {
 	if (data_length) {
           /* data being added, reset the TOI */
-          _file_entry.toi = 0;
+          _reset_toi();
         }
       } else if (data_length) {
         /* had data before and have new data now, but are they the same? */
@@ -300,12 +311,12 @@ Transmitter::FileDescription &Transmitter::FileDescription::set_content(const ch
         MD5(reinterpret_cast<const unsigned char*>(data), data_length, md5);
         if (_file_entry.content_md5 != base64_encode(md5, sizeof(md5))) {
           /* data contents are different, reset TOI */
-          _file_entry.toi = 0;
+          _reset_toi();
         }
       }
     } else if (_data) {
       /* data being removed, reset the TOI */
-      _file_entry.toi = 0;
+      _reset_toi();
     }
 
     _free_file_data();
@@ -417,7 +428,10 @@ void Transmitter::FileDescription::_attach_file(const std::string &filename)
   // Load the file contents into memory
   char *data = new char[_data_length];
   _data = data;
-  read(_file_handle, data, _data_length);
+  ssize_t nread = read(_file_handle, data, _data_length);
+  if (nread < 0 || static_cast<size_t>(nread) != _data_length) {
+    throw std::system_error(errno, std::generic_category(), "Could not read the file contents");
+  }
   close(_file_handle);
   _file_handle = -1;
 #endif
@@ -681,7 +695,16 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
 
   // Set the TSI and TOI for the FileDescription
   file_description->tsi(_tsi);
+  bool is_resend = (file_description->toi() != 0);
   if (file_description->toi() == 0) {
+    if (file_description->previous_toi() != 0) {
+      // This FileDescription's content changed since its last send (set_content()/
+      // set_compression() zeroed its TOI for exactly this reason) -- the FDT entry for its
+      // old TOI is otherwise never revisited once a new TOI is assigned below, and would sit
+      // in the FDT forever, growing it by one stale entry per content change.
+      _fdt->remove(file_description->previous_toi());
+      file_description->reset_previous_toi();
+    }
     file_description->toi(_toi);
     _toi++;
     if (_toi == 0) _toi = 1; // clamp to >= 1 in case it wraps
@@ -694,7 +717,18 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
   auto file = std::make_shared<File>(file_description);
   {
     std::lock_guard<std::mutex> guard(_files_mutex);
-    _files.insert({file_description->toi(), file});
+    // A reused (carousel-repeat) FileDescription keeps the same TOI, but map::insert() is a
+    // no-op if that key is already present -- silently keeping the stale File and discarding
+    // the just-built one with the updated content. Use assignment so a resend actually
+    // replaces it.
+    _files[file_description->toi()] = file;
+  }
+  if (is_resend) {
+    // Without this, add() below unconditionally appends another <File> entry for the same
+    // TOI on every single carousel repetition, without ever removing the previous one (the
+    // FDT has no other dedup by TOI) -- the FDT grows without bound the longer the object
+    // stays in the carousel, and eventually becomes too large to serialise/parse correctly.
+    _fdt->remove(file_description->toi());
   }
   _fdt->add(file->meta());
   send_fdt();
@@ -804,7 +838,7 @@ auto Transmitter::send_next_packet() -> void
   }
   if (_active) {
     if (!bytes_queued) {
-      _send_timer.expires_from_now(boost::posix_time::milliseconds(10));
+      _send_timer.expires_after(std::chrono::milliseconds(10));
       _send_timer.async_wait( boost::bind(&Transmitter::send_next_packet, this));
     } else {
       if (_rate_limit == 0) {
@@ -813,7 +847,7 @@ auto Transmitter::send_next_packet() -> void
         auto send_duration = ((bytes_queued * 8.0) / (double)_rate_limit/1000.0) * 1000.0 * 1000.0;
         spdlog::trace("Rate limiter: queued {} bytes, limit {} kbps, next send in {} us",
             bytes_queued, _rate_limit, send_duration);
-        _send_timer.expires_from_now(boost::posix_time::microseconds(
+        _send_timer.expires_after(std::chrono::microseconds(
               static_cast<int>(ceil(send_duration))));
         _send_timer.async_wait( boost::bind(&Transmitter::send_next_packet, this));
       }
@@ -859,7 +893,7 @@ auto Transmitter::_complete_deactivation() -> void
 
 auto Transmitter::start_fdt_repeat_timer() -> void
 {
-    _fdt_timer.expires_from_now(boost::posix_time::seconds(_fdt_repeat_interval));
+    _fdt_timer.expires_after(std::chrono::seconds(_fdt_repeat_interval));
     _fdt_timer.async_wait( boost::bind(&Transmitter::fdt_send_tick, this, boost::placeholders::_1));
 }
 

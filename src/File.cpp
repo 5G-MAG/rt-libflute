@@ -15,6 +15,7 @@
 //
 #include <iostream>
 #include <string>
+#include <stdexcept>
 #include <cstring>
 #include <cmath>
 #include <cassert>
@@ -28,6 +29,7 @@
 
 #include "base64.h"
 #include "spdlog/spdlog.h"
+#include "spdlog/fmt/fmt.h"
 #include "Transmitter.h"
 #include "File.h"
 
@@ -44,7 +46,7 @@ File::File(FileDeliveryTable::FileEntry entry)
   _buffer = (char*)malloc(_meta.fec_oti.transfer_length);
   if (_buffer == nullptr)
   {
-    throw "Failed to allocate file buffer";
+    throw std::runtime_error("Failed to allocate file buffer");
   }
   _own_buffer = true;
 
@@ -62,7 +64,7 @@ File::File(const std::shared_ptr<Transmitter::FileDescription> &file_description
   _buffer = (char*)malloc(length);
   if (_buffer == nullptr)
   {
-    throw "No data allocated";
+    throw std::runtime_error("No data allocated");
   }
   _own_buffer = true;
   memcpy(_buffer, _file_description->data(), length);
@@ -72,7 +74,7 @@ File::File(const std::shared_ptr<Transmitter::FileDescription> &file_description
   if (_meta.fec_oti.encoding_id == FecScheme::CompactNoCode) {
     _meta.fec_oti.transfer_length = length;
   } else {
-    throw "Unsupported FEC scheme";
+    throw std::runtime_error("Unsupported FEC scheme");
   }
 
   encode();
@@ -99,7 +101,7 @@ File::File(uint32_t toi,
     _buffer = (char*)malloc(length);
     if (_buffer == nullptr)
     {
-      throw "Failed to allocate file buffer";
+      throw std::runtime_error("Failed to allocate file buffer");
     }
     memcpy(_buffer, data, length);
     _own_buffer = true;
@@ -122,7 +124,7 @@ File::File(uint32_t toi,
   if (_meta.fec_oti.encoding_id == FecScheme::CompactNoCode) { 
     _meta.fec_oti.transfer_length = length;
   } else {
-    throw "Unsupported FEC scheme";
+    throw std::runtime_error("Unsupported FEC scheme");
   }
 
   this->calculate_partitioning();
@@ -141,15 +143,24 @@ File::~File()
 
 auto File::put_symbol( const EncodingSymbol& symbol ) -> void
 {
-  if (symbol.source_block_number() > _source_blocks.size()) {
-    throw "Source Block number too high";
-  } 
+  // Bounds must be ">=", not ">": a valid source-block number is
+  // 0.._source_blocks.size()-1, so SBN == size() is already out of range and
+  // indexing with it below would be undefined behaviour. Throw a std::exception
+  // (not a bare const char*, which escapes the receiver's catch(std::exception&)
+  // and terminates the process) so an out-of-range symbol -- e.g. a content
+  // object whose on-air symbol layout exceeds its FDT-declared FEC-OTI -- is
+  // dropped and logged by the caller instead of crashing the client.
+  if (symbol.source_block_number() >= _source_blocks.size()) {
+    throw std::runtime_error(fmt::format("FLUTE: source block number {} out of range (have {} blocks)",
+                                          symbol.source_block_number(), _source_blocks.size()));
+  }
 
   SourceBlock& source_block = _source_blocks[ symbol.source_block_number() ];
-  
-  if (symbol.id() > source_block.symbols.size()) {
-    throw "Encoding Symbol ID too high";
-  } 
+
+  if (symbol.id() >= source_block.symbols.size()) {
+    throw std::runtime_error(fmt::format("FLUTE: encoding symbol id {} out of range (block {} has {} symbols)",
+                                          symbol.id(), symbol.source_block_number(), source_block.symbols.size()));
+  }
 
   SourceBlock::Symbol& target_symbol = source_block.symbols[symbol.id()];
 
@@ -180,7 +191,7 @@ auto File::check_file_completion() -> void
     auto content_md5 = base64_decode(_meta.content_md5);
     if (memcmp(md5, content_md5.c_str(), MD5_DIGEST_LENGTH) != 0) {
       spdlog::debug("MD5 mismatch for TOI {}, discarding", _meta.toi);
- 
+
       // MD5 mismatch, try again
       for (auto& block : _source_blocks) {
         for (auto& symbol : block.second.symbols) {
@@ -277,7 +288,7 @@ auto File::encode() -> void
     if (_meta.content_encoding == "gzip" || _meta.content_encoding=="deflate") {
       auto decomp_buffer = _buffer;
       bool own_decomp = _own_buffer;
-      std::shared_ptr<unsigned char> comp_buffer(new unsigned char[16384]);
+      std::shared_ptr<unsigned char[]> comp_buffer(new unsigned char[16384]);
       z_stream zs = {
         .next_in = reinterpret_cast<unsigned char*>(decomp_buffer),
         .avail_in = static_cast<uint32_t>(_meta.content_length),
@@ -318,7 +329,7 @@ auto File::encode() -> void
       }
     } else {
       spdlog::error("Unknown Content-Encoding {}", _meta.content_encoding);
-      throw "Content-Encoding not known";
+      throw std::runtime_error("Content-Encoding not known");
     }
 
     _been_encoded = true;
@@ -332,7 +343,7 @@ auto File::decode() -> void
     if (_meta.content_encoding == "gzip" || _meta.content_encoding=="deflate") {
       auto comp_buffer = _buffer;
       bool own_comp = _own_buffer;
-      std::shared_ptr<unsigned char> decomp_buffer(new unsigned char[16384]);
+      std::shared_ptr<unsigned char[]> decomp_buffer(new unsigned char[16384]);
       z_stream zs = {
 	.next_in = reinterpret_cast<unsigned char*>(comp_buffer),
 	.avail_in = static_cast<uint32_t>(_meta.fec_oti.transfer_length),
@@ -375,7 +386,7 @@ auto File::decode() -> void
       if (own_comp) free(comp_buffer);
     } else {
       spdlog::error("Unknown Content-Encoding {}", _meta.content_encoding);
-      throw "Content-Encoding not known";
+      throw std::runtime_error("Content-Encoding not known");
     }
 
     _been_decoded = true;
