@@ -17,6 +17,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -122,8 +123,25 @@ namespace LibFlute {
       void sent() { _instance_id_sent = _instance_id; };
 
     private:
+      /**
+       * Advance _instance_id to a value that is safe to reuse, per RFC 6726 SS3.4.1: the FDT
+       * Instance ID is a 20-bit field (0..0xFFFFF), and a sender MUST NOT reuse an ID until all
+       * receivers can be assumed to have either received or discarded every packet carrying the
+       * previous FDT Instance that used it. Records the outgoing ID's expiry, then either
+       * increments linearly or, once the 20-bit space is exhausted, wraps to the smallest ID
+       * whose recorded expiry has already passed.
+       */
+      void advance_instance_id();
+
       uint32_t _instance_id;
       uint32_t _instance_id_sent;
+
+      /** FDT Instance IDs that have been sent, and the (NTP-epoch-seconds) time after which
+       *  each is safe to reuse -- i.e. the Expires value that was in effect while that ID was
+       *  live. Entries are removed once reused. */
+      std::map<uint32_t, uint64_t> _instance_id_history;
+
+      static constexpr uint32_t max_instance_id = 0xFFFFF; //< 20-bit field width (RFC 6726 SS3.4.1)
 
       std::vector<FileEntry> _file_entries;
       FecOti _global_fec_oti;

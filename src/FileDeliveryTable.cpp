@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include "FileDeliveryTable.h"
 #include "tinyxml2.h"
+#include <chrono>
 #include <iostream>
 #include <string>
 #include <map>
@@ -350,9 +351,47 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
   }
 }
 
+namespace {
+  auto ntp_seconds_since_epoch() -> uint64_t
+  {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count() +
+        2'208'988'800; /* Unix epoch -> NTP epoch offset, matching Transmitter::seconds_since_epoch() */
+  }
+}
+
+auto LibFlute::FileDeliveryTable::advance_instance_id() -> void
+{
+  // The outgoing ID stays "live" (must not be reused) until _expires passes -- record that
+  // before moving on.
+  _instance_id_history[_instance_id] = _expires;
+
+  if (_instance_id < max_instance_id) {
+    _instance_id++;
+    return;
+  }
+
+  // 20-bit space exhausted: wrap to the smallest ID that has actually expired.
+  auto now = ntp_seconds_since_epoch();
+  auto candidate = _instance_id_history.cend();
+  for (auto it = _instance_id_history.cbegin(); it != _instance_id_history.cend(); ++it) {
+    if (it->second < now && (candidate == _instance_id_history.cend() || it->first < candidate->first)) {
+      candidate = it;
+    }
+  }
+  if (candidate == _instance_id_history.cend()) {
+    // Every one of the 2^20 possible IDs is still within its validity window -- reusing any of
+    // them would risk a live collision at a receiver. This requires well over a million content
+    // changes within a single FDT expiry window and should not happen in practice.
+    throw std::runtime_error("FDT Instance ID space exhausted: no previously-used ID has expired yet");
+  }
+  _instance_id = candidate->first;
+  _instance_id_history.erase(candidate);
+}
+
 auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> void
 {
-  if (_instance_id == _instance_id_sent) _instance_id++;
+  if (_instance_id == _instance_id_sent) advance_instance_id();
   _file_entries.push_back(fe);
 }
 
@@ -365,7 +404,7 @@ auto LibFlute::FileDeliveryTable::remove(uint32_t toi) -> void
       ++it;
     }
   }
-  if (_instance_id == _instance_id_sent) _instance_id++;
+  if (_instance_id == _instance_id_sent) advance_instance_id();
 }
 
 auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
