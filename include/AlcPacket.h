@@ -97,6 +97,14 @@ namespace LibFlute {
       FecScheme fec_scheme() const { return _fec_oti.encoding_id; };
 
      /**
+      *  Whether this packet carried its own EXT_FTI header extension. RFC 6726 allows a sender
+      *  to include EXT_FTI on individual object (TOI>0) packets, not just the FDT (TOI=0), so a
+      *  receiver can bootstrap an object's FEC OTI directly from the packet stream without
+      *  waiting for (or without ever seeing) that object's <File> entry in the FDT.
+      */
+      bool has_fec_oti() const { return _has_fti; };
+
+     /**
       *  Get the content encoding
       */
       ContentEncoding content_encoding() const { return _content_encoding; };
@@ -122,6 +130,7 @@ namespace LibFlute {
 
       ContentEncoding _content_encoding = ContentEncoding::NONE;
       FecOti _fec_oti = {};
+      bool _has_fti = false;
 
       char* _buffer = nullptr;
       size_t _len;

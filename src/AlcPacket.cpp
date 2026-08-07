@@ -128,6 +128,7 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                         _fec_oti.encoding_symbol_length = ntohs(*(uint16_t*)ext_ptr);
                         ext_ptr += 2;
                         _fec_oti.max_source_block_length = ntohl(*(uint32_t*)ext_ptr);
+                        _has_fti = true;
                       }
                       break;
                     }
