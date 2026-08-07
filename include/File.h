@@ -117,6 +117,21 @@ namespace LibFlute {
       const LibFlute::FileDeliveryTable::FileEntry& meta() const { return _meta; };
 
      /**
+      *  Fill in the FDT-derived fields (content_location, content_type, ...) once the FDT
+      *  entry for this TOI becomes available. Used when reception started from a packet's own
+      *  EXT_FTI before the describing FDT arrived, so the in-progress reception isn't discarded
+      *  and restarted once it does. Only content_location/content_type/content_md5/expires are
+      *  taken from the FDT entry -- fec_oti is left as-is, since it already came from the
+      *  packet's own EXT_FTI and is what the in-flight reassembly is keyed on.
+      */
+      void adopt_fdt_metadata(const LibFlute::FileDeliveryTable::FileEntry& fdt_entry) {
+        _meta.content_location = fdt_entry.content_location;
+        _meta.content_type = fdt_entry.content_type;
+        _meta.content_md5 = fdt_entry.content_md5;
+        _meta.expires = fdt_entry.expires;
+      };
+
+     /**
       *  Timestamp of file reception
       */
       unsigned long received_at() const { return _received_at; };

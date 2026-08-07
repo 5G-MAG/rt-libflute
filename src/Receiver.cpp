@@ -235,6 +235,16 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
           }
         }
 
+        if (alc.toi() != 0 && _files.find(alc.toi()) == _files.end() && alc.has_fec_oti()) {
+          // No <File> entry for this TOI yet (the FDT describing it hasn't arrived, or won't --
+          // RFC 6726 allows a sender to carry EXT_FTI on individual object packets precisely so
+          // reception doesn't have to wait on that). Bootstrap the FEC OTI straight from this
+          // packet instead of discarding it; content_location is filled in later, either from
+          // the FDT once it arrives (see the merge below) or left blank if it never does.
+          FileDeliveryTable::FileEntry fe{static_cast<uint32_t>(alc.toi()), "", static_cast<uint32_t>(alc.fec_oti().transfer_length), "", "", 0, alc.fec_oti()};
+          _files[alc.toi()] = std::make_shared<LibFlute::File>(fe);
+        }
+
         if (_files.find(alc.toi()) != _files.end() && !_files[alc.toi()]->complete()) {
           auto encoding_symbols = LibFlute::EncodingSymbol::from_payload(
               _data + alc.header_length(),
@@ -278,7 +288,14 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
               for (const auto& file_entry : _fdt->file_entries()) {
                 // automatically receive all files in the FDT
                 auto existing_file = _files.find(file_entry.toi);
-                if (existing_file != _files.end() &&
+                if (existing_file != _files.end() && existing_file->second->meta().content_location.empty() &&
+                    !existing_file->second->complete()) {
+                  // Reception for this TOI was bootstrapped from a packet's own EXT_FTI before
+                  // this FDT arrived (content_location wasn't known yet) -- this is that same
+                  // in-progress transfer, not a stale one. Adopt the FDT's metadata in place
+                  // rather than discarding and restarting it.
+                  existing_file->second->adopt_fdt_metadata(file_entry);
+                } else if (existing_file != _files.end() &&
                     existing_file->second->meta().content_location != file_entry.content_location) {
                   // TOI numbers get reused across FDT instances (the live window
                   // rolls forward). If a File is still sitting here incomplete
