@@ -44,7 +44,7 @@ namespace LibFlute {
       *  @param max_size Maximum payload size
       *  @param fdt_instance_id FDT instance ID (only relevant for FDT with TOI=0)
       */
-      AlcPacket(uint16_t tsi, uint16_t toi, FecOti fec_oti, const std::vector<EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id);
+      AlcPacket(uint64_t tsi, uint16_t toi, FecOti fec_oti, const std::vector<EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id);
 
      /**
       *  Default destructor.

@@ -158,11 +158,24 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
   }
 }
 
-LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_oti, const std::vector<LibFlute::EncodingSymbol>& symbols, size_t max_encoding_symbol_size, uint32_t fdt_instance_id)
+LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_oti, const std::vector<LibFlute::EncodingSymbol>& symbols, size_t max_encoding_symbol_size, uint32_t fdt_instance_id)
   : _fec_oti(fec_oti)
 {
+  // TSI width: this wire scheme always carries a 16-bit half-word component (half_word_flag=1,
+  // shared with TOI's own 16-bit half-word below) plus, when tsi_flag=1, an extra 32-bit word
+  // holding the high-order bits -- giving a 48-bit ceiling, matching the decoder in this same
+  // file. Values that fit in 16 bits keep the original on-wire size; anything larger sets
+  // tsi_flag and adds the extra word, instead of silently truncating to the low 16 bits.
+  if (tsi > 0xFFFFFFFFFFFFULL) {
+    throw std::runtime_error("TSI exceeds the 48-bit field width supported by this LCT encoding");
+  }
+  const bool wide_tsi = tsi > 0xFFFF;
+
   const size_t max_alc_header_size = 4;
   auto lct_header_len = 3;
+  if (wide_tsi) {
+    lct_header_len += 1;
+  }
   if (toi == 0) { // Add extensions for FDT
     lct_header_len += 5;
   }
@@ -177,18 +190,24 @@ LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_
 
   lct_header->version = 1;
   lct_header->half_word_flag = 1;
+  lct_header->tsi_flag = wide_tsi ? 1 : 0;
   lct_header->lct_header_len = lct_header_len;
   auto hdr_ptr = _buffer + 4;
   auto payload_ptr = _buffer + 4 * lct_header_len;
 
   auto payload_size = EncodingSymbol::to_payload(symbols, payload_ptr, max_encoding_symbol_size + max_alc_header_size, _fec_oti, ContentEncoding::NONE);
   _len = 4 * lct_header_len + payload_size;
-  
+
   hdr_ptr += 4; // CCI = 0
-  
-  *((uint16_t*)hdr_ptr) = htons(tsi);
+
+  *((uint16_t*)hdr_ptr) = htons(static_cast<uint16_t>(tsi & 0xFFFF));
   hdr_ptr += 2;
-  
+
+  if (wide_tsi) {
+    *((uint32_t*)hdr_ptr) = htonl(static_cast<uint32_t>(tsi >> 16));
+    hdr_ptr += 4;
+  }
+
   *((uint16_t*)hdr_ptr) = htons(toi);
   hdr_ptr += 2;
 
