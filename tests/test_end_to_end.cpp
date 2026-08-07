@@ -32,6 +32,7 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -65,6 +66,7 @@ namespace
     struct TunnelRuntime
     {
         std::atomic<bool> stop_requested = false;
+        std::mutex stats_mutex;
         TunnelBridgeStats stats;
         std::thread thread;
         std::optional<boost::asio::ip::udp::endpoint> endpoint = std::nullopt;
@@ -75,6 +77,12 @@ namespace
         bool tunneled = false;
         std::string expected_location;
     };
+
+    auto tunnel_bridge_stats(TunnelRuntime& tunnel_runtime) -> TunnelBridgeStats
+    {
+        const std::lock_guard<std::mutex> lock(tunnel_runtime.stats_mutex);
+        return tunnel_runtime.stats;
+    }
 
     // Builds a deterministic 5,000-byte payload with a repeating A-Z pattern so
     // both end-to-end scenarios can assert exact file contents after delivery.
@@ -157,7 +165,7 @@ namespace
     // de-tunnels that packet and forwards only the inner FLUTE bytes to the regular
     // receiver path used by this end-to-end test.
     auto run_tunnel_bridge(std::promise<void> ready_promise, std::atomic<bool>& stop_requested,
-                           TunnelBridgeStats& stats) -> void
+                           std::mutex& stats_mutex, TunnelBridgeStats& stats) -> void
     {
         int receive_socket = -1;
         int forward_socket = -1;
@@ -218,8 +226,11 @@ namespace
                 }
 
                 const auto packet_size = static_cast<size_t>(received_bytes);
-                stats.received_packet_count += 1;
-                stats.max_tunnel_payload_size = std::max(stats.max_tunnel_payload_size, packet_size);
+                {
+                    const std::lock_guard<std::mutex> lock(stats_mutex);
+                    stats.received_packet_count += 1;
+                    stats.max_tunnel_payload_size = std::max(stats.max_tunnel_payload_size, packet_size);
+                }
 
                 if (packet_size > tunnel_payload_limit)
                 {
@@ -295,14 +306,20 @@ namespace
                     throw std::runtime_error("Tunnel bridge failed to forward FLUTE payload");
                 }
 
-                stats.forwarded_packet_count += 1;
+                {
+                    const std::lock_guard<std::mutex> lock(stats_mutex);
+                    stats.forwarded_packet_count += 1;
+                }
             }
         }
         catch (const std::exception& ex)
         {
-            if (stats.error.empty())
             {
-                stats.error = ex.what();
+                const std::lock_guard<std::mutex> lock(stats_mutex);
+                if (stats.error.empty())
+                {
+                    stats.error = ex.what();
+                }
             }
             stop_requested.store(true);
             try
@@ -336,7 +353,8 @@ namespace
         tunnel_runtime.thread =
             std::thread([ready_promise = std::move(tunnel_ready_promise), &tunnel_runtime]() mutable
             {
-                run_tunnel_bridge(std::move(ready_promise), tunnel_runtime.stop_requested, tunnel_runtime.stats);
+                run_tunnel_bridge(
+                    std::move(ready_promise), tunnel_runtime.stop_requested, tunnel_runtime.stats_mutex, tunnel_runtime.stats);
             });
 
         const auto tunnel_ready = tunnel_ready_future.wait_for(2s);
@@ -350,7 +368,8 @@ namespace
             FAIL() << "Timed out waiting for tunnel bridge to start";
         }
 
-        ASSERT_TRUE(tunnel_runtime.stats.error.empty()) << tunnel_runtime.stats.error;
+        const auto stats = tunnel_bridge_stats(tunnel_runtime);
+        ASSERT_TRUE(stats.error.empty()) << stats.error;
     }
 
     auto run_end_to_end_scenario(const EndToEndOptions& options) -> void
@@ -432,10 +451,11 @@ namespace
                 << ", received_ready=" << (received_ready == std::future_status::ready) << std::endl;
             if (options.tunneled)
             {
-                std::cerr << "Tunnel bridge stats: error='" << tunnel_runtime.stats.error
-                    << "', received_packet_count=" << tunnel_runtime.stats.received_packet_count
-                    << ", forwarded_packet_count=" << tunnel_runtime.stats.forwarded_packet_count
-                    << ", max_tunnel_payload_size=" << tunnel_runtime.stats.max_tunnel_payload_size << std::endl;
+                const auto stats = tunnel_bridge_stats(tunnel_runtime);
+                std::cerr << "Tunnel bridge stats: error='" << stats.error
+                    << "', received_packet_count=" << stats.received_packet_count
+                    << ", forwarded_packet_count=" << stats.forwarded_packet_count
+                    << ", max_tunnel_payload_size=" << stats.max_tunnel_payload_size << std::endl;
             }
             transmitter.deactivate();
             transmitter_io.stop();
@@ -459,7 +479,8 @@ namespace
             {
                 tunnel_runtime.thread.join();
             }
-            ASSERT_TRUE(tunnel_runtime.stats.error.empty()) << tunnel_runtime.stats.error;
+            const auto stats = tunnel_bridge_stats(tunnel_runtime);
+            ASSERT_TRUE(stats.error.empty()) << stats.error;
         }
 
         ASSERT_EQ(transmitted_ready, std::future_status::ready);
@@ -482,10 +503,11 @@ namespace
         {
             // Confirm that tunneled delivery really used the bridge and that the
             // encapsulated packets stayed within the configured MTU-safe payload limit.
-            ASSERT_TRUE(tunnel_runtime.stats.error.empty()) << tunnel_runtime.stats.error;
-            EXPECT_GT(tunnel_runtime.stats.received_packet_count, 0U);
-            EXPECT_GT(tunnel_runtime.stats.forwarded_packet_count, 0U);
-            EXPECT_LE(tunnel_runtime.stats.max_tunnel_payload_size, tunnel_payload_limit);
+            const auto stats = tunnel_bridge_stats(tunnel_runtime);
+            ASSERT_TRUE(stats.error.empty()) << stats.error;
+            EXPECT_GT(stats.received_packet_count, 0U);
+            EXPECT_GT(stats.forwarded_packet_count, 0U);
+            EXPECT_LE(stats.max_tunnel_payload_size, tunnel_payload_limit);
         }
     }
 } // namespace
