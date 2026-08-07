@@ -43,8 +43,11 @@ namespace LibFlute {
       *  @param symbols Vector of encoding symbols
       *  @param max_size Maximum payload size
       *  @param fdt_instance_id FDT instance ID (only relevant for FDT with TOI=0)
+      *  @param close_session_flag Set the LCT Close Session flag (RFC 5651 SS3.4) on this packet
+      *  @param close_object_flag Set the LCT Close Object flag (RFC 5651 SS3.4) on this packet
       */
-      AlcPacket(uint64_t tsi, uint16_t toi, FecOti fec_oti, const std::vector<EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id);
+      AlcPacket(uint64_t tsi, uint16_t toi, FecOti fec_oti, const std::vector<EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id,
+                bool close_session_flag = false, bool close_object_flag = false);
 
      /**
       *  Default destructor.
@@ -72,9 +75,21 @@ namespace LibFlute {
       size_t header_length() const  { return _lct_header.lct_header_len * 4; };
 
      /**
-      *  Get the FDT instance ID 
+      *  Get the FDT instance ID
       */
       uint32_t fdt_instance_id() const { return _fdt_instance_id; };
+
+     /**
+      *  Whether the sender set the LCT Close Session flag on this packet, signalling that no
+      *  further objects will be sent in this session (RFC 5651 SS3.4).
+      */
+      bool close_session_flag() const { return _lct_header.close_session_flag; };
+
+     /**
+      *  Whether the sender set the LCT Close Object flag on this packet, signalling that this
+      *  is the last packet for this TOI (RFC 5651 SS3.4).
+      */
+      bool close_object_flag() const { return _lct_header.close_object_flag; };
 
      /**
       *  Get the FEC scheme

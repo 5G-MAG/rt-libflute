@@ -183,6 +183,12 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
 
   _expires = std::stoull(root_ns.findAttribute(fdt_instance, "Expires", fdt_ns)->Value());
 
+  auto complete_attr = root_ns.findAttribute(fdt_instance, "Complete", fdt_ns);
+  if (complete_attr != nullptr) {
+    std::string val(complete_attr->Value());
+    _complete = (val == "true" || val == "1");
+  }
+
   spdlog::debug("Received new FDT with instance ID {}: {}", instance_id, buffer);
 
   auto val = root_ns.findAttribute(fdt_instance, "FEC-OTI-FEC-Encoding-ID", fdt_ns);
@@ -432,6 +438,7 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
       break;
   }
   root->SetAttribute("Expires", std::to_string(_expires).c_str());
+  if (_complete) root->SetAttribute("Complete", "true");
   root->SetAttribute("FEC-OTI-FEC-Encoding-ID", (unsigned)_global_fec_oti.encoding_id);
   if (_global_fec_oti.instance_id) root->SetAttribute("FEC-OTI-FEC-Instance-ID", (unsigned)_global_fec_oti.instance_id);
   root->SetAttribute("FEC-OTI-Maximum-Source-Block-Length", (unsigned)_global_fec_oti.max_source_block_length);

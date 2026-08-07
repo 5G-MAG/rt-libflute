@@ -22,6 +22,7 @@
 #include <queue>
 #include <string>
 #include <map>
+#include <set>
 #include <mutex>
 #include <optional>
 //#include "File.h"
@@ -658,6 +659,22 @@ namespace LibFlute {
       */
       size_t number_of_files() { std::lock_guard<std::mutex> guard(_files_mutex); return _files.size(); };
 
+     /**
+      * Signal that this session is ending: no further files will ever be added. Marks the FDT
+      * as Complete (RFC 6726, so receivers know the file set is final) and sets the LCT Close
+      * Session flag (RFC 5651 SS3.4) on every packet sent from this point on, including for
+      * files already in flight.
+      */
+      void close_session();
+
+     /**
+      * Signal that no further data will be sent for a specific TOI. Sets the LCT Close Object
+      * flag (RFC 5651 SS3.4) on subsequent packets carrying that TOI.
+      *
+      * @param toi The TOI to close.
+      */
+      void close_object(uint32_t toi);
+
     private:
       void send_fdt();
       void send_next_packet();
@@ -682,6 +699,9 @@ namespace LibFlute {
       std::unique_ptr<FileDeliveryTable> _fdt;
       std::map<uint32_t, std::shared_ptr<File>> _files;
       std::mutex _files_mutex;
+
+      bool _session_closing = false;
+      std::set<uint32_t> _closing_objects;
 
       unsigned _fdt_repeat_interval = 5;
       uint16_t _toi = 1;

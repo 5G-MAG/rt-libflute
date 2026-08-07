@@ -209,6 +209,10 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
 
       if (alc.tsi() == _tsi) {
 
+        if (_close_cb && (alc.close_session_flag() || alc.close_object_flag())) {
+          _close_cb(alc.close_session_flag(), alc.close_object_flag(), alc.toi());
+        }
+
         const std::lock_guard<std::mutex> lock(_files_mutex);
 
         if (alc.toi() == 0 && (!_fdt || _fdt->instance_id() != alc.fdt_instance_id())) {
