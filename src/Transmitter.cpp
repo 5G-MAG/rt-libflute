@@ -791,7 +791,8 @@ auto Transmitter::send_next_packet() -> void
       for(const auto& symbol : symbols) {
         spdlog::debug("sending TOI {} SBN {} ID {}", file->meta().toi, symbol.source_block_number(), symbol.id() );
       }
-      auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id());
+      auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id(),
+                                                 _session_closing, _closing_objects.count(file->meta().toi) > 0);
       bytes_queued += packet->size();
 
       boost::asio::ip::udp::endpoint send_endpoint;
@@ -889,6 +890,17 @@ auto Transmitter::_complete_deactivation() -> void
   _active = false;
   _fdt_timer.cancel();
   _send_timer.cancel();
+}
+
+auto Transmitter::close_session() -> void
+{
+  _session_closing = true;
+  _fdt->set_complete(true);
+}
+
+auto Transmitter::close_object(uint32_t toi) -> void
+{
+  _closing_objects.insert(toi);
 }
 
 auto Transmitter::start_fdt_repeat_timer() -> void

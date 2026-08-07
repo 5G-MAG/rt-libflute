@@ -158,7 +158,8 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
   }
 }
 
-LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_oti, const std::vector<LibFlute::EncodingSymbol>& symbols, size_t max_encoding_symbol_size, uint32_t fdt_instance_id)
+LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_oti, const std::vector<LibFlute::EncodingSymbol>& symbols, size_t max_encoding_symbol_size, uint32_t fdt_instance_id,
+                                bool close_session_flag, bool close_object_flag)
   : _fec_oti(fec_oti)
 {
   // TSI width: this wire scheme always carries a 16-bit half-word component (half_word_flag=1,
@@ -191,6 +192,8 @@ LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_
   lct_header->version = 1;
   lct_header->half_word_flag = 1;
   lct_header->tsi_flag = wide_tsi ? 1 : 0;
+  lct_header->close_session_flag = close_session_flag ? 1 : 0;
+  lct_header->close_object_flag = close_object_flag ? 1 : 0;
   lct_header->lct_header_len = lct_header_len;
   auto hdr_ptr = _buffer + 4;
   auto payload_ptr = _buffer + 4 * lct_header_len;

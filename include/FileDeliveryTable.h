@@ -96,6 +96,17 @@ namespace LibFlute {
       void set_expires(uint64_t exp) { _expires = exp; };
 
      /**
+      *  Set the RFC 6726 Complete attribute: true once this FDT Instance describes the full,
+      *  final set of files for the session (no further files will ever be announced).
+      */
+      void set_complete(bool complete) { _complete = complete; };
+
+     /**
+      *  Get the Complete attribute (defaults to false if the FDT-Instance never carried one).
+      */
+      bool complete() const { return _complete; };
+
+     /**
       *  Add a file entry
       */
       void add(const FileEntry& entry);
@@ -147,6 +158,7 @@ namespace LibFlute {
       FecOti _global_fec_oti;
 
       uint64_t _expires;
+      bool _complete = false;
 
       FdtNamespace _fdt_namespace;
   };
