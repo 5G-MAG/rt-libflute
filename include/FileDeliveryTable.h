@@ -18,6 +18,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 #include "flute_types.h"
@@ -66,6 +67,45 @@ namespace LibFlute {
       *  Get the FDT instance ID
       */
       uint32_t instance_id() { return _instance_id; };
+
+     /**
+      *  The FDT Instance ID is a 20-bit field on the wire (RFC 6726 SS3.4.1).
+      */
+      static constexpr uint32_t kMaxFdtInstanceId = 0xFFFFF;
+
+     /**
+      *  Compute the next FDT Instance ID to use (RFC 6726 SS3.4.1): normally just
+      *  @p current + 1, but once the 20-bit ID space is exhausted, wrap to the
+      *  smallest ID recorded in @p expired_ids instead of just letting the value
+      *  overflow and get bit-masked on the wire (which could collide with an ID a
+      *  receiver still considers live). @p current is added to @p expired_ids (it
+      *  is being superseded); if a wrapped ID is reused, it is removed from
+      *  @p expired_ids.
+      *
+      *  Exposed as a static method, taking its state explicitly, so the
+      *  wraparound behaviour itself is independently testable without needing
+      *  ~2^20 real FDT changes to reach the ceiling.
+      *
+      *  @param current The FDT Instance ID currently in use (about to be replaced)
+      *  @param expired_ids IDs known to no longer be associated with a live FDT
+      *         Instance; updated in place
+      *  @return The next FDT Instance ID to use
+      */
+      static uint32_t next_instance_id(uint32_t current, std::set<uint32_t>& expired_ids);
+
+     /**
+      *  Is this FDT Instance marked Complete (RFC 6726 SS3.4.1 `Complete`
+      *  FDT-Instance attribute)? Complete indicates no further FDT Instances will
+      *  describe additional files for this session -- the file set is final.
+      */
+      bool complete() const { return _complete; };
+
+     /**
+      *  Mark this FDT Instance Complete (or not, see complete()). Marking Complete
+      *  does not itself allocate a new FDT Instance ID or trigger a resend; the
+      *  caller (e.g. Transmitter::close_session()) is responsible for that.
+      */
+      void set_complete(bool complete) { _complete = complete; };
 
      /**
       *  An entry for a file in the FDT
@@ -122,13 +162,17 @@ namespace LibFlute {
       void sent() { _instance_id_sent = _instance_id; };
 
     private:
+      void _advance_instance_id();
+
       uint32_t _instance_id;
       uint32_t _instance_id_sent;
+      std::set<uint32_t> _expired_instance_ids;
 
       std::vector<FileEntry> _file_entries;
       FecOti _global_fec_oti;
 
       uint64_t _expires;
+      bool _complete = false;
 
       FdtNamespace _fdt_namespace;
   };

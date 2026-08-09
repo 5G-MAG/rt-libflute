@@ -47,9 +47,15 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
     hdr_ptr += 2;
   } 
   if(_lct_header.tsi_flag == 1) {
-    _tsi |= ntohl(*(uint32_t*)hdr_ptr) << tsi_shift;
+    // Cast to uint64_t *before* shifting: ntohl() returns uint32_t, and
+    // shifting that left by tsi_shift==16 in 32-bit arithmetic silently
+    // discards its own top 16 bits (the high bits of a 48-bit TSI) before
+    // the |= ever promotes it to 64 bits. Latent until AlcPacket's send-side
+    // constructor actually started emitting tsi_flag==1 (see AlcPacket's
+    // encode constructor) -- previously unreachable in practice.
+    _tsi |= (uint64_t)ntohl(*(uint32_t*)hdr_ptr) << tsi_shift;
     hdr_ptr += 4;
-  } 
+  }
 
   if ( _lct_header.close_session_flag == 0 && _lct_header.half_word_flag == 0 && _lct_header.toi_flag == 0) {
     throw std::runtime_error("TOI field not present");
@@ -62,8 +68,10 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
   } 
   switch(_lct_header.toi_flag) {
       case 0: break;
-      case 1: 
-        _toi |= ntohl(*(uint32_t*)hdr_ptr) << toi_shift;
+      case 1:
+        // Same uint64_t-before-shift fix as the TSI decode above (this
+        // case's own case 2, below, already got it right).
+        _toi |= (uint64_t)ntohl(*(uint32_t*)hdr_ptr) << toi_shift;
         hdr_ptr += 4;
         break;
       case 2:
@@ -164,6 +172,7 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                       } else {
                         throw std::runtime_error("EXT_FTI parsing not implemented for this FEC scheme yet");
                       }
+                      _has_fti = true;
                       break;
                     }
       case EXT_FDT: {
@@ -193,11 +202,36 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
   }
 }
 
-LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_oti, const std::vector<LibFlute::EncodingSymbol>& symbols, size_t max_encoding_symbol_size, uint32_t fdt_instance_id)
+LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_oti, const std::vector<LibFlute::EncodingSymbol>& symbols, size_t max_encoding_symbol_size, uint32_t fdt_instance_id,
+                               bool close_session, bool close_object)
   : _fec_oti(fec_oti)
 {
   const size_t max_alc_header_size = 4;
-  auto lct_header_len = 3;
+
+  // Choose the narrowest half_word_flag(H)/tsi_flag(S) combination able to carry the
+  // actual TSI value on the wire (RFC 5651 SS4.2): H=1 emits a 16-bit half-word for
+  // *both* TSI and TOI; S adds a further 32-bit TSI field on top of that half-word.
+  // With H=0 there is no half-word at all, so a TOI field is only present if its own
+  // flag (O) is set -- this library's TOI never exceeds 16 bits, so O=1 here is only
+  // ever a side effect of clearing H to make room for a wider TSI, not a widening of
+  // TOI's own range.
+  uint8_t half_word_flag;
+  uint8_t tsi_flag;
+  uint8_t toi_flag;
+  if (tsi <= 0xFFFFULL) {
+    half_word_flag = 1; tsi_flag = 0; toi_flag = 0; // TSI+TOI: 16 bits each (half-word only)
+  } else if (tsi <= 0xFFFFFFFFULL) {
+    half_word_flag = 0; tsi_flag = 1; toi_flag = 1;  // TSI: 32 bits; TOI: 32 bits (H=0 requires O=1 for a TOI field to be present at all)
+  } else if (tsi <= 0xFFFFFFFFFFFFULL) {
+    half_word_flag = 1; tsi_flag = 1; toi_flag = 0; // TSI: 48 bits (16-bit half-word + 32-bit field); TOI: 16 bits (half-word only)
+  } else {
+    throw std::runtime_error("TSI exceeds the 48-bit maximum representable in an LCT header");
+  }
+
+  auto lct_header_len = 2 // LCT header word + CCI word
+    + half_word_flag       // 1 word: 16-bit TSI half-word + 16-bit TOI half-word
+    + tsi_flag             // 1 word: 32-bit TSI field
+    + toi_flag;            // 1 word: 32-bit TOI field
   if (toi == 0) { // Add extensions for FDT
     lct_header_len += 5;
   }
@@ -211,26 +245,54 @@ LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_
   auto lct_header = (lct_header_t*)_buffer;
 
   lct_header->version = 1;
-  lct_header->half_word_flag = 1;
+  lct_header->half_word_flag = half_word_flag;
+  lct_header->tsi_flag = tsi_flag;
+  lct_header->toi_flag = toi_flag;
+  lct_header->close_session_flag = close_session ? 1 : 0;
+  lct_header->close_object_flag = close_object ? 1 : 0;
   lct_header->lct_header_len = lct_header_len;
   auto hdr_ptr = _buffer + 4;
   auto payload_ptr = _buffer + 4 * lct_header_len;
 
   auto payload_size = EncodingSymbol::to_payload(symbols, payload_ptr, max_encoding_symbol_size + max_alc_header_size, _fec_oti, ContentEncoding::NONE);
   _len = 4 * lct_header_len + payload_size;
-  
+
   hdr_ptr += 4; // CCI = 0
-  
-  *((uint16_t*)hdr_ptr) = htons(tsi);
-  hdr_ptr += 2;
-  
-  *((uint16_t*)hdr_ptr) = htons(toi);
-  hdr_ptr += 2;
+
+  // TSI: half-word (low 16 bits) if H=1, then a 32-bit field if S=1 -- carrying
+  // either the full value (H=0) or the remaining upper bits (H=1, shifted by 16),
+  // mirroring the receive-side decoder's tsi_shift logic exactly.
+  if (half_word_flag) {
+    *((uint16_t*)hdr_ptr) = htons(static_cast<uint16_t>(tsi & 0xFFFFULL));
+    hdr_ptr += 2;
+  }
+  if (tsi_flag) {
+    uint32_t tsi_field = half_word_flag
+      ? static_cast<uint32_t>((tsi >> 16) & 0xFFFFFFFFULL)
+      : static_cast<uint32_t>(tsi & 0xFFFFFFFFULL);
+    *((uint32_t*)hdr_ptr) = htonl(tsi_field);
+    hdr_ptr += 4;
+  }
+
+  // TOI: same half-word/field structure as TSI, but this library's TOI value
+  // itself is always <= 16 bits, so the 32-bit field (when present, O=1) just
+  // carries the same value zero-extended, not extra range.
+  if (half_word_flag) {
+    *((uint16_t*)hdr_ptr) = htons(toi);
+    hdr_ptr += 2;
+  }
+  if (toi_flag) {
+    *((uint32_t*)hdr_ptr) = htonl(static_cast<uint32_t>(toi));
+    hdr_ptr += 4;
+  }
 
   if (toi == 0) { // Add extensions for FDT
     *((uint8_t*)hdr_ptr) = EXT_FDT;
     hdr_ptr += 1;
-    *((uint8_t*)hdr_ptr) = 1 << 4 | (fdt_instance_id & 0x000F0000) >> 16;
+    // FLUTE version nibble (RFC 6726 SS3.1/SS3.4.1): this library implements
+    // FLUTE v2, so this MUST be 2, not 1 -- the receive-side EXT_FDT parser
+    // already tolerates 0/1/2 here (see the flute_version > 2 check above).
+    *((uint8_t*)hdr_ptr) = 2 << 4 | (fdt_instance_id & 0x000F0000) >> 16;
     hdr_ptr += 1;
     *((uint16_t*)hdr_ptr) = htons(fdt_instance_id & 0x0000FFFF);
     hdr_ptr += 2;

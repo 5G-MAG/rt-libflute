@@ -191,9 +191,9 @@ auto LibFlute::Receiver::arm_receive() -> void
       });
 }
 
-auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key) -> void
+auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key, const std::string& auth_key) -> void
 {
-  LibFlute::IpSec::enable_esp(spi, _mcast_address, LibFlute::IpSec::Direction::In, key);
+  LibFlute::IpSec::enable_esp(spi, _mcast_address, LibFlute::IpSec::Direction::In, key, auth_key);
 }
 
 auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& error,
@@ -210,6 +210,16 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
       if (alc.tsi() == _tsi) {
 
         const std::lock_guard<std::mutex> lock(_files_mutex);
+
+        if (alc.close_session() && !_session_closed) {
+          _session_closed = true;
+          spdlog::info("Sender signalled Close Session for TSI {}", alc.tsi());
+          if (_close_session_cb) _close_session_cb();
+        }
+        if (alc.close_object() && _closed_object_tois_notified.insert(alc.toi()).second) {
+          spdlog::debug("Sender signalled Close Object for TOI {}", alc.toi());
+          if (_close_object_cb) _close_object_cb(alc.toi());
+        }
 
         if (alc.toi() == 0 && (!_fdt || _fdt->instance_id() != alc.fdt_instance_id())) {
           // (Re)start reception of the FDT (TOI 0) for THIS instance. The FDT is
@@ -229,6 +239,22 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
             _files[0] = std::make_shared<LibFlute::File>(fe);
             _fdt_in_progress_instance_id = alc.fdt_instance_id();
           }
+        }
+
+        if (alc.toi() != 0 && _files.find(alc.toi()) == _files.end() && alc.has_fti()) {
+          // No FDT entry (and no File at all) for this TOI yet, but this packet
+          // carries its own EXT_FTI (RFC 6726 SS3.4.1 explicitly allows a receiver
+          // to bootstrap reception of an object from its own FEC OTI before the
+          // FDT describing it has arrived). Previously such packets were simply
+          // discarded until the FDT caught up, potentially losing symbols carried
+          // by the very packets that would have started reception soonest.
+          // content_location/content_type/md5 are unknown until the FDT entry for
+          // this TOI arrives; the existing toi==0 handling above already
+          // reconciles a stale/incomplete File if the FDT's content_location for
+          // this TOI later turns out to differ.
+          spdlog::debug("Bootstrapping reception for file with TOI {} from its own EXT_FTI (FDT not yet received)", alc.toi());
+          FileDeliveryTable::FileEntry fe{static_cast<uint32_t>(alc.toi()), "", static_cast<uint32_t>(alc.fec_oti().transfer_length), "", "", 0, alc.fec_oti()};
+          _files[alc.toi()] = std::make_shared<LibFlute::File>(fe);
         }
 
         if (_files.find(alc.toi()) != _files.end() && !_files[alc.toi()]->complete()) {

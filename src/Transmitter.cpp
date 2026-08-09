@@ -629,9 +629,22 @@ auto Transmitter::source_address(std::optional<boost::asio::ip::address> &&sourc
   return *this;
 }
 
-auto Transmitter::enable_ipsec(uint32_t spi, const std::string& key) -> void
+auto Transmitter::enable_ipsec(uint32_t spi, const std::string& key, const std::string& auth_key) -> void
 {
-  IpSec::enable_esp(spi, _mcast_address, IpSec::Direction::Out, key);
+  IpSec::enable_esp(spi, _mcast_address, IpSec::Direction::Out, key, auth_key);
+}
+
+auto Transmitter::close_session() -> void
+{
+  _close_session_flag = true;
+  _fdt->set_complete(true);
+  send_fdt();
+}
+
+auto Transmitter::close_object(uint32_t toi) -> void
+{
+  std::lock_guard<std::mutex> guard(_files_mutex);
+  _close_object_tois.insert(toi);
 }
 
 auto Transmitter::handle_send_to(const boost::system::error_code& error) -> void
@@ -804,6 +817,7 @@ auto Transmitter::send_next_packet() -> void
 
   if (!_active) return;
   std::shared_ptr<File> file;
+  bool is_close_object = false;
   {
     std::lock_guard<std::mutex> guard(_files_mutex);
     for (auto& file_m : _files) {
@@ -814,6 +828,9 @@ auto Transmitter::send_next_packet() -> void
         break;
       }
     }
+    if (file) {
+      is_close_object = _close_object_tois.count(file->meta().toi) > 0;
+    }
   }
   if (file) {
     auto symbols = file->get_next_symbols(_max_payload);
@@ -822,7 +839,8 @@ auto Transmitter::send_next_packet() -> void
       for(const auto& symbol : symbols) {
         spdlog::debug("sending TOI {} SBN {} ID {}", file->meta().toi, symbol.source_block_number(), symbol.id() );
       }
-      auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id());
+      auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id(),
+                                                 _close_session_flag.load(), is_close_object);
       bytes_queued += packet->size();
 
       // BUG FIX: this used to be if/else -- tunnel the packet to the N3mb GTP-U peer *instead

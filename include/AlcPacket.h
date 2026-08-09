@@ -35,16 +35,24 @@ namespace LibFlute {
       AlcPacket(char* data, size_t len);
 
      /**
-      *  Create an ALC packet from encoding symbols 
+      *  Create an ALC packet from encoding symbols
       *
-      *  @param tsi Transport Stream Identifier
+      *  @param tsi Transport Stream Identifier. RFC 5651 SS4.2 allows this to be up to
+      *             48 bits wide on the wire (a 16-bit half-word plus an optional 32-bit
+      *             extension); the narrowest half_word_flag/tsi_flag combination able to
+      *             carry the actual value is chosen automatically.
       *  @param toi Transport Object Identifier
       *  @param fec_oti OTI values
       *  @param symbols Vector of encoding symbols
       *  @param max_size Maximum payload size
       *  @param fdt_instance_id FDT instance ID (only relevant for FDT with TOI=0)
+      *  @param close_session Set the LCT Close Session flag (RFC 5651 SS5.1) on this packet,
+      *                        signalling that no further objects will be sent in this session
+      *  @param close_object Set the LCT Close Object flag (RFC 5651 SS5.1) on this packet,
+      *                       signalling that no further packets will be sent for this TOI
       */
-      AlcPacket(uint16_t tsi, uint16_t toi, FecOti fec_oti, const std::vector<EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id);
+      AlcPacket(uint64_t tsi, uint16_t toi, FecOti fec_oti, const std::vector<EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id,
+                bool close_session = false, bool close_object = false);
 
      /**
       *  Default destructor.
@@ -87,6 +95,28 @@ namespace LibFlute {
       ContentEncoding content_encoding() const { return _content_encoding; };
 
      /**
+      *  Was an EXT_FTI header extension present on this (received) packet?
+      *
+      *  When true, fec_oti() reflects values actually carried by this specific
+      *  packet (RFC 6726 SS3.4.1 permits this for bootstrapping reception of a
+      *  TOI before its FDT entry has arrived), rather than the default-constructed
+      *  FecOti{} used when no such extension was present.
+      */
+      bool has_fti() const { return _has_fti; };
+
+     /**
+      *  Get the LCT Close Session flag (RFC 5651 SS5.1, 'A' bit): the sender is
+      *  signalling that it will not transmit any further objects in this session.
+      */
+      bool close_session() const { return _lct_header.close_session_flag == 1; };
+
+     /**
+      *  Get the LCT Close Object flag (RFC 5651 SS5.1, 'B' bit): the sender is
+      *  signalling that it will not transmit any further packets for this TOI.
+      */
+      bool close_object() const { return _lct_header.close_object_flag == 1; };
+
+     /**
       *  Get a pointer to the payload data of the constructed packet
       */
       char* data() const { return _buffer; };
@@ -107,6 +137,7 @@ namespace LibFlute {
 
       ContentEncoding _content_encoding = ContentEncoding::NONE;
       FecOti _fec_oti = {};
+      bool _has_fti = false;
 
       char* _buffer = nullptr;
       size_t _len;

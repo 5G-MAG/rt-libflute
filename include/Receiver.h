@@ -17,10 +17,12 @@
 #include <boost/asio.hpp>
 #include <boost/bind/bind.hpp>
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <string>
 #include <map>
 #include <mutex>
+#include <set>
 #include "File.h"
 #include "FileDeliveryTable.h"
 
@@ -68,9 +70,12 @@ namespace LibFlute {
       *  Enable IPSEC ESP decryption of FLUTE payloads.
       *
       *  @param spi Security Parameter Index value to use
-      *  @param key AES key as a hex string (without leading 0x). Must be an even number of characters long.
+      *  @param aes_key AES key as a hex string (without leading 0x). Must be an even number of characters long.
+      *  @param auth_key Authentication (HMAC) key as a hex string (without leading 0x, even number of
+      *                  characters). If not given, a key is derived deterministically from @p aes_key,
+      *                  matching Transmitter::enable_ipsec()'s default.
       */
-      void enable_ipsec( uint32_t spi, const std::string& aes_key);
+      void enable_ipsec( uint32_t spi, const std::string& aes_key, const std::string& auth_key = "");
 
      /**
       *  List all current files
@@ -95,6 +100,41 @@ namespace LibFlute {
       *  @param cb Function to call on file completion
       */
       void register_completion_callback(completion_callback_t cb) { _completion_cb = cb; };
+
+     /**
+      *  Definition of a session-close notification callback, registered through
+      *  ::register_close_session_callback. Called the first time a received
+      *  packet carries the LCT Close Session flag (RFC 5651 SS5.1).
+      */
+      typedef std::function<void()> close_session_callback_t;
+
+     /**
+      *  Definition of an object-close notification callback, registered through
+      *  ::register_close_object_callback. Called the first time a received
+      *  packet for a given TOI carries the LCT Close Object flag (RFC 5651 SS5.1).
+      *
+      *  @param toi TOI of the object the sender signalled as closed
+      */
+      typedef std::function<void(uint32_t)> close_object_callback_t;
+
+     /**
+      *  Register a callback for Close Session notifications
+      *
+      *  @param cb Function to call when the sender signals Close Session
+      */
+      void register_close_session_callback(close_session_callback_t cb) { _close_session_cb = cb; };
+
+     /**
+      *  Register a callback for Close Object notifications
+      *
+      *  @param cb Function to call when the sender signals Close Object for a TOI
+      */
+      void register_close_object_callback(close_object_callback_t cb) { _close_object_cb = cb; };
+
+     /**
+      *  Has the sender signalled Close Session (RFC 5651 SS5.1) on this FLUTE session?
+      */
+      bool session_closed() const { return _session_closed; };
 
       void stop() { _running = false; }
     private:
@@ -129,6 +169,13 @@ namespace LibFlute {
       std::string _mcast_address;
 
       completion_callback_t _completion_cb = nullptr;
+      close_session_callback_t _close_session_cb = nullptr;
+      close_object_callback_t _close_object_cb = nullptr;
+      bool _session_closed = false;
+      // TOIs for which the Close Object callback has already fired, so a
+      // repeated/retransmitted packet for an already-closed object doesn't
+      // notify the caller again.
+      std::set<uint32_t> _closed_object_tois_notified;
 
       bool _running = true;
 

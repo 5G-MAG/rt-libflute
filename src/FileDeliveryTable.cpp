@@ -182,9 +182,15 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
 
   _expires = std::stoull(root_ns.findAttribute(fdt_instance, "Expires", fdt_ns)->Value());
 
+  auto val = root_ns.findAttribute(fdt_instance, "Complete", fdt_ns);
+  if (val != nullptr) {
+    std::string complete_str(val->Value());
+    _complete = (complete_str == "true" || complete_str == "1" || complete_str == "TRUE");
+  }
+
   spdlog::debug("Received new FDT with instance ID {}: {}", instance_id, buffer);
 
-  auto val = root_ns.findAttribute(fdt_instance, "FEC-OTI-FEC-Encoding-ID", fdt_ns);
+  val = root_ns.findAttribute(fdt_instance, "FEC-OTI-FEC-Encoding-ID", fdt_ns);
   if (val != nullptr) {
     _global_fec_oti.encoding_id = static_cast<FecScheme>(strtoul(val->Value(), nullptr, 0));
   }
@@ -389,9 +395,45 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
   }
 }
 
+uint32_t LibFlute::FileDeliveryTable::next_instance_id(uint32_t current, std::set<uint32_t>& expired_ids)
+{
+  // `current` is being superseded, so it becomes available for future reuse
+  // once we've moved away from it -- unless it's the value we're about to
+  // return again below, callers never see it selected while still live.
+  expired_ids.insert(current);
+
+  if (current < kMaxFdtInstanceId) {
+    return current + 1;
+  }
+
+  // 20-bit space exhausted: reuse the smallest ID not currently associated
+  // with a live FDT Instance, instead of just incrementing past the ceiling
+  // and letting AlcPacket's 20-bit wire mask silently wrap it (which could
+  // collide with an ID a receiver still considers live/cached). `current`
+  // itself was just inserted into expired_ids above, but is excluded here:
+  // reusing it immediately would be indistinguishable to a receiver from not
+  // having changed FDT Instance at all, defeating the point of wrapping.
+  for (auto it = expired_ids.begin(); it != expired_ids.end(); ++it) {
+    if (*it == current) continue;
+    uint32_t reused = *it;
+    expired_ids.erase(it);
+    return reused;
+  }
+
+  // No other known-expired ID at all (only reachable if the ceiling was hit
+  // with no prior history, e.g. a fresh FDT constructed directly at the
+  // maximum with nothing superseded yet).
+  return 0;
+}
+
+auto LibFlute::FileDeliveryTable::_advance_instance_id() -> void
+{
+  _instance_id = next_instance_id(_instance_id, _expired_instance_ids);
+}
+
 auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> void
 {
-  if (_instance_id == _instance_id_sent) _instance_id++;
+  if (_instance_id == _instance_id_sent) _advance_instance_id();
   _file_entries.push_back(fe);
 }
 
@@ -404,7 +446,7 @@ auto LibFlute::FileDeliveryTable::remove(uint32_t toi) -> void
       ++it;
     }
   }
-  if (_instance_id == _instance_id_sent) _instance_id++;
+  if (_instance_id == _instance_id_sent) _advance_instance_id();
 }
 
 auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
@@ -432,6 +474,7 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
       break;
   }
   root->SetAttribute("Expires", std::to_string(_expires).c_str());
+  if (_complete) root->SetAttribute("Complete", "true");
   root->SetAttribute("FEC-OTI-FEC-Encoding-ID", (unsigned)_global_fec_oti.encoding_id);
   if (_global_fec_oti.instance_id) root->SetAttribute("FEC-OTI-FEC-Instance-ID", (unsigned)_global_fec_oti.instance_id);
   root->SetAttribute("FEC-OTI-Maximum-Source-Block-Length", (unsigned)_global_fec_oti.max_source_block_length);

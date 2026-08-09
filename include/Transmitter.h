@@ -24,6 +24,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 //#include "File.h"
 #include "AlcPacket.h"
 #include "FileDeliveryTable.h"
@@ -593,8 +594,34 @@ namespace LibFlute {
       *
       *  @param spi Security Parameter Index value to use
       *  @param aes_key AES key as a hex string (without leading 0x). Must be an even number of characters long.
+      *  @param auth_key Authentication (HMAC) key as a hex string (without leading 0x, even number of
+      *                  characters). RFC 6726 SS7.5 requires authentication alongside encryption; if not
+      *                  given, a key is derived deterministically from @p aes_key so authentication is
+      *                  still configured.
       */
-      void enable_ipsec( uint32_t spi, const std::string& aes_key);
+      void enable_ipsec( uint32_t spi, const std::string& aes_key, const std::string& auth_key = "");
+
+     /**
+      *  Signal Close Session on all packets sent from now on (RFC 5651 SS5.1 'A' flag,
+      *  RFC 6726 SS3.4.1 Complete FDT-Instance attribute).
+      *
+      *  Indicates to receivers that this FLUTE session will not transmit any further
+      *  objects. This also marks the current FDT Instance as Complete and re-sends it,
+      *  since receivers primarily use the FDT's own Complete attribute (not just the
+      *  packet-level flag) to learn that the session's file set is final.
+      */
+      void close_session();
+
+     /**
+      *  Signal Close Object on all packets sent for @p toi from now on (RFC 5651 SS5.1
+      *  'B' flag).
+      *
+      *  Indicates to receivers that no further packets will be sent for this specific
+      *  object. Does not affect any other TOI, nor the session as a whole.
+      *
+      *  @param toi TOI of the object to close.
+      */
+      void close_object(uint32_t toi);
 
      /**
       *  Transmit a file (deprecated).
@@ -736,6 +763,10 @@ namespace LibFlute {
 
       std::atomic<bool> _active;
       std::atomic<bool> _deactivate_when_all_files_sent = false;
+
+      std::atomic<bool> _close_session_flag = false;
+      // Guarded by _files_mutex, like _files itself.
+      std::set<uint32_t> _close_object_tois;
   };
 
 } // end namespace LibFlute

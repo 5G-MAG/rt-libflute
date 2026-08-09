@@ -17,6 +17,7 @@
 #include <string>
 #include <cstring>
 #include <iostream>
+#include <vector>
 #include "spdlog/spdlog.h"
 #include <netlink/netlink.h>
 #include <netlink/attr.h>
@@ -28,6 +29,12 @@
 #include <arpa/inet.h>
 #include "IpSec.h"
 #include <boost/algorithm/hex.hpp>
+
+// Suppress warnings about SHA256 (via the legacy one-shot API) being
+// deprecated in later versions of OpenSSL, consistent with Transmitter.cpp's
+// use of the equally-deprecated one-shot MD5() API.
+#define OPENSSL_SUPPRESS_DEPRECATED 1
+#include <openssl/sha.h>
 
 namespace LibFlute::IpSec {
   void configure_policy(uint32_t spi, const std::string& dest_address, Direction direction)
@@ -69,7 +76,8 @@ namespace LibFlute::IpSec {
     nlmsg_free(msg);
     nl_socket_free(sk); // BUG FIX: was never freed, leaking a netlink socket/fd on every call
   }
-  void configure_state(uint32_t spi, const std::string& dest_address, Direction direction, const std::string& key)
+  void configure_state(uint32_t spi, const std::string& dest_address, Direction direction, const std::string& key,
+                        const std::string& auth_key)
   {
     struct nl_sock *sk;
     struct nl_msg *msg;
@@ -110,9 +118,38 @@ namespace LibFlute::IpSec {
     algo->alg_key_len = binary_key.size() * 8;
     memcpy(algo->alg_key, &binary_key[0], binary_key.size());
 
+    // RFC 6726 SS7.5: authentication SHALL also be present, not just encryption.
+    // Configure HMAC-SHA256 (XFRMA_ALG_AUTH) alongside the AES encryption above.
+    std::vector<char> auth_algo_buf(sizeof(struct xfrm_algo) + 512, 0);
+    auto* auth_algo = reinterpret_cast<struct xfrm_algo*>(auth_algo_buf.data());
+
+    std::vector<unsigned char> auth_key_bytes;
+    if (!auth_key.empty()) {
+      for (unsigned int i = 0; i < auth_key.length(); i += 2) {
+        auth_key_bytes.push_back((unsigned char)strtol(auth_key.substr(i, 2).c_str(), nullptr, 16));
+      }
+    } else {
+      // No separate auth key supplied: derive one deterministically from the
+      // crypt key (distinct bytes from it, not the same secret reused as-is)
+      // so authentication is still configured for existing single-key callers.
+      static const std::string context = "libflute-ipsec-auth-key-v1";
+      std::vector<unsigned char> input(binary_key.begin(), binary_key.end());
+      input.insert(input.end(), context.begin(), context.end());
+      unsigned char digest[SHA256_DIGEST_LENGTH];
+      SHA256(input.data(), input.size(), digest);
+      auth_key_bytes.assign(digest, digest + SHA256_DIGEST_LENGTH);
+    }
+    if (auth_key_bytes.size() > 512) {
+      throw std::runtime_error("Authentication key is too long");
+    }
+    strcpy(auth_algo->alg_name, "hmac(sha256)");
+    auth_algo->alg_key_len = auth_key_bytes.size() * 8;
+    memcpy(auth_algo->alg_key, auth_key_bytes.data(), auth_key_bytes.size());
+
     msg = nlmsg_alloc_simple(XFRM_MSG_NEWSA, 0);
     nlmsg_append(msg, &xsinfo, sizeof(xsinfo), NLMSG_ALIGNTO);
     nla_put(msg, XFRMA_ALG_CRYPT, algo_buf.size(), algo);
+    nla_put(msg, XFRMA_ALG_AUTH, auth_algo_buf.size(), auth_algo);
 
     sk = nl_socket_alloc();
     nl_connect(sk, NETLINK_XFRM);
@@ -121,9 +158,10 @@ namespace LibFlute::IpSec {
     nl_socket_free(sk); // BUG FIX: was never freed, leaking a netlink socket/fd on every call
   }
 
-  void enable_esp(uint32_t spi, const std::string& dest_address, Direction direction, const std::string& key)
+  void enable_esp(uint32_t spi, const std::string& dest_address, Direction direction, const std::string& key,
+                   const std::string& auth_key)
   {
-    configure_state(spi, dest_address, direction, key);
+    configure_state(spi, dest_address, direction, key, auth_key);
     configure_policy(spi, dest_address, direction);
   }
 };
