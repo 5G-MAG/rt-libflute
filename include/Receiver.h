@@ -19,10 +19,12 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <map>
 #include <mutex>
 #include <set>
+#include <vector>
 #include "File.h"
 #include "FileDeliveryTable.h"
 
@@ -39,6 +41,41 @@ namespace LibFlute {
       *  @returns shared_ptr to the received file
       */
       typedef std::function<void(std::shared_ptr<LibFlute::File>)> completion_callback_t;
+
+     /**
+      *  https://github.com/5G-MAG/rt-libflute/issues/66 : the Receiver-side counterpart to
+      *  Transmitter's existing udp_tunnel_address() support (see its _tunnel_endpoint /
+      *  create_ip_hdr() / create_udp_pkt()). Per the issue discussion: the library has no
+      *  business knowing about any particular encapsulation format -- that is entirely the
+      *  controlling application's concern ("a better design pattern would be for the
+      *  controlling application to pass in a 'helper' function that the library invokes to
+      *  do application-specific mangling of packets before the generic code in the library
+      *  starts processing the ALC/LCT payload", rjb1000). This is that helper's signature.
+      *
+      *  This mirrors the de-tunnelling logic that already exists, hand-written, in
+      *  tests/test_end_to_end.cpp's run_tunnel_bridge() (added alongside Transmitter's own
+      *  tunnel mode) -- a std::thread there receives on a plain UDP socket, manually parses
+      *  a hand-built inner IPv4+UDP header out of the payload (no GTP-U or other framing;
+      *  Transmitter's tunnel mode wraps the ALC packet in exactly this and nothing else),
+      *  and forwards just the FLUTE bytes onward over loopback to a receiver that has no
+      *  tunnel-awareness at all. This issue asks for that same logic to move inside Receiver
+      *  proper, as a caller-supplied, protocol-agnostic hook rather than a hardcoded parser
+      *  baked into the library, so any encapsulation a given deployment actually needs
+      *  (matching Transmitter's own wrapper, real GTP-U, or anything else) is expressed
+      *  purely by what modifier the caller passes in.
+      *
+      *  @param payload The whole datagram as received on the tunnel socket. The callback may
+      *         freely inspect and/or edit its contents in place (e.g. to decrypt a payload
+      *         that arrives encrypted under the encapsulation, not just to locate it).
+      *  @return The byte offset within (the, possibly now-modified) @p payload at which the
+      *          ALC/LCT payload begins. A return value >= payload.size() (e.g. SIZE_MAX)
+      *          tells the Receiver to silently discard this datagram without attempting ALC
+      *          parsing -- there is no separate bool/optional discard signal; encoding
+      *          "nothing usable here" as "there are no bytes left to read" keeps this one
+      *          consistent, easy-to-satisfy contract rather than two.
+      */
+      typedef std::function<size_t(std::vector<uint8_t>& payload)> packet_modifier_t;
+
      /**
       *  Default constructor.
       *
@@ -49,11 +86,45 @@ namespace LibFlute {
       *  @param io_context Boost io_context to run the socket operations in (must be provided by the caller)
       *  @param source_address If non-empty, join as source-specific multicast (SSM, IPv4
       *         only) admitting only packets from this source -- otherwise ASM (any-source).
+      *         Unrelated to the tunnel parameters below; this is the pre-existing plain
+      *         multicast join, unchanged.
+      *  @param tunnel_address If given, ALSO bind a plain unicast UDP socket to this local
+      *         endpoint and accept tunnelled datagrams there, in addition to the normal
+      *         multicast join above. Motivating cases (see the issue): a deployment that
+      *         needs to receive FLUTE content arriving encapsulated (e.g. GTP-U) rather than
+      *         as plain IP multicast, or one where the platform's local multicast delivery
+      *         isn't available on the path content actually arrives over at all (confirmed
+      *         live: a datagram written to a software TUN device, as a UE simulator's own
+      *         decapsulated-content path does, never reaches a socket joined to its
+      *         destination multicast group on that interface -- the platform's multicast
+      *         delivery never triggers for it at all -- even though the identical datagram
+      *         delivers correctly on a real network interface). The two paths are
+      *         independent and both feed the same session state, so either one arriving is
+      *         enough; this is deliberately not an either/or choice like Transmitter's
+      *         tunnel mode, since a Receiver has no way to know in advance which path will
+      *         actually work in a given deployment.
+      *  @param tunnel_source If given, only accept tunnel datagrams whose UDP source address
+      *         matches this value -- the tunnel-socket equivalent of @p source_address's SSM
+      *         admit-only-this-source semantics, since the tunnel socket itself is a plain
+      *         unicast bind with no multicast-layer source filtering of its own. This is
+      *         the "extra address checking" the library itself does, on top of whatever
+      *         @p packet_modifier does -- source-address admission is a generic,
+      *         encapsulation-agnostic concept the library can reasonably own, unlike parsing
+      *         any particular header format.
+      *  @param packet_modifier Required whenever tunnel_address is set (ignored otherwise,
+      *         and if omitted while tunnel_address is set, every tunnel datagram is
+      *         discarded -- silently failing open would be far worse than silently
+      *         discarding). See packet_modifier_t; there is no default implementation, since
+      *         any default would itself bake an assumption about the tunnel's wire format
+      *         into the library, exactly what this issue asks not to do.
       */
       Receiver( const std::string& iface, const std::string& address,
           short port, uint64_t tsi,
           boost::asio::io_context& io_context,
-          const std::string& source_address = "");
+          const std::string& source_address = "",
+          const std::optional<boost::asio::ip::udp::endpoint>& tunnel_address = std::nullopt,
+          const std::optional<boost::asio::ip::address>& tunnel_source = std::nullopt,
+          const std::optional<packet_modifier_t>& packet_modifier = std::nullopt);
 
      /**
       *  Destructor. Marks the receiver as no longer alive so that any async_receive_from
@@ -142,8 +213,27 @@ namespace LibFlute {
       void handle_receive_from(const boost::system::error_code& error,
           size_t bytes_recvd);
       void arm_receive();
+      // The actual ALC/FLUTE processing, shared by both the normal multicast-socket path
+      // (handle_receive_from(), data already at offset 0 in _data) and the tunnel path
+      // (handle_tunnel_receive_from(), data at whatever offset packet_modifier_t returns
+      // inside _tunnel_data) -- see packet_modifier_t's comment in the header for why these
+      // are two independent, simultaneously-armed receive loops rather than a single one.
+      void process_alc_datagram(char* data, size_t len);
+      void handle_tunnel_receive_from(const boost::system::error_code& error,
+          size_t bytes_recvd);
+      void arm_tunnel_receive();
       boost::asio::ip::udp::socket _socket;
       boost::asio::ip::udp::endpoint _sender_endpoint;
+
+      std::unique_ptr<boost::asio::ip::udp::socket> _tunnel_socket;
+      boost::asio::ip::udp::endpoint _tunnel_sender_endpoint;
+      std::optional<boost::asio::ip::address> _tunnel_source;
+      packet_modifier_t _packet_modifier;
+      // Sized like _data (see max_length below) but as a resizable buffer rather than a
+      // fixed char array: packet_modifier_t takes a std::vector<uint8_t>& so a caller-supplied
+      // modifier can shrink/grow the datagram in place (e.g. after decrypting a payload that
+      // changes size), not just report where to start reading a fixed buffer.
+      std::vector<uint8_t> _tunnel_data;
 
       // Must hold the largest UDP datagram that can actually arrive: with the
       // Compact No-Code FEC scheme, a packet is a 4-byte SBN+ID header plus one
