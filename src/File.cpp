@@ -284,6 +284,30 @@ auto File::check_file_completion() -> void
   }
 }
 
+auto File::missing_symbol_esis() const -> std::vector<uint32_t>
+{
+  std::vector<uint32_t> missing;
+  // _source_blocks is keyed by sbn (source block number), and each block's own
+  // `symbols` map is keyed by a block-local ESI -- both iterate in ascending key order
+  // (std::map), which matches create_blocks()'s own sequential fill order (block 0's
+  // bytes first, then block 1's, ...; within a block, local ESI 0's bytes first, then
+  // 1's, ...). Accumulating global_base across blocks in this same order therefore
+  // yields a flat ESI list that is both correctly file-byte-order-consistent and
+  // already sorted ascending -- exactly what File.h's contract promises callers (e.g.
+  // TS 26.517 cl.6.2.4.5's ComputeRepairByteRanges(), which assumes both).
+  uint32_t global_base = 0;
+  for (const auto& block_entry : _source_blocks) {
+    const SourceBlock& block = block_entry.second;
+    for (const auto& symbol_entry : block.symbols) {
+      if (!symbol_entry.second.complete) {
+        missing.push_back(global_base + static_cast<uint32_t>(symbol_entry.first));
+      }
+    }
+    global_base += static_cast<uint32_t>(block.symbols.size());
+  }
+  return missing;
+}
+
 auto File::calculate_partitioning() -> void
 {
   if (is_raptor_family()) {
