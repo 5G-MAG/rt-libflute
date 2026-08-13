@@ -175,6 +175,30 @@ namespace LibFlute {
       */
       uint16_t fdt_instance_id() { return _fdt_instance_id; };
 
+     /**
+      *  Get the sorted list of missing source symbol Encoding Symbol Identifiers (ESIs),
+      *  as a flat index across the whole file rather than per-source-block-local -- i.e.
+      *  block 0's K0 symbols are ESIs 0..K0-1, block 1's are K0..K0+K1-1, and so on,
+      *  matching how source symbol bytes are laid out contiguously across blocks in the
+      *  file buffer (see create_blocks()). This flat numbering is exactly what TS 26.517
+      *  cl.6.2.4.5's minimal-byte-range pseudocode assumes (Range[m].start = SS[n] * T):
+      *  each returned ESI maps directly to byte offset `esi * fec_oti().encoding_symbol_length`.
+      *
+      *  For Compact-No-Code FEC (a single source block, RFC 5052), this is exactly what
+      *  TS 26.517 cl.6.2.4.5 asks for: the source symbols not yet received.
+      *
+      *  For Raptor/RaptorQ, this returns every missing source symbol across all blocks --
+      *  a correct, always-sufficient set for recovery, but NOT necessarily the *minimal*
+      *  one TS 26.517 cl.6.2.4.5 describes for that scheme (which additionally accounts
+      *  for already-received REPAIR symbols reducing how many source symbols are still
+      *  actually needed, per TR 26.946 cl.6.1.3.1's decoder-rank-aware method -- that
+      *  refinement needs the FEC decoder's internal linear-dependency state, which this
+      *  method does not inspect). Returning this superset is a bandwidth-efficiency gap
+      *  for Raptor/RaptorQ repair requests, not a correctness one: the extra byte ranges
+      *  it implies are simply not strictly necessary, never wrong.
+      */
+      std::vector<uint32_t> missing_symbol_esis() const;
+
     private:
       void calculate_partitioning();
       // have_source_data: true from the transmit-side constructors (the

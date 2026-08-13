@@ -537,7 +537,6 @@ namespace LibFlute {
       *  Read-only access to the session's current FDT, for tests that need to
       *  observe what the sender is advertising. Not part of the sending API.
       */
-      const FileDeliveryTable& fdt() const { return *_fdt; }
 
       uint32_t rate_limit() const { return _rate_limit; };
 

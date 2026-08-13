@@ -938,3 +938,162 @@ TEST(FdtFecEncodingId, AnUnrecognisedIdentifierIsRefusedAtTheFileLevel) {
   EXPECT_THROW(parse_fdt(fdt_xml_with_encoding_id("99", /*at_file_level*/ true)),
                std::runtime_error);
 }
+
+/* A session's channels are what a multiple rate congestion control building block moves a receiver
+   between. RFC 5775 clause 2.1: "An ALC session comprises multiple channels originating at a single
+   sender". The Receiver joined exactly one group for the life of the session; it can now join and
+   leave others on the same interface. Nothing in the library drives this yet. */
+TEST(ReceiverChannelsTest, TheConstructedGroupIsJoined) {
+  boost::asio::io_context io;
+  LibFlute::Receiver rx("0.0.0.0", "239.9.9.1", 19501, /*tsi*/ 1, io);
+  EXPECT_EQ(rx.joined_channels().count("239.9.9.1"), 1u);
+  EXPECT_EQ(rx.joined_channels().size(), 1u);
+  rx.stop();
+}
+
+TEST(ReceiverChannelsTest, AFurtherChannelCanBeJoinedAndLeft) {
+  boost::asio::io_context io;
+  LibFlute::Receiver rx("0.0.0.0", "239.9.9.2", 19502, /*tsi*/ 1, io);
+
+  EXPECT_TRUE(rx.join_channel("239.9.9.3"));
+  EXPECT_EQ(rx.joined_channels().count("239.9.9.3"), 1u);
+  EXPECT_EQ(rx.joined_channels().size(), 2u);
+
+  EXPECT_TRUE(rx.leave_channel("239.9.9.3"));
+  EXPECT_EQ(rx.joined_channels().count("239.9.9.3"), 0u);
+  EXPECT_EQ(rx.joined_channels().size(), 1u);
+  rx.stop();
+}
+
+TEST(ReceiverChannelsTest, RedundantJoinsAndLeavesReportNoChange) {
+  boost::asio::io_context io;
+  LibFlute::Receiver rx("0.0.0.0", "239.9.9.4", 19503, /*tsi*/ 1, io);
+
+  EXPECT_FALSE(rx.join_channel("239.9.9.4")) << "already joined at construction";
+  EXPECT_FALSE(rx.leave_channel("239.9.9.5")) << "never joined";
+  EXPECT_EQ(rx.joined_channels().size(), 1u);
+  rx.stop();
+}
+
+
+/* The sending half of the same capability. A multiple rate congestion control building block sends
+   to several channels at different rates; RFC 5775 clause 2.1: "An ALC session comprises multiple
+   channels originating at a single sender". Nothing drives these yet. */
+TEST(TransmitterChannelsTest, ASessionStartsWithOneChannel) {
+  boost::asio::io_context io;
+  LibFlute::Transmitter tx("239.9.8.1", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                           std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false);
+  EXPECT_EQ(tx.channel_count(), 1u);
+  EXPECT_EQ(tx.channel_endpoint(0).address().to_string(), "239.9.8.1");
+}
+
+TEST(TransmitterChannelsTest, ChannelsCanBeAddedAndRemoved) {
+  boost::asio::io_context io;
+  LibFlute::Transmitter tx("239.9.8.2", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                           std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false);
+
+  const auto first = tx.add_channel("239.9.8.3", 5002);
+  const auto second = tx.add_channel("239.9.8.4", 5004);
+  EXPECT_EQ(first, 1u);
+  EXPECT_EQ(second, 2u);
+  EXPECT_EQ(tx.channel_count(), 3u);
+  EXPECT_EQ(tx.channel_endpoint(2).address().to_string(), "239.9.8.4");
+  EXPECT_EQ(tx.channel_endpoint(2).port(), 5004);
+
+  EXPECT_TRUE(tx.remove_channel(2));
+  EXPECT_EQ(tx.channel_count(), 2u);
+  EXPECT_EQ(tx.channel_endpoint(1).address().to_string(), "239.9.8.3");
+}
+
+TEST(TransmitterChannelsTest, TheConstructedChannelCannotBeRemoved) {
+  boost::asio::io_context io;
+  LibFlute::Transmitter tx("239.9.8.5", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                           std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false);
+  EXPECT_FALSE(tx.remove_channel(0)) << "a session with no channels is not a session";
+  EXPECT_FALSE(tx.remove_channel(7)) << "no such channel";
+  EXPECT_EQ(tx.channel_count(), 1u);
+}
+
+// ---------------------------------------------------------------------------
+// File::missing_symbol_esis() -- TS 26.517 cl.6.2.4.5's minimal-byte-range
+// algorithm needs a flat, file-wide, sorted list of missing source symbol
+// ESIs as its input; these confirm the accessor added for that (A3.9)
+// actually produces one, both within a single source block (the
+// Compact-No-Code case cl.6.2.4.5 exactly specifies) and across multiple
+// blocks (the Raptor/RaptorQ superset case, per the accessor's own
+// documented non-minimality caveat).
+// ---------------------------------------------------------------------------
+TEST(MissingSymbolEsis, CompleteFileHasNoMissingSymbols) {
+  const size_t data_len = 100;
+  std::vector<char> data(data_len, 'x');
+  FecOti oti{FecScheme::CompactNoCode, 0, 0, /*encoding_symbol_length*/ 10, /*max_source_block_length*/ 64, 0};
+
+  File encoder(1, oti, "test.bin", "application/octet-stream", 0, data.data(), data_len, true);
+  auto symbols = encoder.get_next_symbols(1024 * 1024);
+  ASSERT_EQ(symbols.size(), 10u);  // 100 bytes / 10-byte symbols, single block
+
+  File decoder(encoder.meta());
+  for (const auto& s : symbols) decoder.put_symbol(s);
+
+  ASSERT_TRUE(decoder.complete());
+  EXPECT_TRUE(decoder.missing_symbol_esis().empty());
+}
+
+TEST(MissingSymbolEsis, SingleBlockReturnsFlatSortedListOfMissingSourceSymbols) {
+  const size_t data_len = 100;
+  std::vector<char> data(data_len, 'x');
+  FecOti oti{FecScheme::CompactNoCode, 0, 0, 10, 64, 0};
+
+  File encoder(1, oti, "test.bin", "application/octet-stream", 0, data.data(), data_len, true);
+  auto symbols = encoder.get_next_symbols(1024 * 1024);
+  ASSERT_EQ(symbols.size(), 10u);
+
+  File decoder(encoder.meta());
+  // Deliver every symbol except ESIs 2, 3 (consecutive -- exercises the same
+  // "merge adjacent" case ComputeRepairByteRanges relies on downstream) and 7.
+  for (size_t i = 0; i < symbols.size(); i++) {
+    if (i == 2 || i == 3 || i == 7) continue;
+    decoder.put_symbol(symbols[i]);
+  }
+
+  ASSERT_FALSE(decoder.complete());
+  auto missing = decoder.missing_symbol_esis();
+  ASSERT_EQ(missing.size(), 3u);
+  EXPECT_EQ(missing[0], 2u);
+  EXPECT_EQ(missing[1], 3u);
+  EXPECT_EQ(missing[2], 7u);
+}
+
+TEST(MissingSymbolEsis, MultiBlockEsisAreFlatAcrossBlockBoundariesNotPerBlockLocal) {
+  // Forces 2 source blocks (10 symbols/block cap, 20 total source symbols) so
+  // a missing symbol in the second block must be reported as a *global*
+  // ESI (10 + local index), not the block-local index File's own internal
+  // _source_blocks storage would otherwise suggest -- this is exactly the
+  // distinction missing_symbol_esis()'s contract (File.h) documents.
+  const size_t data_len = 200;  // 20 symbols * 10 bytes
+  std::vector<char> data(data_len, 'x');
+  FecOti oti{FecScheme::CompactNoCode, 0, 0, 10, 10, 0};
+
+  File encoder(1, oti, "test.bin", "application/octet-stream", 0, data.data(), data_len, true);
+  auto symbols = encoder.get_next_symbols(1024 * 1024);
+  ASSERT_EQ(symbols.size(), 20u);
+  // CompactNoCode doesn't write nof_source_blocks back into the meta OTI (only the
+  // Raptor family does -- see calculate_partitioning() vs. _raptor), so confirm the
+  // multi-block split actually happened the direct way: at least one symbol reports
+  // source_block_number() == 1.
+  bool saw_block_1 = false;
+  for (const auto& s : symbols) saw_block_1 |= (s.source_block_number() == 1);
+  ASSERT_TRUE(saw_block_1) << "test setup didn't actually produce a second source block";
+
+  File decoder(encoder.meta());
+  // Withhold global ESI 15 -- block-local ESI 5 within source block 1 -- and
+  // delivering everything else.
+  for (const auto& s : symbols) {
+    if (s.source_block_number() == 1 && s.id() == 5) continue;
+    decoder.put_symbol(s);
+  }
+
+  auto missing = decoder.missing_symbol_esis();
+  ASSERT_EQ(missing.size(), 1u);
+  EXPECT_EQ(missing[0], 15u);  // NOT 5 -- must be the flat, file-wide index
+}
