@@ -32,7 +32,7 @@ namespace LibFlute {
       *  @param data Received data to be parsed
       *  @param len Length of the buffer
       */
-      AlcPacket(char* data, size_t len);
+      AlcPacket(char* data, size_t len, uint8_t expected_flute_version = 1);
 
      /**
       *  Create an ALC packet from encoding symbols 
@@ -45,6 +45,11 @@ namespace LibFlute {
       *  @param fdt_instance_id FDT instance ID (only relevant for FDT with TOI=0)
       *  @param close_session_flag Set the LCT Close Session flag (RFC 3451 clause 5.1, 'A' bit) on this packet
       *  @param close_object_flag Set the LCT Close Object flag (RFC 3451 clause 5.1, 'B' bit) on this packet
+      *  @param flute_version FLUTE version to signal in the EXT_FDT version field. RFC 3926
+      *                       clause 3.4.1 requires 1 for a version 1 session and RFC 6726
+      *                       clause 3.4.1 requires 2 for a version 2 session; the two are
+      *                       different protocols, see RFC 6726 clause 11.1. Defaults to 1, which
+      *                       is what TS 26.346 selects, so a 3GPP session needs no change.
       */
      /**
       *  Tag selecting the data-less Close Session packet constructor below.
@@ -68,7 +73,8 @@ namespace LibFlute {
       AlcPacket(uint64_t tsi, CloseSession);
 
       AlcPacket(uint64_t tsi, uint16_t toi, FecOti fec_oti, const std::vector<EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id,
-                bool close_session_flag = false, bool close_object_flag = false);
+                bool close_session_flag = false, bool close_object_flag = false,
+                uint8_t flute_version = 1);
 
      /**
       *  Default destructor.
@@ -160,6 +166,7 @@ namespace LibFlute {
 
       char* _buffer = nullptr;
       size_t _len;
+      uint8_t _flute_version = 1;
 
       // RFC 3451 clause 5.1 - LCT Header Format
       struct __attribute__((packed)) lct_header_t {

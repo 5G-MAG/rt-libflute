@@ -873,7 +873,8 @@ auto Transmitter::send_next_packet() -> void
         spdlog::debug("sending TOI {} SBN {} ID {}", file->meta().toi, symbol.source_block_number(), symbol.id() );
       }
       auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id(),
-                                                 _session_closing, _closing_objects.count(file->meta().toi) > 0);
+                                                 _session_closing, _closing_objects.count(file->meta().toi) > 0,
+                                                 _flute_version);
       bytes_queued += packet->size();
 
       /* A tunnel is an additional path, not a replacement for the announced one. Sending only the
@@ -951,6 +952,14 @@ auto Transmitter::send_next_packet() -> void
       }
     }
   }
+}
+
+auto Transmitter::set_flute_version(uint8_t version) -> void
+{
+  /* The table is built in the constructor, before a caller can select a version, so the choice is
+     forwarded to it here. Its instance-ID sequence and Expires handling differ between versions. */
+  _flute_version = version;
+  if (_fdt) _fdt->set_flute_version(version);
 }
 
 auto Transmitter::activate() -> void
