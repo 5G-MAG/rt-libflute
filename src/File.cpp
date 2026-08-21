@@ -309,7 +309,7 @@ auto File::encode() -> void
           _own_buffer = true;
           zs.avail_out = 16384;
           zs.next_out = comp_buffer.get();
-          zstate = inflate(&zs, Z_FINISH);
+          zstate = deflate(&zs, Z_FINISH);
         }
         if (zstate==Z_STREAM_END) {
           if (last_out != zs.total_out) {
