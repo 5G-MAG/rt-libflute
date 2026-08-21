@@ -287,12 +287,31 @@ namespace LibFlute {
         FileDescription &set_content_type(const std::string &content_type);
 
        /**
-        * Change the file expiry time
+        * Change the file expiry time.
+        *
+        * This is the File element's own Expires attribute, an optional attribute of FileType in
+        * the TS 26.346 annex L.6.1 profiled schema. It says when the file itself stops being
+        * valid, and it is NOT the cache directive: see set_cache_expiry_time() for that. The two
+        * were previously set together and could not be given different values.
         *
         * @param expiry_time The expiry time of the file in the FLUTE session.
         * @return this file description
         */
         FileDescription &set_expiry_time(const date_time_type &expiry_time);
+
+       /**
+        * Change the cache expiry time carried in the mbms2007:Cache-Control element.
+        *
+        * A separate value from set_expiry_time(): CacheControlType in the annex L.6.1 profiled
+        * schema is an xs:choice of no-cache, max-stale and Expires, so at most one of those
+        * appears, and the Expires it carries is a caching directive to intermediates rather than
+        * a statement about the file's own validity. Leave it unset to emit no Cache-Control
+        * element at all, which the schema permits since the element is minOccurs="0".
+        *
+        * @param expiry_time The cache expiry time.
+        * @return this file description
+        */
+        FileDescription &set_cache_expiry_time(const date_time_type &expiry_time);
 
        /**
         *  Get the currently set expiry time

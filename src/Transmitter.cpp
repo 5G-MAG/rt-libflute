@@ -361,7 +361,15 @@ Transmitter::FileDescription &Transmitter::FileDescription::set_expiry_time(
 {
   auto diff = std::chrono::duration_cast<std::chrono::seconds>(expiry_time - _get_ntp_epoch());
   _file_entry.expires = diff.count();
-  _file_entry.cache_control.cache_expires = _file_entry.expires;
+
+  return *this;
+}
+
+Transmitter::FileDescription &Transmitter::FileDescription::set_cache_expiry_time(
+								const Transmitter::FileDescription::date_time_type &expiry_time)
+{
+  auto diff = std::chrono::duration_cast<std::chrono::seconds>(expiry_time - _get_ntp_epoch());
+  _file_entry.cache_control.cache_expires = diff.count();
 
   return *this;
 }
