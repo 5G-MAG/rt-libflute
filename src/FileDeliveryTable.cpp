@@ -38,23 +38,45 @@ namespace {
    Compact No-Code has no scheme-specific OTI to carry: RFC 3695 clause 3 specifies a FEC Payload
    ID for it and defines no scheme-specific element, and the schema makes the attribute
    use="optional", so it is simply omitted for that scheme. */
-std::string encode_raptor_scheme_specific(uint16_t z, uint8_t n, uint8_t al)
+/* The two schemes use the SAME four octets for DIFFERENT field widths: Z and N are the opposite
+   way round. Encoding one with the other's layout silently corrupts both values, so the layout is
+   selected from the scheme rather than shared.
+
+   RFC 5053 clause 3.2.3, Raptor: "a 4-octet field consisting of the parameters Z (2 octets),
+   N (1 octet), and Al (1 octet)"
+
+   RFC 6330 clause 3.3.3, RaptorQ, the Scheme-Specific parameter list:
+   "The number of source blocks (Z): 8-bit unsigned integer."
+   "The number of sub-blocks (N): 16-bit unsigned integer." */
+std::string encode_scheme_specific(LibFlute::FecScheme scheme, uint16_t z, uint16_t n, uint8_t al)
 {
   std::string raw;
-  raw.push_back(static_cast<char>((z >> 8) & 0xFF));
-  raw.push_back(static_cast<char>(z & 0xFF));
-  raw.push_back(static_cast<char>(n));
-  raw.push_back(static_cast<char>(al));
+  if (scheme == LibFlute::FecScheme::RaptorQ) {
+    raw.push_back(static_cast<char>(z & 0xFF));            // Z: 1 octet
+    raw.push_back(static_cast<char>((n >> 8) & 0xFF));     // N: 2 octets
+    raw.push_back(static_cast<char>(n & 0xFF));
+  } else {
+    raw.push_back(static_cast<char>((z >> 8) & 0xFF));     // Z: 2 octets
+    raw.push_back(static_cast<char>(z & 0xFF));
+    raw.push_back(static_cast<char>(n & 0xFF));            // N: 1 octet
+  }
+  raw.push_back(static_cast<char>(al));                    // Al: 1 octet, both schemes
   return base64_encode(raw);
 }
 
 // Returns false when the attribute is not a well-formed 4-octet field.
-bool decode_raptor_scheme_specific(const std::string &b64, uint16_t &z, uint8_t &n, uint8_t &al)
+bool decode_scheme_specific(LibFlute::FecScheme scheme, const std::string &b64,
+                            uint16_t &z, uint16_t &n, uint8_t &al)
 {
   const auto raw = base64_decode(b64);
   if (raw.size() != 4) return false;
-  z  = static_cast<uint16_t>((static_cast<uint8_t>(raw[0]) << 8) | static_cast<uint8_t>(raw[1]));
-  n  = static_cast<uint8_t>(raw[2]);
+  if (scheme == LibFlute::FecScheme::RaptorQ) {
+    z = static_cast<uint8_t>(raw[0]);
+    n = static_cast<uint16_t>((static_cast<uint8_t>(raw[1]) << 8) | static_cast<uint8_t>(raw[2]));
+  } else {
+    z = static_cast<uint16_t>((static_cast<uint8_t>(raw[0]) << 8) | static_cast<uint8_t>(raw[1]));
+    n = static_cast<uint8_t>(raw[2]);
+  }
   al = static_cast<uint8_t>(raw[3]);
   return true;
 }
@@ -294,14 +316,14 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     _global_fec_oti.max_number_of_encoding_symbols = strtoul(val->Value(), nullptr, 0);
   }
 
-  // Raptor scheme-specific OTI, read from the one attribute the schema defines for it. A
-  // malformed value is ignored rather than fatal: the Common FEC OTI alone is enough to receive
-  // a Compact No-Code session, and refusing the whole FDT would be worse than losing one scheme's
+  // Scheme-specific OTI, read from the one attribute the schema defines for it. A malformed
+  // value is ignored rather than fatal: the Common FEC OTI alone is enough to receive a Compact
+  // No-Code session, and refusing the whole FDT would be worse than losing one scheme's
   // parameters.
   val = root_ns.findAttribute(fdt_instance, "FEC-OTI-Scheme-Specific-Info", fdt_ns);
   if (val != nullptr) {
-    uint16_t z = 0; uint8_t n = 0, al = 0;
-    if (decode_raptor_scheme_specific(val->Value(), z, n, al)) {
+    uint16_t z = 0, n = 0; uint8_t al = 0;
+    if (decode_scheme_specific(_global_fec_oti.encoding_id, val->Value(), z, n, al)) {
       _global_fec_oti.nof_source_blocks = z;
       _global_fec_oti.nof_sub_blocks = n;
       _global_fec_oti.symbol_alignment = al;
@@ -403,8 +425,8 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     auto symbol_alignment = _global_fec_oti.symbol_alignment;
     val = file_ns.findAttribute(file, "FEC-OTI-Scheme-Specific-Info", fdt_ns);
     if (val != nullptr) {
-      uint16_t z = 0; uint8_t n = 0, al = 0;
-      if (decode_raptor_scheme_specific(val->Value(), z, n, al)) {
+      uint16_t z = 0, n = 0; uint8_t al = 0;
+      if (decode_scheme_specific(encoding_id, val->Value(), z, n, al)) {
         nof_source_blocks = z;
         nof_sub_blocks = n;
         symbol_alignment = al;
@@ -667,16 +689,14 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
   (void)_global_fec_oti.instance_id;  // never emitted: see above
   root->SetAttribute("FEC-OTI-Maximum-Source-Block-Length", (unsigned)_global_fec_oti.max_source_block_length);
   root->SetAttribute("FEC-OTI-Encoding-Symbol-Length", (unsigned)_global_fec_oti.encoding_symbol_length);
-  if (_global_fec_oti.encoding_id == FecScheme::Raptor) {
-    // Raptor scheme-specific OTI (RFC 5053 §3.2.3)
-    /* One base64 attribute, not three invented ones. The names previously emitted here,
-       FEC-OTI-Number-Of-Source-Blocks, FEC-OTI-Number-Of-Sub-Blocks and
-       FEC-OTI-Symbol-Alignment-Parameter, appear in no specification: zero occurrences in
-       TS 26.346, and RFC 5053 defines no FDT mapping of its own. See the helper above. */
+  if (_global_fec_oti.encoding_id == FecScheme::Raptor ||
+      _global_fec_oti.encoding_id == FecScheme::RaptorQ) {
+    // One base64 attribute, with the layout the scheme in use defines. See the helpers above.
     root->SetAttribute("FEC-OTI-Scheme-Specific-Info",
-                       encode_raptor_scheme_specific(_global_fec_oti.nof_source_blocks,
-                                                     _global_fec_oti.nof_sub_blocks,
-                                                     _global_fec_oti.symbol_alignment).c_str());
+                       encode_scheme_specific(_global_fec_oti.encoding_id,
+                                              _global_fec_oti.nof_source_blocks,
+                                              _global_fec_oti.nof_sub_blocks,
+                                              _global_fec_oti.symbol_alignment).c_str());
   }
   root->SetAttribute("xmlns:mbms2007", "urn:3GPP:metadata:2007:MBMS:FLUTE:FDT"); // 3GPP TS 26.346 Clause 7.2.10.2
   root->SetAttribute("xmlns:mbms2012", "urn:3GPP:metadata:2012:MBMS:FLUTE:FDT"); // 3GPP TS 26.346 Clause 7.2.10.2
@@ -715,12 +735,13 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
     if (file.fec_oti.encoding_symbol_length != 0 &&
         file.fec_oti.encoding_symbol_length != _global_fec_oti.encoding_symbol_length)
       f->SetAttribute("FEC-OTI-Encoding-Symbol-Length", (unsigned)file.fec_oti.encoding_symbol_length);
-    if (file.fec_oti.encoding_id == FecScheme::Raptor) {
+    if (file.fec_oti.encoding_id == FecScheme::Raptor || file.fec_oti.encoding_id == FecScheme::RaptorQ) {
       if (file.fec_oti.nof_source_blocks != _global_fec_oti.nof_source_blocks)
         f->SetAttribute("FEC-OTI-Scheme-Specific-Info",
-                        encode_raptor_scheme_specific(file.fec_oti.nof_source_blocks,
-                                                      file.fec_oti.nof_sub_blocks,
-                                                      file.fec_oti.symbol_alignment).c_str());
+                        encode_scheme_specific(file.fec_oti.encoding_id,
+                                               file.fec_oti.nof_source_blocks,
+                                               file.fec_oti.nof_sub_blocks,
+                                               file.fec_oti.symbol_alignment).c_str());
     }
     if (!file.etag.empty()) f->SetAttribute("mbms2012:File-ETag", file.etag.c_str());
     /* FileType's own Expires attribute, use="optional" in the annex L.6.1 profiled schema, so it

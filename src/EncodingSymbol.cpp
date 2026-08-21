@@ -33,11 +33,12 @@ auto LibFlute::EncodingSymbol::from_payload(char* encoded_data, size_t data_len,
   }
 
   // The FEC Payload ID wire format (16-bit SBN + 16-bit ESI, network byte
-  // order) is the same for Compact No-Code (RFC 5052 §5.1) and Raptor
-  // (RFC 5053 §3.1): only the *meaning* of an ESI >= the source block's
-  // symbol count differs (repair symbol vs. undefined).
+  // order) is the same for Compact No-Code (RFC 5052 §5.1) and for Raptor/
+  // RaptorQ (RFC 5053 §3.1, RFC 6330 §4.4.1): only the *meaning* of an ESI
+  // >= the source block's symbol count differs (repair symbol vs. undefined).
   if (fec_oti.encoding_id == FecScheme::CompactNoCode ||
-      fec_oti.encoding_id == FecScheme::Raptor) {
+      fec_oti.encoding_id == FecScheme::Raptor ||
+      fec_oti.encoding_id == FecScheme::RaptorQ) {
     source_block_number = ntohs(*(uint16_t*)encoded_data);
     encoded_data += 2;
     encoding_symbol_id = ntohs(*(uint16_t*)encoded_data);
@@ -74,7 +75,8 @@ auto LibFlute::EncodingSymbol::to_payload(const std::vector<EncodingSymbol>& sym
 
   auto first_symbol = symbols.begin();
   bool scheme_supported = fec_oti.encoding_id == FecScheme::CompactNoCode ||
-                           fec_oti.encoding_id == FecScheme::Raptor;
+                           fec_oti.encoding_id == FecScheme::Raptor ||
+                           fec_oti.encoding_id == FecScheme::RaptorQ;
   if (scheme_supported && data_len >= 4) {
     *((uint16_t*)ptr) = htons(first_symbol->source_block_number());
     ptr += 2;
@@ -102,7 +104,7 @@ auto LibFlute::EncodingSymbol::to_payload(const std::vector<EncodingSymbol>& sym
 
 auto LibFlute::EncodingSymbol::decode_to(char* buffer, size_t max_length) const -> void {
   // An encoding symbol's on-the-wire bytes are already its final content --
-  // for Raptor that's true just as much as for Compact No-Code: a
+  // for Raptor/RaptorQ that's true just as much as for Compact No-Code: a
   // repair symbol's payload is the fully-computed LT combination by the time
   // it reaches this class. What to *do* with a repair symbol (recognising
   // its ESI is >= the source block's symbol count, feeding it to the block's

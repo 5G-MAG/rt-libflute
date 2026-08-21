@@ -47,16 +47,13 @@ namespace LibFlute {
    *  Encoding ID registry (http://www.iana.org/assignments/rmt-fec-parameters,
    *  RFC 5052) and are written to the wire (FEC-OTI-FEC-Encoding-ID) as-is, so
    *  they are set explicitly here rather than left as sequential ordinals --
-   *  values 2-6 (Reed-Solomon GF(2^^m), LDPC Staircase, LDPC Triangle,
-   *  Reed-Solomon GF(2^^8), RaptorQ) are registered but not implemented by
-   *  this library. RaptorQ in particular is deliberately left out: 3GPP
-   *  TS 26.346 cl.7.2.2/7.2.12 mandates Raptor (RFC 5053, this library's
-   *  primary consumer base) but does not define or reference RaptorQ for
-   *  this delivery method -- see the future/raptorq-support branch.
+   *  values 2-5 (Reed-Solomon GF(2^^m), LDPC Staircase, LDPC Triangle,
+   *  Reed-Solomon GF(2^^8)) are registered but not implemented by this library.
    */
   enum class FecScheme {
     CompactNoCode = 0,
-    Raptor = 1
+    Raptor = 1,
+    RaptorQ = 6
   };
 
   /**
@@ -166,8 +163,8 @@ namespace LibFlute {
     uint32_t max_number_of_encoding_symbols;
 
     /**
-     *  Raptor scheme-specific OTI (RFC 5053 §3.2.3). Unused (left at their
-     *  defaults) for FecScheme::CompactNoCode.
+     *  Raptor/RaptorQ scheme-specific OTI (RFC 5053 §3.2.3, RFC 6330 §4.2).
+     *  Unused (left at their defaults) for FecScheme::CompactNoCode.
      *
      *  nof_sub_blocks is always 1 in this implementation: RFC 5052 permits
      *  N == 1 (no further sub-block byte-interleaving within a symbol), and

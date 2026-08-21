@@ -782,8 +782,8 @@ auto Transmitter::send_fdt() -> void {
   // The FDT itself always goes out as Compact No-Code, regardless of what
   // FEC scheme protects this Transmitter's content: it's re-sent on its own
   // repeat timer already (real redundancy without needing FEC), and
-  // Raptor has a minimum source-block size (K >= 4) that a small FDT's
-  // single source block can fall below --
+  // Raptor/RaptorQ both have a minimum source-block size (K >= 4 for
+  // Raptor) that a small FDT's single source block can fall below --
   // caught by testing a real Transmitter -> Receiver transfer, not by any
   // in-process File/codec test, all of which constructed content Files
   // directly and never exercised send_fdt()'s own File construction.

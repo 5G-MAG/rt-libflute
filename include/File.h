@@ -24,6 +24,7 @@
 #include "Transmitter.h"
 #include "fec/FecBlockCodec.h"
 #include "fec/RaptorCodec.h"
+#include "fec/RaptorQCodec.h"
 
 namespace LibFlute {
   /**
@@ -229,8 +230,8 @@ namespace LibFlute {
       void calculate_partitioning();
       // have_source_data: true from the transmit-side constructors (the
       // file's bytes are already in _buffer, so source symbols start out
-      // complete and, for Raptor, the intermediate symbols get solved
-      // immediately); false from the receive-side constructor (empty
+      // complete and, for Raptor/RaptorQ, the intermediate symbols get
+      // solved immediately); false from the receive-side constructor (empty
       // buffer, everything arrives via put_symbol()).
       void create_blocks(bool have_source_data);
 
@@ -248,13 +249,13 @@ namespace LibFlute {
       void check_source_block_completion(uint16_t source_block_number, SourceBlock& block);
       void check_file_completion();
 
-      // -- Raptor support -----------------------------------------------------
+      // -- Raptor/RaptorQ support -------------------------------------------
       // File keeps the same SourceBlock/Symbol bookkeeping above for every
       // scheme (source symbols are always the file's raw bytes, chopped up
-      // identically -- Raptor is a systematic code); a RaptorCodec per source
-      // block is the only extra state needed, handling the pre-coding/LT maths
-      // in complete isolation from this class. See fec/RaptorCodec.h for the
-      // codec itself.
+      // identically -- Raptor/RaptorQ are systematic codes); a RaptorCodec
+      // per source block is the only extra state needed, handling the
+      // pre-coding/LT maths in complete isolation from this class. See
+      // fec/RaptorCodec.h for the codec itself.
       //
       // Encoder side: create_blocks() feeds all K source symbols of a block
       // into its codec once and keeps the resulting intermediate symbols
@@ -266,7 +267,7 @@ namespace LibFlute {
       // of that block's source symbol slots are filled in one shot, whether
       // or not they'd individually arrived.
       bool is_raptor_family() const {
-        return _meta.fec_oti.encoding_id == FecScheme::Raptor;
+        return _meta.fec_oti.encoding_id == FecScheme::Raptor || _meta.fec_oti.encoding_id == FecScheme::RaptorQ;
       }
       void calculate_partitioning_raptor();
       void setup_raptor_codec_for_block(uint16_t sbn, uint32_t k);
@@ -282,7 +283,7 @@ namespace LibFlute {
       // sets it, and why it is not signalled.
       uint32_t _fec_redundancy_level = kDefaultFecRedundancyLevel;
 
-      std::map<uint16_t, std::shared_ptr<FecBlockCodec>> _raptor_codecs; // one RaptorCodec per source block
+      std::map<uint16_t, std::shared_ptr<FecBlockCodec>> _raptor_codecs; // one per source block; Raptor or RaptorQ depending on fec_oti.encoding_id
       std::map<uint16_t, std::vector<std::vector<uint8_t>>> _raptor_intermediate; // encoder side only, filled once per block
       std::map<uint16_t, uint32_t> _raptor_repair_sent; // encoder side only: how many repair ESIs already queued for this block
       // encoder side only: generated repair symbol bytes, cached so the
