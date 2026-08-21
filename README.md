@@ -177,6 +177,25 @@ FLUTE version 2 (RFC 6726) and RaptorQ (RFC 6330) are referenced by neither TS 2
 TS 26.517 at this baseline and are not part of either profile here. They live on their own
 branches.
 
+### Congestion control: conformant for 3GPP, not implemented for general FLUTE
+
+This library implements no congestion control. It offers a static, operator-set transmit rate
+limit, which is rate limiting with no feedback and no response to loss, and it writes the CCI
+field as zeros without reading it on receive.
+
+Under the **3GPP profile that is conformant**, and deliberately so.
+TS 26.346 V18.2.0 clause L.4.7: "As indicated in clause 7.2.4 of this specification, congestion
+control is not used for FLUTE delivery in MBMS, and therefore, FLUTE channelization should be
+provided by a single FLUTE channel with single rate transport."
+
+Under **general FLUTE it is not implemented**, and the requirement is a MUST.
+RFC 3450 clause 2.2: "Implementors of ALC MUST implement a multiple rate feedback-free
+congestion control building block that is in accordance to RFC 2357 [12]."
+
+So a non-3GPP deployment using `Profile::GeneralFlute` over a path where congestion matters is
+outside RFC 3450, and this is stated rather than claimed either way. Nothing here is presented as
+implementing that clause.
+
 ## Testing
 
 To execute the tests make sure to have built the project with testing enabled (see Step 3: Build setup).
