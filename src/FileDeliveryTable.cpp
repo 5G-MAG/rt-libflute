@@ -452,7 +452,17 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
      binding both directions would break reception from a conformant peer. */
   if (_complete && _profile != Profile::Mbms3gpp) root->SetAttribute("Complete", "true");
   root->SetAttribute("FEC-OTI-FEC-Encoding-ID", (unsigned)_global_fec_oti.encoding_id);
-  if (_global_fec_oti.instance_id) root->SetAttribute("FEC-OTI-FEC-Instance-ID", (unsigned)_global_fec_oti.instance_id);
+  /* The existing guard is on the value, not on the profile: it withholds the attribute only when
+     the instance ID happens to be 0. The MBMS Download Profile forbids it outright, at both
+     levels, whatever the value.
+     TS 26.346 V18.2.0 clause L.4.2, third list: "The following FDT parameters, defined at both
+     the FDT-Instance and File levels, shall not be used by the FLUTE sender, in either the
+     File-Instance or File element:"
+     FEC-OTI-FEC-Instance-ID is the second item, annotated there as not applicable to the
+     Release 9 FEC schemes. Sender-only: that clause's NOTE 2 leaves these "optional to support
+     by the FLUTE receiver", so both parsers stay. */
+  if (_profile != Profile::Mbms3gpp && _global_fec_oti.instance_id)
+    root->SetAttribute("FEC-OTI-FEC-Instance-ID", (unsigned)_global_fec_oti.instance_id);
   root->SetAttribute("FEC-OTI-Maximum-Source-Block-Length", (unsigned)_global_fec_oti.max_source_block_length);
   root->SetAttribute("FEC-OTI-Encoding-Symbol-Length", (unsigned)_global_fec_oti.encoding_symbol_length);
   root->SetAttribute("xmlns:mbms2007", "urn:3GPP:metadata:2007:MBMS:FLUTE:FDT"); // 3GPP TS 26.346 Clause 7.2.10.2
@@ -485,7 +495,9 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
     if (!file.content_type.empty()) f->SetAttribute("Content-Type", file.content_type.c_str());
     if (file.fec_oti.encoding_id != _global_fec_oti.encoding_id)
       f->SetAttribute("FEC-OTI-FEC-Encoding-ID", (unsigned)file.fec_oti.encoding_id);
-    if (file.fec_oti.instance_id != 0 && file.fec_oti.instance_id != _global_fec_oti.instance_id)
+    // Same clause L.4.2 prohibition as at the FDT-Instance level above, applied at the File level.
+    if (_profile != Profile::Mbms3gpp && file.fec_oti.instance_id != 0 &&
+        file.fec_oti.instance_id != _global_fec_oti.instance_id)
       f->SetAttribute("FEC-OTI-FEC-Instance-ID", (unsigned)file.fec_oti.instance_id);
     if (file.fec_oti.max_source_block_length != 0 &&
         file.fec_oti.max_source_block_length != _global_fec_oti.max_source_block_length)

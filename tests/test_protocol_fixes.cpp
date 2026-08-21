@@ -116,3 +116,24 @@ TEST(GeneralFluteTest, CompleteStillCarriedOutsideTheProfile) {
   fdt.set_complete(true);
   EXPECT_NE(fdt.to_string().find("Complete"), std::string::npos);
 }
+
+/* TS 26.346 V18.2.0 clause L.4.2 forbids FEC-OTI-FEC-Instance-ID at both levels. The pre-existing
+   guard was on the value, so a non-zero instance ID leaked the attribute into a 3GPP session. */
+
+TEST(MbmsDownloadProfileTest, FecInstanceIdNotCarriedUnderThe3gppProfile) {
+  auto oti = make_fec_oti();
+  oti.instance_id = 7;  // non-zero, so the old value-only guard would have emitted it
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
+  auto e = make_entry(oti);
+  e.fec_oti.instance_id = 9;  // differs from the global, so the File-level guard would fire too
+  fdt.add(e);
+  EXPECT_EQ(fdt.to_string().find("FEC-OTI-FEC-Instance-ID"), std::string::npos);
+}
+
+TEST(GeneralFluteTest, FecInstanceIdStillCarriedOutsideTheProfile) {
+  auto oti = make_fec_oti();
+  oti.instance_id = 7;
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::GeneralFlute);
+  fdt.add(make_entry(oti));
+  EXPECT_NE(fdt.to_string().find("FEC-OTI-FEC-Instance-ID"), std::string::npos);
+}
