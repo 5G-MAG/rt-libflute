@@ -309,7 +309,19 @@ auto File::encode() -> void
       };
       spdlog::debug("Compressing contents with {}", _meta.content_encoding);
 
-      if (deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 | 16, 8, Z_DEFAULT_STRATEGY) == Z_OK) {
+      /* Select the framing from the encoding, matching inflateInit2 below. windowBits 15 is the
+         zlib wrapper, and adding 16 selects gzip instead. Hardcoding gzip here meant a file
+         declared as "deflate" was written with gzip framing, so this library could not read back
+         what it had just written, and the framing did not match what the declared encoding means.
+
+         RFC 9110 clause 8.4.1.2: "The "deflate" coding is a "zlib" data format [RFC1950]
+         containing a "deflate" compressed data stream [RFC1951] that uses a combination of the
+         Lempel-Ziv (LZ77) compression algorithm and Huffman coding."
+
+         General FLUTE only in practice: the MBMS Download Profile permits no encoding other than
+         gzip, so a 3GPP session never takes the deflate branch. */
+      const int window_bits = 15 | ((_meta.content_encoding == "gzip") ? 16 : 0);
+      if (deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, window_bits, 8, Z_DEFAULT_STRATEGY) == Z_OK) {
         _buffer = nullptr;
         auto zstate = deflate(&zs, Z_FINISH);
         size_t last_out = 0;
