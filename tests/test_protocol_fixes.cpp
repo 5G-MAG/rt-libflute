@@ -134,12 +134,16 @@ TEST(MbmsDownloadProfileTest, FecInstanceIdNotCarriedUnderThe3gppProfile) {
   EXPECT_EQ(fdt.to_string().find("FEC-OTI-FEC-Instance-ID"), std::string::npos);
 }
 
-TEST(GeneralFluteTest, FecInstanceIdStillCarriedOutsideTheProfile) {
+TEST(GeneralFluteTest, FecInstanceIdNotCarriedOutsideTheProfileEither) {
+  /* Corrected from an earlier version of this test, which asserted the attribute WAS carried
+     under general FLUTE. RFC 5052 clause 6.2.4 forbids it for a Fully-Specified FEC scheme
+     regardless of profile, and both schemes this library implements are Fully-Specified, so the
+     3GPP profile was never the binding constraint. */
   auto oti = make_fec_oti();
   oti.instance_id = 7;
   FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::GeneralFlute);
   fdt.add(make_entry(oti));
-  EXPECT_NE(fdt.to_string().find("FEC-OTI-FEC-Instance-ID"), std::string::npos);
+  EXPECT_EQ(fdt.to_string().find("FEC-OTI-FEC-Instance-ID"), std::string::npos);
 }
 
 /* TS 26.346 V18.2.0 clause L.4.2 permits Content-Encoding only when set to 'gzip', and
