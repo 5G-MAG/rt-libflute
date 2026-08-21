@@ -42,11 +42,23 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
      large size_t. A header claiming more words than were received sends every read past the end
      of the buffer. Both are reachable from one datagram, so neither is a theoretical concern.
      `code-derived, no spec claim` beyond the field's own definition. */
+  /* RFC 3451 clause 5.1 places two optional 32-bit fields inside the header, after the TOI and
+     before any header extension, each present only when its flag is set:
+     "Sender Current Time (SCT, if T = 1)" and "Expected Residual Time (ERT, if R = 1)".
+     Both count toward HDR_LEN. Omitting them made a conformant peer's SCT and ERT words get
+     walked as HET/HEL extension pairs, corrupting extension parsing.
+
+     TS 26.346 V18.2.0 clause L.4.7 on the MBMS side: "The network should set these flags/fields
+     to zero, and the UE should ignore them." Ignoring a field still means stepping over it, so
+     this is needed in both profiles: robustness against a non-conformant sender under the 3GPP
+     profile, plain correctness under general FLUTE. */
   const size_t standard_header_words = 2 +
     _lct_header.congestion_control_flag +
     _lct_header.half_word_flag +
     _lct_header.tsi_flag +
-    _lct_header.toi_flag;
+    _lct_header.toi_flag +
+    _lct_header.sct_flag +
+    _lct_header.ert_flag;
 
   if (_lct_header.lct_header_len < standard_header_words) {
     throw std::runtime_error("LCT header length is shorter than its own flags require");
@@ -104,6 +116,11 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
       default:
         throw std::runtime_error("TOI fields over 64 bits in length are not supported");
   } 
+
+  // Step over the SCT and ERT words when present, so the extension walk below starts where the
+  // extensions actually begin. RFC 3451 clause 5.1 field order is CCI, TSI, TOI, SCT, ERT.
+  if (_lct_header.sct_flag) hdr_ptr += 4;
+  if (_lct_header.ert_flag) hdr_ptr += 4;
 
   if (_lct_header.codepoint == 0) {
     _fec_oti.encoding_id = FecScheme::CompactNoCode;

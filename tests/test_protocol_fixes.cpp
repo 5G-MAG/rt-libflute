@@ -234,3 +234,31 @@ TEST(LctHeaderParseTest, ZeroLengthHeaderExtensionIsRejectedRatherThanLooping) {
                           0 /* HEL = 0 */, 0, 0});
   EXPECT_THROW(AlcPacket(p.data(), p.size()), std::runtime_error);
 }
+
+/* RFC 3451 clause 5.1 puts SCT (T=1) and ERT (R=1) inside the header, after the TOI and before
+   any extension, and both count toward HDR_LEN. TS 26.346 clause L.4.7 says an MBMS network does
+   not use them and the UE "should ignore them" -- and ignoring a field still means stepping over
+   it, so this applies in both profiles. Byte 1 bits, MSB first: S O O H T R A B. */
+
+TEST(LctHeaderParseTest, SenderCurrentTimeFieldIsAccountedForInTheHeaderLength) {
+  // T=1 is bit 4 from the MSB of byte 1, i.e. 0x08, alongside H=1 (0x10).
+  std::vector<char> p{static_cast<char>(0x10), static_cast<char>(0x10 | 0x08),
+                      static_cast<char>(4), static_cast<char>(0x00)};
+  p.resize(16, 0);  // CCI(4) + TSI/TOI half-words(4) + SCT(4) = 4 words after the base word
+  EXPECT_NO_THROW(AlcPacket(p.data(), p.size()));
+}
+
+TEST(LctHeaderParseTest, ExpectedResidualTimeFieldIsAccountedForInTheHeaderLength) {
+  // R=1 is bit 5 from the MSB of byte 1, i.e. 0x04.
+  std::vector<char> p{static_cast<char>(0x10), static_cast<char>(0x10 | 0x04),
+                      static_cast<char>(4), static_cast<char>(0x00)};
+  p.resize(16, 0);
+  EXPECT_NO_THROW(AlcPacket(p.data(), p.size()));
+}
+
+TEST(LctHeaderParseTest, BothTimingFieldsPresentIsAccountedFor) {
+  std::vector<char> p{static_cast<char>(0x10), static_cast<char>(0x10 | 0x08 | 0x04),
+                      static_cast<char>(5), static_cast<char>(0x00)};
+  p.resize(20, 0);  // ... + SCT(4) + ERT(4)
+  EXPECT_NO_THROW(AlcPacket(p.data(), p.size()));
+}
