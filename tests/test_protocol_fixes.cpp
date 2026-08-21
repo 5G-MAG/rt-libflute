@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <stdexcept>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -329,4 +330,65 @@ TEST(ProfiledFdtSchemaTest, DelimiterIsNotEmitted) {
   // has none, so emitting one would not match the schema.
   EXPECT_EQ(emit(FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2).find("delimiter"),
             std::string::npos);
+}
+
+/* The File element's Expires attribute and the mbms2007:Cache-Control Expires element are
+   different things: FileType's Expires says when the file stops being valid, while
+   CacheControlType is an xs:choice whose Expires is a caching directive to intermediates. They
+   were previously set together, emitted from the same member and parsed into the same member, so
+   nothing could tell them apart. These give them different values on purpose. */
+
+namespace {
+
+std::string emit_with_expiries(uint64_t file_expires, std::optional<uint64_t> cache_expires) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
+  auto e = make_entry(oti);
+  e.expires = file_expires;
+  e.cache_control.cache_expires = cache_expires;
+  fdt.add(e);
+  return fdt.to_string();
+}
+
+}  // namespace
+
+TEST(ExpiryAttributesTest, FileAndCacheExpiriesAreEmittedIndependently) {
+  // Distinct values, so a single shared member cannot satisfy both assertions.
+  auto out = emit_with_expiries(1111, 2222);
+  EXPECT_NE(out.find("Expires=\"1111\""), std::string::npos);      // FileType attribute
+  EXPECT_NE(out.find(">2222<"), std::string::npos);                // Cache-Control element text
+  EXPECT_EQ(out.find("Expires=\"2222\""), std::string::npos);      // not swapped
+  EXPECT_EQ(out.find(">1111<"), std::string::npos);
+}
+
+TEST(ExpiryAttributesTest, FileExpiresOmittedWhenUnset) {
+  // use="optional" in the profiled schema, so absent is valid and preferable to a bogus 0.
+  // Scoped to the File element: FDT-Instance carries its own required Expires attribute, which
+  // is a different attribute on a different element and must not be confused with this one.
+  auto out = emit_with_expiries(0, std::nullopt);
+  auto file_start = out.find("<File ");
+  ASSERT_NE(file_start, std::string::npos);
+  auto file_end = out.find(">", file_start);
+  ASSERT_NE(file_end, std::string::npos);
+  const auto file_tag = out.substr(file_start, file_end - file_start);
+  EXPECT_EQ(file_tag.find("Expires="), std::string::npos);
+}
+
+TEST(ExpiryAttributesTest, NoCacheControlElementWhenNoDirectiveWasSet) {
+  // The element is minOccurs="0"; emitting an empty one would be worse than omitting it.
+  auto out = emit_with_expiries(1111, std::nullopt);
+  EXPECT_EQ(out.find("Cache-Control"), std::string::npos);
+}
+
+TEST(ExpiryAttributesTest, CacheControlStillCarriesOnlyOneChoiceMember) {
+  // CacheControlType is an xs:choice, so no-cache and Expires must not both appear.
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
+  auto e = make_entry(oti);
+  e.cache_control.no_cache = true;
+  e.cache_control.cache_expires = 2222;
+  fdt.add(e);
+  auto out = fdt.to_string();
+  EXPECT_NE(out.find("no-cache"), std::string::npos);
+  EXPECT_EQ(out.find(">2222<"), std::string::npos);
 }

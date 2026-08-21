@@ -308,6 +308,15 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
 
     bool no_cache = false;
     //bool max_stale = false;
+    /* The File element's own Expires attribute, read into its own member. Previously this was
+       left at whatever the cache directive said, which made the two indistinguishable on a round
+       trip and hid the emit-side defect. */
+    uint64_t file_expires = 0;
+    auto file_expires_attr = file_ns.findAttribute(file, "Expires", fdt_ns);
+    if (file_expires_attr != nullptr) {
+      file_expires = strtoull(file_expires_attr->Value(), nullptr, 0);
+    }
+
     std::optional<uint64_t> cache_expires = std::nullopt;
     auto cc = file_ns.findChildElement(file, "Cache-Control", mbms2007_ns);
     if (cc) {
@@ -346,7 +355,7 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
       content_length,
       content_md5,
       content_type,
-      (cache_expires)?(cache_expires.value()):0,
+      file_expires,
       fec_oti,
       {
         no_cache,
@@ -543,6 +552,11 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
         file.fec_oti.encoding_symbol_length != _global_fec_oti.encoding_symbol_length)
       f->SetAttribute("FEC-OTI-Encoding-Symbol-Length", (unsigned)file.fec_oti.encoding_symbol_length);
     if (!file.etag.empty()) f->SetAttribute("mbms2012:File-ETag", file.etag.c_str());
+    /* FileType's own Expires attribute, use="optional" in the annex L.6.1 profiled schema, so it
+       is emitted only when the caller set one and omitted otherwise. It was never emitted before,
+       which meant a File-level expiry could be set through the API and silently not reach the
+       wire. Distinct from the cache directive below. */
+    if (file.expires) f->SetAttribute("Expires", std::to_string(file.expires).c_str());
     if (file.cache_control.no_cache || file.cache_control.cache_expires) {
       auto cc = doc.NewElement("mbms2007:Cache-Control");
       if (file.cache_control.no_cache) {
@@ -550,8 +564,13 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
         noc->SetText("true");
         cc->InsertEndChild(noc);
       } else {
+        /* From the cache-control member, not from the File element's own Expires. The two are
+           different things: CacheControlType in the annex L.6.1 profiled schema is an xs:choice
+           of no-cache, max-stale and Expires, and its Expires is a caching directive, while
+           FileType's Expires attribute says when the file itself stops being valid. Taking this
+           from file.expires made the emitted directive whatever the file expiry happened to be. */
         auto exp = doc.NewElement("mbms2007:Expires");
-        exp->SetText(std::to_string(file.expires).c_str());
+        exp->SetText(std::to_string(file.cache_control.cache_expires.value()).c_str());
         cc->InsertEndChild(exp);
       }
       f->InsertEndChild(cc);
