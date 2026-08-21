@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <stdexcept>
 #include <string>
 
 #include "FileDeliveryTable.h"
@@ -140,4 +141,42 @@ TEST(GeneralFluteTest, FecInstanceIdNotCarriedOutsideTheProfileEither) {
   FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::GeneralFlute);
   fdt.add(make_entry(oti));
   EXPECT_EQ(fdt.to_string().find("FEC-OTI-FEC-Instance-ID"), std::string::npos);
+}
+
+/* TS 26.346 V18.2.0 clause L.4.2 permits Content-Encoding only when set to 'gzip', and
+   prohibits any other value. Refused rather than silently dropped: dropping it would leave
+   encoded payload with nothing on the wire saying so. */
+
+TEST(MbmsDownloadProfileTest, GzipContentEncodingIsAccepted) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
+  auto e = make_entry(oti);
+  e.content_encoding = "gzip";
+  EXPECT_NO_THROW(fdt.add(e));
+  EXPECT_NE(fdt.to_string().find("gzip"), std::string::npos);
+}
+
+TEST(MbmsDownloadProfileTest, NonGzipContentEncodingIsRefused) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
+  auto e = make_entry(oti);
+  e.content_encoding = "deflate";
+  EXPECT_THROW(fdt.add(e), std::invalid_argument);
+}
+
+TEST(MbmsDownloadProfileTest, AbsentContentEncodingIsAccepted) {
+  // The attribute is a "may", so carrying nothing is conformant.
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
+  EXPECT_NO_THROW(fdt.add(make_entry(oti)));
+}
+
+TEST(GeneralFluteTest, NonGzipContentEncodingIsAllowedOutsideTheProfile) {
+  // RFC 3926 places no such restriction, so plain FLUTE accepts it.
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::GeneralFlute);
+  auto e = make_entry(oti);
+  e.content_encoding = "deflate";
+  EXPECT_NO_THROW(fdt.add(e));
+  EXPECT_NE(fdt.to_string().find("deflate"), std::string::npos);
 }
