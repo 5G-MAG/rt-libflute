@@ -206,7 +206,19 @@ auto File::check_file_completion() -> void
 
 auto File::calculate_partitioning() -> void
 {
-  // Calculate source block partitioning (RFC5052 9.1) 
+  /* Both divisors come from the FEC OTI and both are used as denominators below. A
+     default-constructed FecOti leaves them 0, which makes the first division produce inf, the
+     block count inf, and the block-creation loop below effectively unbounded: the object hangs
+     rather than reporting anything. Reachable through the public File constructors, which accept
+     a FecOti without inspecting it. Refused loudly instead, per RULES.md rule 12.
+     `code-derived, no spec claim`. */
+  if (_meta.fec_oti.encoding_symbol_length == 0 || _meta.fec_oti.max_source_block_length == 0) {
+    throw std::runtime_error(
+        "FEC OTI is unusable for partitioning: encoding_symbol_length and "
+        "max_source_block_length must both be non-zero");
+  }
+
+  // Calculate source block partitioning (RFC5052 9.1)
   _nof_source_symbols = ceil((double)_meta.fec_oti.transfer_length / (double)_meta.fec_oti.encoding_symbol_length);
   _nof_source_blocks = ceil((double)_nof_source_symbols / (double)_meta.fec_oti.max_source_block_length);
   _large_source_block_length = ceil((double)_nof_source_symbols / (double)_nof_source_blocks);
