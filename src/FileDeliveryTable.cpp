@@ -617,8 +617,10 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
 
        The parser below is deliberately unchanged, because the same clause's NOTE keeps this one
        mandatory for receivers: "With the exception of Transfer-Length, which is mandatory, these
-       parameters are optional to support by the FLUTE receiver." Nothing is lost on the wire either:
-       the receive path falls back to Content-Length when the attribute is absent. */
+       parameters are optional to support by the FLUTE receiver." Nothing is lost on the wire:
+       RFC 3926 clause 3.4.2 lets Content-Length stand in for an object carried without a content
+       encoding, and this sender does not content encode under a 3GPP profile at all, because the
+       profile provides no carrier for the resulting length. See Transmitter::send(). */
     if (!is_3gpp(_profile) && file.fec_oti.transfer_length)
       f->SetAttribute("Transfer-Length", file.fec_oti.transfer_length);
     if (!file.content_md5.empty()) f->SetAttribute("Content-MD5", file.content_md5.c_str());

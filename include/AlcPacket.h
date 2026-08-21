@@ -68,7 +68,13 @@ namespace LibFlute {
       AlcPacket(uint64_t tsi, CloseSession);
 
       AlcPacket(uint64_t tsi, uint16_t toi, FecOti fec_oti, const std::vector<EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id,
+<<<<<<< HEAD
                 bool close_session_flag = false, bool close_object_flag = false);
+=======
+                bool close_session_flag = false, bool close_object_flag = false,
+                const std::optional<CongestionControlInfo>& cci = std::nullopt);
+                bool include_fti = false);
+>>>>>>> 291f458 (alc+receiver: carry an encoded object's transfer length where the profile allows it)
 
      /**
       *  Default destructor.
