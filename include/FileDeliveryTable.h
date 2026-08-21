@@ -47,7 +47,8 @@ namespace LibFlute {
       *  @param fec_oti Global FEC OTI parameters
       *  @param fdt_namespace The XML namespace to use for FDT
       */
-      FileDeliveryTable(uint32_t instance_id, FecOti fec_oti, FdtNamespace fdt_namespace = FDT_NS_NONE);
+      FileDeliveryTable(uint32_t instance_id, FecOti fec_oti, FdtNamespace fdt_namespace = FDT_NS_NONE,
+                        Profile profile = Profile::Mbms3gpp);
 
      /**
       *  Parse an XML string and create a FDT class from it
@@ -67,6 +68,11 @@ namespace LibFlute {
       *  Get the FDT instance ID
       */
       uint32_t instance_id() { return _instance_id; };
+
+     /**
+      *  Which obligation set this FDT is emitted under. See Profile.
+      */
+      Profile profile() const { return _profile; };
 
      /**
       *  An entry for a file in the FDT
@@ -156,6 +162,7 @@ namespace LibFlute {
 
       uint32_t _instance_id;
       uint32_t _instance_id_sent;
+      Profile _profile = Profile::Mbms3gpp;
 
       /** FDT Instance IDs that have been sent, and the (NTP-epoch-seconds) time after which
        *  each is safe to reuse -- i.e. the Expires value that was in effect while that ID was

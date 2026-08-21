@@ -421,7 +421,8 @@ namespace LibFlute {
           const std::optional<boost::asio::ip::udp::endpoint>& tunnel_endpoint = std::nullopt,
           FdtNamespace fdt_namespace = FileDeliveryTable::FDT_NS_NONE,
           bool active = true,
-          const std::optional<std::string>& source_address = std::nullopt);
+          const std::optional<std::string>& source_address = std::nullopt,
+          Profile profile = Profile::Mbms3gpp);
 
      /**
       *  Default destructor.
