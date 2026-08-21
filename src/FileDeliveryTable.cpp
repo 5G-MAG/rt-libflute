@@ -452,7 +452,22 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
     f->SetAttribute("TOI", file.toi);
     f->SetAttribute("Content-Location", file.content_location.c_str());
     f->SetAttribute("Content-Length", file.content_length);
-    if (file.fec_oti.transfer_length) f->SetAttribute("Transfer-Length", file.fec_oti.transfer_length);
+    /* TS 26.346 V18.2.0 clause L.4.4, on the File-level attributes, fourth list:
+       "The following attributes shall not be carried in the FDT sent by the FLUTE sender:"
+       Transfer-Length is the first item of that list.
+
+       The prohibition binds a sender operating the MBMS Download Profile, selected here by either
+       3GPP FDT schema. Other namespace modes are not 3GPP sessions and keep the RFC 3926 behaviour,
+       where the attribute is permitted.
+
+       The parser below is deliberately unchanged, because the same clause's NOTE keeps this one
+       mandatory for receivers: "With the exception of Transfer-Length, which is mandatory, these
+       parameters are optional to support by the FLUTE receiver." Nothing is lost on the wire either:
+       the receive path falls back to Content-Length when the attribute is absent. */
+    const bool mbms_download_profile = (_fdt_namespace == FDT_NS_3GPP_CONSOLIDATED_V2 ||
+                                        _fdt_namespace == FDT_NS_DRAFT_2005);
+    if (!mbms_download_profile && file.fec_oti.transfer_length)
+      f->SetAttribute("Transfer-Length", file.fec_oti.transfer_length);
     if (!file.content_md5.empty()) f->SetAttribute("Content-MD5", file.content_md5.c_str());
     if (!file.content_encoding.empty()) f->SetAttribute("Content-Encoding", file.content_encoding.c_str());
     if (!file.content_type.empty()) f->SetAttribute("Content-Type", file.content_type.c_str());
