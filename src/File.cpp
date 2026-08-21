@@ -332,8 +332,14 @@ auto File::encode() -> void
           }
           _meta.fec_oti.transfer_length = zs.total_out;
         } else {
-          spdlog::error("Error compressing file {}: {}", _meta.toi, zs.msg);
-          throw zs.msg;
+          /* zs.msg is NULL for Z_STREAM_ERROR, so the previous form formatted a null char* through
+             spdlog and then threw it. Throwing a raw char* also meant only catch(const char*)
+             could handle it, and dereferencing the caught null would crash the handler. */
+          const char *zmsg = zs.msg ? zs.msg : "no zlib message";
+          spdlog::error("Error compressing file {}: {} (zlib status {})", _meta.toi, zmsg, zstate);
+          deflateEnd(&zs);
+          if (own_decomp) free(decomp_buffer);
+          throw std::runtime_error(std::string("Failed to compress file: ") + zmsg);
         }
         deflateEnd(&zs);
 
