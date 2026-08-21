@@ -96,3 +96,23 @@ TEST(MbmsDownloadProfileTest, ContentLengthIsCarriedInEveryMode) {
     EXPECT_NE(emit(ns).find("Content-Length"), std::string::npos);
   }
 }
+
+/* TS 26.346 V18.2.0 clause L.4.3 forbids the sender using the Complete attribute, while its
+   NOTE keeps receiver support mandatory. These cover the sender half; the parser is unchanged. */
+
+TEST(MbmsDownloadProfileTest, CompleteNotCarriedUnderThe3gppProfile) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
+  fdt.add(make_entry(oti));
+  fdt.set_complete(true);
+  EXPECT_EQ(fdt.to_string().find("Complete"), std::string::npos);
+}
+
+TEST(GeneralFluteTest, CompleteStillCarriedOutsideTheProfile) {
+  // RFC 3926 clause 3.4.2 permits it, so plain FLUTE keeps it.
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::GeneralFlute);
+  fdt.add(make_entry(oti));
+  fdt.set_complete(true);
+  EXPECT_NE(fdt.to_string().find("Complete"), std::string::npos);
+}
