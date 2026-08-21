@@ -399,6 +399,22 @@ auto LibFlute::FileDeliveryTable::advance_instance_id() -> void
 
 auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> void
 {
+  /* The MBMS Download Profile permits exactly one content encoding, and forbids every other.
+     TS 26.346 V18.2.0 clause L.4.2, second list: "The following FDT attribute, defined at both
+     the FDT-Instance and File levels, may be carried in the FDT sent by the FLUTE sender, under
+     either the File-Instance or File element, and shall be supported by the FLUTE receiver:"
+     the single item there is Content-Encoding set to 'gzip'. The third list of the same clause
+     then prohibits the attribute "set to a value other than 'gzip'".
+
+     Refused here rather than silently dropped from the emitted FDT. Dropping the attribute would
+     leave the payload encoded and the receiver with nothing saying so, which is undecodable
+     content rather than a conformant session; RULES.md rule 12 prefers failing loudly over
+     quietly adjusting away a caller's misconfiguration. Absent is fine: the attribute is a may. */
+  if (_profile == Profile::Mbms3gpp && !fe.content_encoding.empty() && fe.content_encoding != "gzip") {
+    throw std::invalid_argument(
+        "Content-Encoding must be absent or gzip in the MBMS Download Profile, got: " +
+        fe.content_encoding + ". Use Profile::GeneralFlute for a non-3GPP session.");
+  }
   if (_instance_id == _instance_id_sent) advance_instance_id();
   _file_entries.push_back(fe);
 }
