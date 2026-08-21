@@ -551,8 +551,10 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
 
        The parser below is deliberately unchanged, because the same clause's NOTE keeps this one
        mandatory for receivers: "With the exception of Transfer-Length, which is mandatory, these
-       parameters are optional to support by the FLUTE receiver." Nothing is lost on the wire either:
-       the receive path falls back to Content-Length when the attribute is absent. */
+       parameters are optional to support by the FLUTE receiver." For an object carried without a
+       content encoding nothing is lost, because RFC 3926 clause 3.4.2 lets Content-Length stand in.
+       For a content-encoded object the length is genuinely absent from the FDT, and the sender
+       supplies it in the object's own EXT_FTI instead; see the parser above. */
     const bool mbms_download_profile = (_profile == Profile::Mbms3gpp);
     if (!mbms_download_profile && file.fec_oti.transfer_length)
       f->SetAttribute("Transfer-Length", file.fec_oti.transfer_length);

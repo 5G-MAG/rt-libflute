@@ -129,6 +129,16 @@ namespace LibFlute {
         _meta.content_type = fdt_entry.content_type;
         _meta.content_md5 = fdt_entry.content_md5;
         _meta.expires = fdt_entry.expires;
+        // The encoding has to come across too. Reception bootstrapped from EXT_FTI cannot know an
+        // object is content encoded, because EXT_FTI carries FEC parameters and not that; without
+        // this the object is delivered still compressed, with a Content-MD5 that will not match.
+        _meta.content_encoding = fdt_entry.content_encoding;
+        // And so does the content length. Bootstrapping sets it from EXT_FTI's transfer length,
+        // which is the same number only for an object carried without a content encoding. For an
+        // encoded one the FDT holds the decoded length and EXT_FTI the encoded one, so keeping the
+        // bootstrap value makes the post-decode length check compare against the wrong figure.
+        // fec_oti is still left alone: its transfer length is what the reassembly is keyed on.
+        _meta.content_length = fdt_entry.content_length;
       };
 
      /**

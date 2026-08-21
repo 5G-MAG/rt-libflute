@@ -392,3 +392,48 @@ TEST(ExpiryAttributesTest, CacheControlStillCarriesOnlyOneChoiceMember) {
   EXPECT_NE(out.find("no-cache"), std::string::npos);
   EXPECT_EQ(out.find(">2222<"), std::string::npos);
 }
+
+// Whether Content-Length may stand in for a missing Transfer-Length depends on
+// whether the object was content encoded, and on nothing else.
+// RFC 3926 clause 3.4.2: "If the file is not content encoded before transport
+// (and thus the "Content-Encoding" attribute is not used) then the transfer
+// length is the length of the original file, and in this case the
+// "Content-Length" is also the transfer length."
+namespace {
+std::string fdt_with(const std::string& file_attrs) {
+  return std::string("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+    "<FDT-Instance xmlns=\"urn:IETF:metadata:2005:FLUTE:FDT\" Expires=\"4000000000\""
+    " FEC-OTI-FEC-Encoding-ID=\"0\" FEC-OTI-Maximum-Source-Block-Length=\"64\""
+    " FEC-OTI-Encoding-Symbol-Length=\"1400\">"
+    "<File TOI=\"1\" Content-Location=\"obj.bin\" ") + file_attrs + "/></FDT-Instance>";
+}
+
+uint64_t parsed_transfer_length(const std::string& file_attrs) {
+  auto xml = fdt_with(file_attrs);
+  std::vector<char> buf(xml.begin(), xml.end());
+  LibFlute::FileDeliveryTable fdt(1, buf.data(), buf.size());
+  for (const auto& e : fdt.file_entries()) {
+    if (e.toi == 1) return e.fec_oti.transfer_length;
+  }
+  throw std::runtime_error("no entry parsed");
+}
+} // namespace
+
+TEST(EncodedObjectTransferLengthTest, ContentLengthStandsInOnlyWithoutAnEncoding) {
+  // No encoding: the clause authorises the substitution.
+  EXPECT_EQ(parsed_transfer_length("Content-Length=\"5000\""), 5000u);
+}
+
+TEST(EncodedObjectTransferLengthTest, AnEncodedObjectDoesNotBorrowContentLength) {
+  // With an encoding the two lengths differ, so borrowing Content-Length would
+  // hand the decoder a length wrong by however much the encoding changed. The
+  // length is left unknown for the object's own EXT_FTI to supply.
+  EXPECT_EQ(parsed_transfer_length("Content-Length=\"5000\" Content-Encoding=\"gzip\""), 0u)
+      << "an encoded object's transfer length is not its Content-Length";
+}
+
+TEST(EncodedObjectTransferLengthTest, AnExplicitTransferLengthAlwaysWins) {
+  EXPECT_EQ(parsed_transfer_length("Content-Length=\"5000\" Transfer-Length=\"4096\""), 4096u);
+  EXPECT_EQ(parsed_transfer_length(
+      "Content-Length=\"5000\" Transfer-Length=\"4096\" Content-Encoding=\"gzip\""), 4096u);
+}

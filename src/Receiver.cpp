@@ -356,6 +356,19 @@ auto LibFlute::Receiver::process_alc_datagram(char* data, size_t bytes_recvd) ->
           // the FDT once it arrives (see the merge below) or left blank if it never does.
           FileDeliveryTable::FileEntry fe{static_cast<uint32_t>(alc.toi()), "", static_cast<uint32_t>(alc.fec_oti().transfer_length), "", "", 0, alc.fec_oti()};
           _files[alc.toi()] = std::make_shared<LibFlute::File>(fe);
+
+          /* The FDT may already have described this object and been unable to say how long it is,
+             in which case its entry is waiting here rather than lost: adopt it now, so the object
+             is written to its Content-Location and decoded per its Content-Encoding instead of
+             landing anonymous and still compressed. */
+          if (_fdt) {
+            for (const auto& entry : _fdt->file_entries()) {
+              if (entry.toi == alc.toi()) {
+                _files[alc.toi()]->adopt_fdt_metadata(entry);
+                break;
+              }
+            }
+          }
         }
 
         if (_files.find(alc.toi()) != _files.end() && !_files[alc.toi()]->complete()) {
@@ -427,6 +440,18 @@ auto LibFlute::Receiver::process_alc_datagram(char* data, size_t bytes_recvd) ->
                   existing_file = _files.end();
                 }
                 if (existing_file == _files.end()) {
+                  if (file_entry.fec_oti.transfer_length == 0) {
+                    /* The FDT does not say how long this object is on the wire, which happens for a
+                       content-encoded object under the MBMS Download Profile: TS 26.346 V18.2.0
+                       clause L.4.4 forbids the sender from carrying Transfer-Length, and RFC 3926
+                       clause 3.4.2 only lets Content-Length stand in when no encoding was applied.
+                       Starting reception now would mean partitioning the object to a length that is
+                       simply unknown. Wait instead: the object's own EXT_FTI carries the length, and
+                       the branch above picks this entry's metadata up again once it arrives. */
+                    spdlog::debug("Deferring reception for TOI {}: transfer length not in the FDT, "
+                                  "awaiting the object's EXT_FTI", file_entry.toi);
+                    continue;
+                  }
                   spdlog::debug("Starting reception for file with TOI {}: {} ({})", file_entry.toi,
                       file_entry.content_location, file_entry.content_type);
                   _files.emplace(file_entry.toi, std::make_shared<LibFlute::File>(file_entry));

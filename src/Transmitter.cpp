@@ -502,6 +502,7 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
     , _tunnel_endpoint(tunnel_endpoint)
     , _tunnel_local_address()
     , _active(active)
+    , _profile(profile)
 {
   if (source_address) {
     _source_address = boost::asio::ip::make_address(source_address.value());
@@ -800,8 +801,17 @@ auto Transmitter::send_next_packet() -> void
       for(const auto& symbol : symbols) {
         spdlog::debug("sending TOI {} SBN {} ID {}", file->meta().toi, symbol.source_block_number(), symbol.id() );
       }
+      /* A content-encoded object under the MBMS Download Profile has no way to state its transfer
+         length in the FDT: TS 26.346 V18.2.0 clause L.4.4 forbids Transfer-Length there, and
+         RFC 3926 clause 3.4.2 only lets Content-Length stand in when no encoding was applied. Carry
+         it in the object's own EXT_FTI instead, which every receiver must support. See AlcPacket for
+         why this is the route taken. */
+      const bool fti_on_content_packet = file->meta().toi != 0 &&
+                                         _profile == Profile::Mbms3gpp &&
+                                         !file->meta().content_encoding.empty();
       auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id(),
-                                                 _session_closing, _closing_objects.count(file->meta().toi) > 0);
+                                                 _session_closing, _closing_objects.count(file->meta().toi) > 0,
+                                                 fti_on_content_packet);
       bytes_queued += packet->size();
 
       boost::asio::ip::udp::endpoint send_endpoint;
