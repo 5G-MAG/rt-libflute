@@ -96,7 +96,7 @@ namespace LibFlute {
       void set_expires(uint64_t exp) { _expires = exp; };
 
      /**
-      *  Set the RFC 6726 Complete attribute: true once this FDT Instance describes the full,
+      *  Set the RFC 3926 clause 3.4.2 Complete attribute: true once this FDT Instance describes the full,
       *  final set of files for the session (no further files will ever be announced).
       */
       void set_complete(bool complete) { _complete = complete; };
@@ -135,12 +135,22 @@ namespace LibFlute {
 
     private:
       /**
-       * Advance _instance_id to a value that is safe to reuse, per RFC 6726 SS3.4.1: the FDT
-       * Instance ID is a 20-bit field (0..0xFFFFF), and a sender MUST NOT reuse an ID until all
-       * receivers can be assumed to have either received or discarded every packet carrying the
-       * previous FDT Instance that used it. Records the outgoing ID's expiry, then either
-       * increments linearly or, once the 20-bit space is exhausted, wraps to the smallest ID
-       * whose recorded expiry has already passed.
+       * Advance _instance_id to a value that is safe to reuse.
+       *
+       * The wrap itself is required.
+       * RFC 3926 clause 3.4.1: "After reaching the maximum value (2^20-1), the numbering starts
+       * again from '0'."
+       *
+       * Waiting for the previous holder of an ID to expire before reusing it is a recommendation
+       * on the sender, not an obligation, so this is deliberately stronger than the clause asks.
+       * Per RFC 3926 clause 3.4.1 it would be reasonable for
+       * "FLUTE Senders to only construct and deliver FDT Instances with wraparound IDs after the
+       * previous FDT Instance using the same ID has expired."
+       * (The clause's own sentence begins "It would be reasonable for"; it is split across a page
+       * boundary in the published text, so only the contiguous remainder is quoted here.)
+       *
+       * Records the outgoing ID's expiry, then either increments linearly or, once the 20-bit
+       * space is exhausted, wraps to the smallest ID whose recorded expiry has already passed.
        */
       void advance_instance_id();
 
@@ -152,7 +162,7 @@ namespace LibFlute {
        *  live. Entries are removed once reused. */
       std::map<uint32_t, uint64_t> _instance_id_history;
 
-      static constexpr uint32_t max_instance_id = 0xFFFFF; //< 20-bit field width (RFC 6726 SS3.4.1)
+      static constexpr uint32_t max_instance_id = 0xFFFFF; //< 20-bit field width (RFC 3926 clause 3.4.1, "FDT Instance ID, 20 bits")
 
       std::vector<FileEntry> _file_entries;
       FecOti _global_fec_oti;

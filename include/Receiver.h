@@ -40,7 +40,7 @@ namespace LibFlute {
 
      /**
       *  Definition of a callback invoked whenever an incoming packet carries the LCT Close
-      *  Session and/or Close Object flag (RFC 5651 SS3.4), registered through
+      *  Session and/or Close Object flag (RFC 3451 clause 5.1, 'A' and 'B' bits), registered through
       *  ::register_close_notification_callback.
       *
       *  @param session_closed True if the sender signalled the whole session is ending

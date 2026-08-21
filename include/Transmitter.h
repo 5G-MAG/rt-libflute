@@ -661,15 +661,15 @@ namespace LibFlute {
 
      /**
       * Signal that this session is ending: no further files will ever be added. Marks the FDT
-      * as Complete (RFC 6726, so receivers know the file set is final) and sets the LCT Close
-      * Session flag (RFC 5651 SS3.4) on every packet sent from this point on, including for
+      * as Complete (RFC 3926 clause 3.4.2, so receivers know the file set is final) and sets the LCT Close
+      * Session flag (RFC 3451 clause 5.1, 'A' bit) on every packet sent from this point on, including for
       * files already in flight.
       */
       void close_session();
 
      /**
       * Signal that no further data will be sent for a specific TOI. Sets the LCT Close Object
-      * flag (RFC 5651 SS3.4) on subsequent packets carrying that TOI.
+      * flag (RFC 3451 clause 5.1, 'B' bit) on subsequent packets carrying that TOI.
       *
       * @param toi The TOI to close.
       */
