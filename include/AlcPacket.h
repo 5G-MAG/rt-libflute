@@ -43,8 +43,8 @@ namespace LibFlute {
       *  @param symbols Vector of encoding symbols
       *  @param max_size Maximum payload size
       *  @param fdt_instance_id FDT instance ID (only relevant for FDT with TOI=0)
-      *  @param close_session_flag Set the LCT Close Session flag (RFC 5651 SS3.4) on this packet
-      *  @param close_object_flag Set the LCT Close Object flag (RFC 5651 SS3.4) on this packet
+      *  @param close_session_flag Set the LCT Close Session flag (RFC 3451 clause 5.1, 'A' bit) on this packet
+      *  @param close_object_flag Set the LCT Close Object flag (RFC 3451 clause 5.1, 'B' bit) on this packet
       */
       AlcPacket(uint64_t tsi, uint16_t toi, FecOti fec_oti, const std::vector<EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id,
                 bool close_session_flag = false, bool close_object_flag = false);
@@ -81,13 +81,13 @@ namespace LibFlute {
 
      /**
       *  Whether the sender set the LCT Close Session flag on this packet, signalling that no
-      *  further objects will be sent in this session (RFC 5651 SS3.4).
+      *  further objects will be sent in this session (RFC 3451 clause 5.1, 'A' bit).
       */
       bool close_session_flag() const { return _lct_header.close_session_flag; };
 
      /**
       *  Whether the sender set the LCT Close Object flag on this packet, signalling that this
-      *  is the last packet for this TOI (RFC 5651 SS3.4).
+      *  is the last packet for this TOI (RFC 3451 clause 5.1, 'B' bit).
       */
       bool close_object_flag() const { return _lct_header.close_object_flag; };
 
@@ -97,10 +97,15 @@ namespace LibFlute {
       FecScheme fec_scheme() const { return _fec_oti.encoding_id; };
 
      /**
-      *  Whether this packet carried its own EXT_FTI header extension. RFC 6726 allows a sender
-      *  to include EXT_FTI on individual object (TOI>0) packets, not just the FDT (TOI=0), so a
-      *  receiver can bootstrap an object's FEC OTI directly from the packet stream without
-      *  waiting for (or without ever seeing) that object's <File> entry in the FDT.
+      *  Whether this packet carried its own EXT_FTI header extension.
+      *
+      *  A sender may put EXT_FTI on individual object packets (TOI > 0), not only on the FDT
+      *  (TOI 0), and a receiver is obliged to accept it there, so an object's FEC OTI can be
+      *  bootstrapped straight from the packet stream without waiting for, or ever seeing, that
+      *  object's <File> entry in the FDT.
+      *
+      *  RFC 3926 clause 5: "For the TOI values other than 0 the receiver MUST support both
+      *  methods: the use of EXT_FTI and the use of FDT."
       */
       bool has_fec_oti() const { return _has_fti; };
 
@@ -135,7 +140,7 @@ namespace LibFlute {
       char* _buffer = nullptr;
       size_t _len;
 
-      // RFC5651 5.1 - LCT Header Format
+      // RFC 3451 clause 5.1 - LCT Header Format
       struct __attribute__((packed)) lct_header_t {
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
         uint8_t res1:1;

@@ -237,7 +237,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
 
         if (alc.toi() != 0 && _files.find(alc.toi()) == _files.end() && alc.has_fec_oti()) {
           // No <File> entry for this TOI yet (the FDT describing it hasn't arrived, or won't --
-          // RFC 6726 allows a sender to carry EXT_FTI on individual object packets precisely so
+          // RFC 3926 clause 5 makes EXT_FTI support mandatory for a receiver on any TOI other
           // reception doesn't have to wait on that). Bootstrap the FEC OTI straight from this
           // packet instead of discarding it; content_location is filled in later, either from
           // the FDT once it arrives (see the merge below) or left blank if it never does.
