@@ -440,7 +440,17 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
       break;
   }
   root->SetAttribute("Expires", std::to_string(_expires).c_str());
-  if (_complete) root->SetAttribute("Complete", "true");
+  /* The Complete attribute is permitted by RFC 3926 clause 3.4.2, which makes it optional on the
+     FDT-Instance element, but the MBMS Download Profile forbids a sender using it.
+     TS 26.346 V18.2.0 clause L.4.3: "The following parameters, defined at the FDT-Instance level,
+     shall not be used by the FLUTE sender:"
+     Complete is the first item of that list.
+
+     Sender-only. The parser above is deliberately untouched, because the same clause's NOTE makes
+     receiver support for this one mandatory: "With the exception of Complete, which is mandatory,
+     these parameters are optional to support by the FLUTE receiver." Reading the prohibition as
+     binding both directions would break reception from a conformant peer. */
+  if (_complete && _profile != Profile::Mbms3gpp) root->SetAttribute("Complete", "true");
   root->SetAttribute("FEC-OTI-FEC-Encoding-ID", (unsigned)_global_fec_oti.encoding_id);
   if (_global_fec_oti.instance_id) root->SetAttribute("FEC-OTI-FEC-Instance-ID", (unsigned)_global_fec_oti.instance_id);
   root->SetAttribute("FEC-OTI-Maximum-Source-Block-Length", (unsigned)_global_fec_oti.max_source_block_length);
