@@ -298,3 +298,35 @@ TEST(FluteVersionTest, VersionZeroIsRejected) {
   auto p = packet_with_ext_fdt(0);
   EXPECT_THROW(AlcPacket(p.data(), p.size()), std::runtime_error);
 }
+
+/* TS 26.346 V18.2.0 clause L.6.3 fixes schemaVersion at 2 for the profiled FDT schema, whose
+   L.6.1 definition makes it a mandatory child element after the File elements. Keyed on the FDT
+   namespace, not the profile: it is required by the schema being emitted. */
+
+TEST(ProfiledFdtSchemaTest, SchemaVersionTwoIsEmittedForTheProfiledSchema) {
+  auto out = emit(FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
+  EXPECT_NE(out.find("<schemaVersion>2</schemaVersion>"), std::string::npos);
+}
+
+TEST(ProfiledFdtSchemaTest, SchemaVersionFollowsTheFileElements) {
+  // The schema's sequence is File then schemaVersion, so order is part of validity.
+  auto out = emit(FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
+  auto file_pos = out.find("<File ");
+  auto sv_pos = out.find("<schemaVersion>");
+  ASSERT_NE(file_pos, std::string::npos);
+  ASSERT_NE(sv_pos, std::string::npos);
+  EXPECT_LT(file_pos, sv_pos);
+}
+
+TEST(ProfiledFdtSchemaTest, SchemaVersionNotEmittedForOtherSchemas) {
+  // Meaningless in a document that does not declare the profiled schema.
+  EXPECT_EQ(emit(FileDeliveryTable::FDT_NS_RFC3926).find("schemaVersion"), std::string::npos);
+  EXPECT_EQ(emit(FileDeliveryTable::FDT_NS_DRAFT_2005).find("schemaVersion"), std::string::npos);
+}
+
+TEST(ProfiledFdtSchemaTest, DelimiterIsNotEmitted) {
+  // Clause L.6.3A calls for it only when a future optional element is added; the base sequence
+  // has none, so emitting one would not match the schema.
+  EXPECT_EQ(emit(FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2).find("delimiter"),
+            std::string::npos);
+}

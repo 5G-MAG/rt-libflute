@@ -560,6 +560,25 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
   }
 
 
+  /* The profiled schema makes schemaVersion a mandatory child element of FDT-Instance, placed
+     after the File elements, so omitting it while declaring that namespace produces a document
+     that does not validate against the schema it claims. Its value is fixed, not derived.
+
+     Keyed on the FDT namespace rather than on the profile, because this belongs to the schema
+     being emitted: it is required by the annex L.6.1 schema itself, and meaningless in a document
+     that does not declare it. The delimiter element is deliberately not emitted; annex L.6.3A
+     calls for it only when a future optional element is added ahead of the xs:any wildcard, and
+     the base schema's sequence does not contain one.
+
+     TS 26.346 V18.2.0 clause L.6.3: "The BM-SC shall set the schemaVersion element to 2 in all
+     instance documents"
+     (the clause continues by naming the schema, which is the annex L.6.1 one selected here). */
+  if (_fdt_namespace == FDT_NS_3GPP_CONSOLIDATED_V2) {
+    auto sv = doc.NewElement("schemaVersion");
+    sv->SetText(2);
+    root->InsertEndChild(sv);
+  }
+
   tinyxml2::XMLPrinter printer;
   doc.Print(&printer);
   return std::string(printer.CStr());
