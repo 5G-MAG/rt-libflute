@@ -180,8 +180,27 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                     }
       case EXT_FDT: {
                       uint8_t flute_version = (*ext_ptr & 0xF0) >> 4;
-                      if (flute_version > 2) {
-                        throw std::runtime_error("Unsupported FLUTE version");
+                      /* This branch implements FLUTE version 1, and the version field is not
+                         advisory: it identifies which protocol the packet belongs to.
+
+                         RFC 3926 clause 3.4.1: "This document specifies FLUTE version 1. Hence
+                         in any ALC packet that carries FDT Instance and that belongs to the file
+                         delivery session as specified in this specification MUST set this field
+                         to '1'."
+
+                         Accepting 2 was accepting a packet from a protocol this build does not
+                         implement, and the two are not interchangeable underneath.
+                         RFC 6726 clause 11.1: "Therefore, an implementation that relies on
+                         [RFC3926] and RFC 3451 will not be backwards compatible with FLUTE as
+                         specified in this document."
+
+                         General FLUTE, not a 3GPP restriction: it holds in both profiles. What
+                         TS 26.346 adds is only that version 1 is the one it selects, so a 3GPP
+                         session could never legitimately carry 2 either. */
+                      if (flute_version != 1) {
+                        throw std::runtime_error("Unsupported FLUTE version " +
+                                                 std::to_string(flute_version) +
+                                                 "; this implementation is FLUTE version 1");
                       }
                       _fdt_instance_id =  (*ext_ptr & 0x0F) << 16;
                       ext_ptr++;

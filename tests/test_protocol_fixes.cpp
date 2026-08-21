@@ -262,3 +262,39 @@ TEST(LctHeaderParseTest, BothTimingFieldsPresentIsAccountedFor) {
   p.resize(20, 0);  // ... + SCT(4) + ERT(4)
   EXPECT_NO_THROW(AlcPacket(p.data(), p.size()));
 }
+
+/* RFC 3926 clause 3.4.1 requires the EXT_FDT version field to be 1 in a version 1 session, and
+   RFC 6726 clause 11.1 records that version 1 and version 2 are not interchangeable. General
+   FLUTE, applying in both profiles. EXT_FDT is HET 192, a fixed-length 4-byte extension, so its
+   first byte holds V in the top nibble and the FDT Instance ID's top 4 bits in the low nibble. */
+
+namespace {
+
+std::vector<char> packet_with_ext_fdt(uint8_t flute_version) {
+  std::vector<char> p{static_cast<char>(0x10), static_cast<char>(0x10),
+                      static_cast<char>(4), static_cast<char>(0x00)};
+  p.resize(12, 0);
+  p.push_back(static_cast<char>(192));                          // HET = EXT_FDT
+  p.push_back(static_cast<char>((flute_version & 0x0F) << 4));  // V, then ID bits 19..16
+  p.push_back(0);                                               // FDT Instance ID low 16 bits
+  p.push_back(0);
+  return p;
+}
+
+}  // namespace
+
+TEST(FluteVersionTest, VersionOneIsAccepted) {
+  auto p = packet_with_ext_fdt(1);
+  EXPECT_NO_THROW(AlcPacket(p.data(), p.size()));
+}
+
+TEST(FluteVersionTest, VersionTwoIsRejected) {
+  // Previously accepted, which meant decoding a session this build does not implement.
+  auto p = packet_with_ext_fdt(2);
+  EXPECT_THROW(AlcPacket(p.data(), p.size()), std::runtime_error);
+}
+
+TEST(FluteVersionTest, VersionZeroIsRejected) {
+  auto p = packet_with_ext_fdt(0);
+  EXPECT_THROW(AlcPacket(p.data(), p.size()), std::runtime_error);
+}
