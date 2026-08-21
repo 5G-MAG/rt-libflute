@@ -2,7 +2,9 @@
 
 #include <stdexcept>
 #include <string>
+#include <vector>
 
+#include "AlcPacket.h"
 #include "FileDeliveryTable.h"
 
 using namespace LibFlute;
@@ -175,4 +177,56 @@ TEST(GeneralFluteTest, NonGzipContentEncodingIsAllowedOutsideTheProfile) {
   e.content_encoding = "deflate";
   EXPECT_NO_THROW(fdt.add(e));
   EXPECT_NE(fdt.to_string().find("deflate"), std::string::npos);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   LCT header parse robustness. General FLUTE, not 3GPP: these are properties of the RFC 3451
+   header itself and apply in both profiles. The inputs are built as raw bytes because the
+   transmitter cannot produce them, which is why nothing previously covered this path.
+
+   Layout, RFC 3451 clause 5.1: byte 0 is V(4) C(2) r(2); byte 1 is S(1) O(2) H(1) T(1) R(1)
+   A(1) B(1); byte 2 is HDR_LEN in 32-bit words; byte 3 is the Codepoint.
+   --------------------------------------------------------------------------------------------- */
+
+namespace {
+
+// V=1, H=1 (so a 16-bit TSI and TOI half-word are present), everything else clear.
+// Standard header is then 2 + H = 3 words = 12 bytes.
+std::vector<char> lct_packet(uint8_t hdr_len_words, const std::vector<uint8_t> &extension = {}) {
+  std::vector<char> p{static_cast<char>(0x10),   // V=1, C=0, r=0
+                      static_cast<char>(0x10),   // H=1
+                      static_cast<char>(hdr_len_words),
+                      static_cast<char>(0x00)};  // Codepoint 0 = Compact No-Code
+  p.resize(12, 0);                               // CCI (4) + TSI half-word (2) + TOI half-word (2)
+  for (auto b : extension) p.push_back(static_cast<char>(b));
+  return p;
+}
+
+}  // namespace
+
+TEST(LctHeaderParseTest, WellFormedMinimalHeaderStillParses) {
+  auto p = lct_packet(3);
+  EXPECT_NO_THROW(AlcPacket(p.data(), p.size()));
+}
+
+TEST(LctHeaderParseTest, HeaderLongerThanTheDatagramIsRejected) {
+  // HDR_LEN claims 10 words (40 bytes) but only 12 bytes were received. Without the check every
+  // subsequent read runs past the end of the buffer.
+  auto p = lct_packet(10);
+  EXPECT_THROW(AlcPacket(p.data(), p.size()), std::runtime_error);
+}
+
+TEST(LctHeaderParseTest, HeaderShorterThanItsOwnFlagsIsRejected) {
+  // Flags require 3 words; the header claims 2. Without the check the extension-space
+  // calculation goes negative and becomes a very large size_t.
+  auto p = lct_packet(2);
+  EXPECT_THROW(AlcPacket(p.data(), p.size()), std::runtime_error);
+}
+
+TEST(LctHeaderParseTest, ZeroLengthHeaderExtensionIsRejectedRatherThanLooping) {
+  // HET below 128 is a variable-length extension, so HEL is read and gives the length. HEL 0
+  // means a zero-length extension: the walk would consume nothing and never terminate.
+  auto p = lct_packet(4, {100 /* HET: variable-length, and not one this library handles */,
+                          0 /* HEL = 0 */, 0, 0});
+  EXPECT_THROW(AlcPacket(p.data(), p.size()), std::runtime_error);
 }

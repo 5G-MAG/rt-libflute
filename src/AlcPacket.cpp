@@ -30,6 +30,31 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
     throw std::runtime_error("Unsupported LCT version");
   }
 
+  /* Everything below walks the header using lengths taken from the packet itself, so the packet's
+     own claim about its header size is validated first, against both the flags that imply a
+     minimum and the number of bytes actually received.
+
+     RFC 3451 clause 5.1 on the field being trusted here:
+     "Total length of the LCT header in units of 32-bit words."
+
+     Two ways this goes wrong without the checks. A header claiming fewer words than its own
+     flags require makes the extension-space calculation below negative, which becomes a very
+     large size_t. A header claiming more words than were received sends every read past the end
+     of the buffer. Both are reachable from one datagram, so neither is a theoretical concern.
+     `code-derived, no spec claim` beyond the field's own definition. */
+  const size_t standard_header_words = 2 +
+    _lct_header.congestion_control_flag +
+    _lct_header.half_word_flag +
+    _lct_header.tsi_flag +
+    _lct_header.toi_flag;
+
+  if (_lct_header.lct_header_len < standard_header_words) {
+    throw std::runtime_error("LCT header length is shorter than its own flags require");
+  }
+  if ((size_t)_lct_header.lct_header_len * 4 > len) {
+    throw std::runtime_error("LCT header length exceeds the received packet length");
+  }
+
   char* hdr_ptr = data + 4;
   if (_lct_header.congestion_control_flag != 0) {
     throw std::runtime_error("Unsupported CCI field length");
@@ -86,13 +111,10 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
     throw std::runtime_error("Only Compact No-Code FEC is supported");
   }
 
-  auto expected_header_len = 2 +
-   _lct_header.congestion_control_flag +
-   _lct_header.half_word_flag +
-   _lct_header.tsi_flag +
-   _lct_header.toi_flag;
-
-  size_t ext_header_len = (_lct_header.lct_header_len - expected_header_len) * 4;
+  /* RFC 3451 clause 5.1: "if HDR_LEN is larger than the length of the standard header then the
+     remaining header space is taken by Header Extension fields." Both terms were validated
+     above, so this subtraction cannot wrap. */
+  size_t ext_header_len = ((size_t)_lct_header.lct_header_len - standard_header_words) * 4;
   while (ext_header_len > 0) {
     auto ext_ptr = hdr_ptr;
     uint8_t het = *ext_ptr;
@@ -105,6 +127,13 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
       ext_ptr += 1; // Skip HEL
     }
 
+    /* A variable-length extension declaring HEL 0 gives a zero-length extension, which the
+       bound below does not catch: the loop would then consume nothing and never terminate on a
+       single malformed packet. HEL counts the whole extension including its own HET and HEL
+       bytes, so zero is never legitimate. */
+    if (ext_len == 0) {
+      throw std::runtime_error("Header extension declares a zero length");
+    }
     if (ext_len > ext_header_len) {
       throw std::runtime_error("Header extension length exceeds remaining header length");
     }
