@@ -150,7 +150,8 @@ namespace LibFlute {
 
         uint8_t close_object_flag:1;
         uint8_t close_session_flag:1;
-        uint8_t res:2;
+        uint8_t ert_flag:1;
+        uint8_t sct_flag:1;
         uint8_t half_word_flag:1;
         uint8_t toi_flag:2;
         uint8_t tsi_flag:1;
@@ -163,7 +164,8 @@ namespace LibFlute {
         uint8_t tsi_flag:1;
         uint8_t toi_flag:2;
         uint8_t half_word_flag:1;
-        uint8_t res2:2;
+        uint8_t sct_flag:1;
+        uint8_t ert_flag:1;
         uint8_t close_session_flag:1;
         uint8_t close_object_flag:1;
 #else
