@@ -46,6 +46,32 @@ namespace LibFlute {
   };
 
   /**
+   *  Which set of obligations this session is held to.
+   *
+   *  The two are not interchangeable and the difference is not cosmetic. A general FLUTE
+   *  session is bound only by RFC 3926 and the ALC/LCT documents it sits on. A 3GPP MBMS
+   *  session is bound by those *and* by the MBMS Download Profile, which forbids the sender
+   *  several things RFC 3926 permits, so a session that is correct as general FLUTE can be
+   *  non-conformant as MBMS.
+   *
+   *  What selects the profile for 5G MBS:
+   *  TS 26.517 V18.6.0 clause 6.2.1: "If FLUTE [12] is used to realise the Object Distribution
+   *  Method, the MBS Distribution Session shall conform to the MBMS Download Profile as defined
+   *  in clause L.4 of TS 26.346 [7] with the additional requirements in clause 6.2 of the
+   *  present document."
+   *
+   *  The default is Mbms3gpp, because that is what the specifications mandating FLUTE in this
+   *  project require. A caller wanting plain RFC 3926 behaviour has to ask for it. Note this is
+   *  deliberately the stricter default: it withholds attributes a non-3GPP peer may expect.
+   */
+  enum class Profile {
+    /** RFC 3926 plus TS 26.346 annex L.4 sender restrictions. The default. */
+    Mbms3gpp,
+    /** RFC 3926 only, with no 3GPP restriction applied. */
+    GeneralFlute
+  };
+
+  /**
    *  OTI values struct
    */
   struct FecOti {

@@ -30,10 +30,18 @@ FileDeliveryTable::FileEntry make_entry(const FecOti &oti) {
   return e;
 }
 
-// Serialise a one-file FDT in the given namespace mode.
+// Serialise a one-file FDT. The profile argument is left at its library default unless a
+// test is specifically about the non-3GPP behaviour, so the default itself stays under test.
 std::string emit(FileDeliveryTable::FdtNamespace ns) {
   auto oti = make_fec_oti();
   FileDeliveryTable fdt(1, oti, ns);
+  fdt.add(make_entry(oti));
+  return fdt.to_string();
+}
+
+std::string emit(FileDeliveryTable::FdtNamespace ns, Profile profile) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, ns, profile);
   fdt.add(make_entry(oti));
   return fdt.to_string();
 }
@@ -55,10 +63,28 @@ TEST(MbmsDownloadProfileTest, TransferLengthNotCarriedInDraft2005Schema) {
             std::string::npos);
 }
 
-TEST(MbmsDownloadProfileTest, TransferLengthStillCarriedOutsideTheProfile) {
-  // Not a 3GPP session, so RFC 3926's permission applies and the attribute is kept.
-  EXPECT_NE(emit(FileDeliveryTable::FDT_NS_RFC3926).find("Transfer-Length"),
+TEST(GeneralFluteTest, TransferLengthStillCarriedOutsideTheProfile) {
+  // Plain RFC 3926, where clause 3.4.2 permits the attribute, so it is kept. This has to be
+  // asked for explicitly: the library default is the 3GPP profile.
+  EXPECT_NE(emit(FileDeliveryTable::FDT_NS_RFC3926, Profile::GeneralFlute).find("Transfer-Length"),
             std::string::npos);
+}
+
+/* The delimitation itself. A session is bound by the general FLUTE documents always, and by
+   TS 26.346 annex L.4 only under the 3GPP profile, which is the default. */
+
+TEST(ProfileDefaultTest, DefaultIsTheMbms3gppProfile) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti);
+  EXPECT_EQ(fdt.profile(), Profile::Mbms3gpp);
+}
+
+TEST(ProfileDefaultTest, ProfileNotFdtNamespaceDecidesTheRestriction) {
+  // The namespace says which schema is emitted; the profile says which obligations apply.
+  // Same namespace, opposite outcomes, driven only by the profile.
+  const auto ns = FileDeliveryTable::FDT_NS_RFC3926;
+  EXPECT_EQ(emit(ns, Profile::Mbms3gpp).find("Transfer-Length"), std::string::npos);
+  EXPECT_NE(emit(ns, Profile::GeneralFlute).find("Transfer-Length"), std::string::npos);
 }
 
 TEST(MbmsDownloadProfileTest, ContentLengthIsCarriedInEveryMode) {

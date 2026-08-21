@@ -133,11 +133,13 @@ bool LibFlute::FileDeliveryTable::FileEntry::operator==(const LibFlute::FileDeli
          etag == other.etag;
 }
 
-LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, FecOti fec_oti, FdtNamespace fdt_namespace)
+LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, FecOti fec_oti, FdtNamespace fdt_namespace,
+                                               Profile profile)
   : _instance_id( instance_id )
   , _instance_id_sent( instance_id - 1 )
   , _global_fec_oti( fec_oti )
   , _fdt_namespace( fdt_namespace )
+  , _profile( profile )
 {
 }
 
@@ -456,16 +458,16 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
        "The following attributes shall not be carried in the FDT sent by the FLUTE sender:"
        Transfer-Length is the first item of that list.
 
-       The prohibition binds a sender operating the MBMS Download Profile, selected here by either
-       3GPP FDT schema. Other namespace modes are not 3GPP sessions and keep the RFC 3926 behaviour,
-       where the attribute is permitted.
+       The prohibition binds a sender operating the MBMS Download Profile, which is what
+       Profile::Mbms3gpp selects. Under Profile::GeneralFlute the session is plain RFC 3926, where
+       the attribute is permitted, so it is kept. Keyed on the profile rather than on the FDT
+       namespace because the namespace says which schema is emitted, not which obligations apply.
 
        The parser below is deliberately unchanged, because the same clause's NOTE keeps this one
        mandatory for receivers: "With the exception of Transfer-Length, which is mandatory, these
        parameters are optional to support by the FLUTE receiver." Nothing is lost on the wire either:
        the receive path falls back to Content-Length when the attribute is absent. */
-    const bool mbms_download_profile = (_fdt_namespace == FDT_NS_3GPP_CONSOLIDATED_V2 ||
-                                        _fdt_namespace == FDT_NS_DRAFT_2005);
+    const bool mbms_download_profile = (_profile == Profile::Mbms3gpp);
     if (!mbms_download_profile && file.fec_oti.transfer_length)
       f->SetAttribute("Transfer-Length", file.fec_oti.transfer_length);
     if (!file.content_md5.empty()) f->SetAttribute("Content-MD5", file.content_md5.c_str());

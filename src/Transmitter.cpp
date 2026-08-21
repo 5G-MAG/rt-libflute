@@ -477,7 +477,8 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
                            boost::asio::io_context& io_context,
                            const std::optional<boost::asio::ip::udp::endpoint> &tunnel_endpoint,
                            Transmitter::FdtNamespace fdt_namespace, bool active,
-                           const std::optional<std::string> &source_address )
+                           const std::optional<std::string> &source_address,
+                           Profile profile )
     : _endpoint(boost::asio::ip::make_address(destination_address), port)
     , _source_address()
     , _socket(io_context, _endpoint.protocol())
@@ -523,7 +524,7 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
     .encoding_id = FecScheme::CompactNoCode,
     .encoding_symbol_length = _max_payload,
     .max_source_block_length = max_source_block_length};
-  _fdt = std::make_unique<FileDeliveryTable>(1, _fec_oti, fdt_namespace);
+  _fdt = std::make_unique<FileDeliveryTable>(1, _fec_oti, fdt_namespace, profile);
 
   if (_active) {
     start_fdt_repeat_timer();
