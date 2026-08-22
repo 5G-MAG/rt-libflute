@@ -69,6 +69,16 @@ namespace LibFlute {
       */
       uint32_t instance_id() { return _instance_id; };
 
+     /** 20-bit field width (RFC 3926 clause 3.4.1, "FDT Instance ID, 20 bits"). */
+      static constexpr uint32_t kMaxFdtInstanceId = 0xFFFFF;
+
+     /**
+      *  Next FDT Instance ID in the sequence RFC 3926 clause 3.4.1 defines, exposed as a pure
+      *  function so the wraparound is testable without a live session.
+      */
+      static uint32_t next_instance_id(uint32_t current, uint64_t current_expires, uint64_t now,
+                                       std::map<uint32_t, uint64_t>& expired_instance_ids);
+
      /**
       *  Which obligation set this FDT is emitted under. See Profile.
       */
@@ -164,12 +174,11 @@ namespace LibFlute {
       uint32_t _instance_id_sent;
       Profile _profile = Profile::Mbms3gpp;
 
-      /** FDT Instance IDs that have been sent, and the (NTP-epoch-seconds) time after which
-       *  each is safe to reuse -- i.e. the Expires value that was in effect while that ID was
-       *  live. Entries are removed once reused. */
-      std::map<uint32_t, uint64_t> _instance_id_history;
+      /** FDT Instance IDs that have been sent, and the (NTP-epoch-seconds) time each stops
+       *  being live -- i.e. the Expires value that was in effect while that ID was in use.
+       *  Read on wraparound to warn when an ID is reused before the previous instance expired. */
+      std::map<uint32_t, uint64_t> _expired_instance_ids;
 
-      static constexpr uint32_t max_instance_id = 0xFFFFF; //< 20-bit field width (RFC 3926 clause 3.4.1, "FDT Instance ID, 20 bits")
 
       std::vector<FileEntry> _file_entries;
       FecOti _global_fec_oti;

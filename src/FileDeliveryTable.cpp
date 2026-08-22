@@ -377,33 +377,37 @@ namespace {
   }
 }
 
+uint32_t LibFlute::FileDeliveryTable::next_instance_id(uint32_t current, uint64_t current_expires,
+                                                        uint64_t now,
+                                                        std::map<uint32_t, uint64_t>& expired_instance_ids)
+{
+  /* RFC 3926 clause 3.4.1: "After reaching the maximum value (2^20-1), the numbering starts again
+     from '0'."
+
+     That is the whole sequence, and it has no failure case. The same clause recommends, but does
+     not require, that a sender wait for the previous instance carrying a wraparound ID to expire,
+     so a reuse that is still live is warned about rather than replaced with a different ID or
+     turned into an error. RFC 6726 clause 3.4.1 does make that a prohibition, but this library
+     implements RFC 3926, which TS 26.346 clause L.4.1 references as its FLUTE specification. */
+  expired_instance_ids[current] = current_expires;
+
+  if (current < kMaxFdtInstanceId) {
+    return current + 1;
+  }
+
+  const auto previous = expired_instance_ids.find(0);
+  if (previous != expired_instance_ids.cend() && previous->second >= now) {
+    spdlog::warn("FDT Instance ID wrapping to 0 while the previous instance using it has not yet "
+                 "expired (Expires {}, now {})", previous->second, now);
+  }
+  expired_instance_ids.erase(0);
+  return 0;
+}
+
 auto LibFlute::FileDeliveryTable::advance_instance_id() -> void
 {
-  // The outgoing ID stays "live" (must not be reused) until _expires passes -- record that
-  // before moving on.
-  _instance_id_history[_instance_id] = _expires;
-
-  if (_instance_id < max_instance_id) {
-    _instance_id++;
-    return;
-  }
-
-  // 20-bit space exhausted: wrap to the smallest ID that has actually expired.
-  auto now = ntp_seconds_since_epoch();
-  auto candidate = _instance_id_history.cend();
-  for (auto it = _instance_id_history.cbegin(); it != _instance_id_history.cend(); ++it) {
-    if (it->second < now && (candidate == _instance_id_history.cend() || it->first < candidate->first)) {
-      candidate = it;
-    }
-  }
-  if (candidate == _instance_id_history.cend()) {
-    // Every one of the 2^20 possible IDs is still within its validity window -- reusing any of
-    // them would risk a live collision at a receiver. This requires well over a million content
-    // changes within a single FDT expiry window and should not happen in practice.
-    throw std::runtime_error("FDT Instance ID space exhausted: no previously-used ID has expired yet");
-  }
-  _instance_id = candidate->first;
-  _instance_id_history.erase(candidate);
+  _instance_id = next_instance_id(_instance_id, _expires, ntp_seconds_since_epoch(),
+                                  _expired_instance_ids);
 }
 
 auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> void

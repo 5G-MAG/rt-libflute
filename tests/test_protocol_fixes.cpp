@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <map>
 #include <stdexcept>
 #include <optional>
 #include <string>
@@ -391,4 +392,51 @@ TEST(ExpiryAttributesTest, CacheControlStillCarriesOnlyOneChoiceMember) {
   auto out = fdt.to_string();
   EXPECT_NE(out.find("no-cache"), std::string::npos);
   EXPECT_EQ(out.find(">2222<"), std::string::npos);
+}
+
+
+/* RFC 3926 clause 3.4.1 defines the FDT Instance ID sequence and its wraparound. next_instance_id()
+   is the sequence as a pure function, so these exercise it without a live session. */
+
+TEST(FdtInstanceIdWraparoundTest, IdIncrementsBelowTheCeiling) {
+  std::map<uint32_t, uint64_t> expired;
+  EXPECT_EQ(FileDeliveryTable::next_instance_id(5, /*current_expires*/ 1000, /*now*/ 2000, expired), 6u);
+  EXPECT_EQ(expired.at(5u), 1000u);
+}
+
+/* RFC 3926 clause 3.4.1: "After reaching the maximum value (2^20-1), the numbering starts again
+   from '0'." Not to the smallest expired identifier, and not to any other value. */
+TEST(FdtInstanceIdWraparoundTest, IdWrapsToZeroAtTheCeiling) {
+  std::map<uint32_t, uint64_t> expired = {{1u, 500u}, {5u, 500u}, {100u, 500u}};
+  auto next = FileDeliveryTable::next_instance_id(FileDeliveryTable::kMaxFdtInstanceId,
+                                                  /*current_expires*/ 1500, /*now*/ 1000, expired);
+  EXPECT_EQ(next, 0u);
+  EXPECT_EQ(expired.at(FileDeliveryTable::kMaxFdtInstanceId), 1500u);
+}
+
+/* The clause states the sequence unconditionally and gives it no failure case. Waiting for the
+   previous holder to expire is a recommendation in the same clause, so it is warned about rather
+   than met by choosing a different identifier or by refusing to continue. RFC 6726 clause 3.4.1
+   does make it a prohibition, but that is the v2 rule and this library implements RFC 3926. */
+TEST(FdtInstanceIdWraparoundTest, IdWrapsToZeroEvenWhenZeroHasNotExpired) {
+  std::map<uint32_t, uint64_t> expired = {{0u, 5000u}, {1u, 5000u}};
+  uint32_t next = 0xFFFFFFFFu;
+  EXPECT_NO_THROW(next = FileDeliveryTable::next_instance_id(FileDeliveryTable::kMaxFdtInstanceId,
+                                                             /*current_expires*/ 5000, /*now*/ 1000,
+                                                             expired));
+  EXPECT_EQ(next, 0u);
+}
+
+/* A plain increment would leave the 20-bit field long before a caller could observe it, and the
+   value would be silently masked on the wire. */
+TEST(FdtInstanceIdWraparoundTest, IdStaysInsideTheFieldAcrossManySends) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(FileDeliveryTable::kMaxFdtInstanceId, oti);
+  auto entry = make_entry(oti);
+  for (int i = 0; i < 10; ++i) {
+    fdt.sent();
+    entry.toi = static_cast<uint32_t>(i + 1);
+    fdt.add(entry);
+    EXPECT_LE(fdt.instance_id(), FileDeliveryTable::kMaxFdtInstanceId);
+  }
 }
