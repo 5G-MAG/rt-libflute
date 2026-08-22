@@ -24,6 +24,10 @@
 //    standalone codec test alone never exercised a non-uniform symbol
 //    length, so it passed even with that bug present).
 #include <gtest/gtest.h>
+
+#include "Transmitter.h"
+
+#include <boost/asio.hpp>
 #include <random>
 #include <algorithm>
 #include "fec/RaptorCodec.h"
@@ -490,4 +494,49 @@ TEST(FecRedundancyLevelTest, LevelZeroSendsNoRepairAndStillCompletes) {
   EXPECT_EQ(run.repair, 0u) << "an operator asking for no redundancy gets none";
   EXPECT_EQ(run.total, 79u);
   EXPECT_TRUE(run.complete) << "a block owing no repair symbol must not stall the transfer";
+}
+
+
+/* TS 26.346 V18.2.0 clause 7.2.3: "The values of N, Z, T and A shall be set such that the sub-block
+   size is less than 256 KB." N is fixed at 1 here, so a sub-block is a source block and the bound is
+   K * T. At the 1400-byte symbol these transmitters settle on, the ceiling is 187 symbols. */
+namespace {
+
+std::unique_ptr<LibFlute::Transmitter> raptor_tx(boost::asio::io_context& io, const char* addr,
+                                                 uint32_t k, LibFlute::Profile profile) {
+  LibFlute::FecOti oti{};
+  oti.encoding_id = LibFlute::FecScheme::Raptor;
+  oti.max_source_block_length = k;
+  return std::make_unique<LibFlute::Transmitter>(
+      addr, 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io, std::nullopt,
+      LibFlute::FileDeliveryTable::FDT_NS_NONE, /*active*/ false, std::nullopt, oti, profile);
+}
+
+}  // namespace
+
+TEST(SubBlockCeilingTest, AnOversizedSourceBlockIsRefusedUnderThe3gppProfiles) {
+  boost::asio::io_context io;
+  EXPECT_THROW(raptor_tx(io, "239.1.5.10", 8192, LibFlute::Profile::Ts26517), std::runtime_error);
+  EXPECT_THROW(raptor_tx(io, "239.1.5.11", 8192, LibFlute::Profile::Ts26346), std::runtime_error);
+}
+
+TEST(SubBlockCeilingTest, TheDefaultIsBroughtUnderTheCeilingRatherThanRefused) {
+  boost::asio::io_context io;
+  // No maximum named, so the sender picks one, and what it picks must satisfy the clause.
+  auto tx = raptor_tx(io, "239.1.5.12", 0, LibFlute::Profile::Ts26517);
+  const auto& oti = tx->fec_oti();
+  EXPECT_GT(oti.max_source_block_length, 0u);
+  EXPECT_LT(static_cast<uint64_t>(oti.max_source_block_length) * oti.encoding_symbol_length,
+            256u * 1024u);
+}
+
+TEST(SubBlockCeilingTest, AValueUnderTheCeilingIsHonoured) {
+  boost::asio::io_context io;
+  auto tx = raptor_tx(io, "239.1.5.13", 100, LibFlute::Profile::Ts26517);
+  EXPECT_EQ(tx->fec_oti().max_source_block_length, 100u);
+}
+
+TEST(SubBlockCeilingTest, NotAppliedOutsideThe3gppProfiles) {
+  boost::asio::io_context io;
+  EXPECT_NO_THROW(raptor_tx(io, "239.1.5.14", 8192, LibFlute::Profile::Unprofiled));
 }

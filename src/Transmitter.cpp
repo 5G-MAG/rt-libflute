@@ -586,6 +586,36 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
       .encoding_symbol_length = _max_payload,
       .max_source_block_length = max_source_block_length};
   }
+  /* A sub-block must stay under 256 KB under either 3GPP profile.
+
+     TS 26.346 V18.2.0 clause 7.2.3: "The values of N, Z, T and A shall be set such that the
+     sub-block size is less than 256 KB."
+
+     N, Z, T and A are the RFC 5053 scheme-specific parameters, so this binds the Raptor path. This
+     implementation fixes N at 1 (see FecOti::nof_sub_blocks), so a sub-block is a source block and
+     the constraint reduces to K * T < 256 KB, where T is the encoding symbol length settled above.
+
+     The obligation is on how the sender chooses the parameters, so the ceiling is applied as the
+     default when the caller named no maximum, rather than refusing a session that asked for nothing
+     wrong. A caller who does name a maximum above the ceiling is refused, since honouring it would
+     breach the clause and silently shrinking it would discard a stated configuration. */
+  if (is_3gpp(profile) && _fec_oti.encoding_id == FecScheme::Raptor) {
+    constexpr uint32_t kMaxSubBlockSize = 256 * 1024;
+    const uint32_t ceiling_k = (kMaxSubBlockSize - 1) / _fec_oti.encoding_symbol_length;
+    if (ceiling_k == 0) {
+      throw std::runtime_error(
+          "encoding symbol length leaves no room for a source block under the 256 KB sub-block "
+          "ceiling TS 26.346 clause 7.2.3 sets");
+    }
+    if (_fec_oti.max_source_block_length == 0) {
+      _fec_oti.max_source_block_length = ceiling_k;
+    } else if (_fec_oti.max_source_block_length > ceiling_k) {
+      throw std::runtime_error(
+          "max_source_block_length would put a sub-block over the 256 KB ceiling TS 26.346 clause "
+          "7.2.3 sets for the 3GPP profiles; lower it, shorten the symbol, or use Profile::Unprofiled");
+    }
+  }
+
   _fdt = std::make_unique<FileDeliveryTable>(1, _fec_oti, fdt_namespace, profile);
 
   if (_active) {
