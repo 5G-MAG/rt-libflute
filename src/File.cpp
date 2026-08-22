@@ -384,7 +384,15 @@ auto File::decode() -> void
 
       inflateInit2(&zs, 15 | ((_meta.content_encoding == "gzip")?16:0));
       _buffer = nullptr;
-      auto zstate = inflate(&zs, Z_FINISH);
+      /* Z_NO_FLUSH, not Z_FINISH. Z_FINISH promises inflate that the output buffer can hold the
+         whole result; with the 16384-byte staging buffer below that is only true for small
+         objects, and for anything larger inflate returns Z_BUF_ERROR with zs.msg left NULL. The
+         loop below continues on Z_OK, so it ran zero times and control fell straight into the
+         error branch, which then formatted that NULL pointer. Reproduced standalone: a 100,000
+         byte object returned Z_BUF_ERROR immediately with total_out stuck at 16384, and the same
+         input with Z_NO_FLUSH reached Z_STREAM_END in six iterations with all 100,000 bytes.
+         `code-derived, no spec claim`. */
+      auto zstate = inflate(&zs, Z_NO_FLUSH);
       size_t last_out = 0;
       while (zstate == Z_OK) {
         spdlog::debug("Part decompressed: {} bytes", 16384-zs.avail_out);
@@ -394,7 +402,7 @@ auto File::decode() -> void
         _own_buffer = true;
 	zs.avail_out = 16384;
         zs.next_out = decomp_buffer.get();
-	zstate = inflate(&zs, Z_FINISH);
+	zstate = inflate(&zs, Z_NO_FLUSH);
       }
       if (zstate==Z_STREAM_END) {
 	if (last_out != zs.total_out) {
@@ -409,8 +417,13 @@ auto File::decode() -> void
           spdlog::error("Decompressed length does not match expected Content-Length ({} != {})", _meta.content_length, zs.total_out);
         }
       } else {
-        spdlog::error("Error decompressing file {}: {}", _meta.toi, zs.msg);
-	throw zs.msg;
+        /* zs.msg is NULL for several zlib statuses, so the previous form formatted a null
+           char* through spdlog and then threw it, which only catch(const char*) could take. */
+        const char *zmsg = zs.msg ? zs.msg : "no zlib message";
+        spdlog::error("Error decompressing file {}: {} (zlib status {})", _meta.toi, zmsg, zstate);
+        inflateEnd(&zs);
+        if (own_comp) free(comp_buffer);
+        throw std::runtime_error(std::string("Failed to decompress file: ") + zmsg);
       }
 
       if (own_comp) free(comp_buffer);
