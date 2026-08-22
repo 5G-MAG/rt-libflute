@@ -18,6 +18,10 @@
 // structure; see that file's header comment for the rationale behind
 // testing at both the codec level and the real File API level.
 #include <gtest/gtest.h>
+
+#include "Transmitter.h"
+
+#include <boost/asio.hpp>
 #include <random>
 #include <algorithm>
 #include "fec/RaptorQCodec.h"
@@ -384,4 +388,83 @@ TEST(RaptorQRepairTransmissionTest, RepairSymbolsRecoverLostSourceSymbols) {
   ASSERT_GT(dropped, 0u);
   EXPECT_TRUE(decoder.complete()) << dropped << " source symbols lost and not recovered";
   EXPECT_EQ(memcmp(decoder.buffer(), data.data(), data_len), 0);
+}
+
+
+/* RaptorQ is offered for general FLUTE only. TS 26.346 V18.2.0 clause L.4.7 names the schemes the
+   MBMS Download Profile admits: "Regarding Application Layer FEC support, the two FEC schemes
+   referenced in this specification, the Compact No-Code FEC scheme as specified in RFC 3695 [13],
+   and the Raptor FEC scheme as specified in RFC 5053 [91] are optional to implement by the BM-SC
+   and mandatory to support by the UE." RaptorQ is RFC 6330 and is not referenced by TS 26.346. */
+namespace {
+
+LibFlute::FecOti raptorq_oti() {
+  LibFlute::FecOti oti{};
+  oti.encoding_id = LibFlute::FecScheme::RaptorQ;
+  oti.encoding_symbol_length = 1200;
+  oti.max_source_block_length = 64;
+  return oti;
+}
+
+}  // namespace
+
+TEST(ProfileFecSchemeTest, RaptorQRefusedUnderThe3gppProfiles) {
+  boost::asio::io_context io;
+  EXPECT_THROW(
+      LibFlute::Transmitter("239.1.4.10", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                            std::nullopt, LibFlute::FileDeliveryTable::FDT_NS_NONE,
+                            /*active*/ false, std::nullopt, raptorq_oti(),
+                            LibFlute::Profile::Ts26517),
+      std::runtime_error);
+}
+
+TEST(ProfileFecSchemeTest, RaptorQAllowedOutsideThe3gppProfiles) {
+  boost::asio::io_context io;
+  EXPECT_NO_THROW(
+      LibFlute::Transmitter("239.1.4.11", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                            std::nullopt, LibFlute::FileDeliveryTable::FDT_NS_NONE,
+                            /*active*/ false, std::nullopt, raptorq_oti(),
+                            LibFlute::Profile::Unprofiled));
+}
+
+TEST(ProfileFecSchemeTest, RaptorRemainsAvailableUnderThe3gppProfiles) {
+  auto oti = raptorq_oti();
+  oti.encoding_id = LibFlute::FecScheme::Raptor;
+  boost::asio::io_context io;
+  EXPECT_NO_THROW(
+      LibFlute::Transmitter("239.1.4.12", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                            std::nullopt, LibFlute::FileDeliveryTable::FDT_NS_NONE,
+                            /*active*/ false, std::nullopt, oti,
+                            LibFlute::Profile::Ts26517));
+}
+
+/* The admissible set is closed, so the check has to be a match against the two schemes clause
+   L.4.7 names and not a rejection of RaptorQ by name. A scheme this library does not implement is
+   the case that separates the two readings: the denylist admitted it, the allowlist refuses it.
+   Reached by casting, because no enumerator names such a scheme; that is exactly the state a
+   future addition to the enumeration would create before anyone revisited this check. */
+TEST(ProfileFecSchemeTest, ASchemeOutsideTheAdmissibleSetIsRefusedUnderThe3gppProfiles) {
+  EXPECT_FALSE(LibFlute::is_3gpp_admissible_fec_scheme(static_cast<LibFlute::FecScheme>(7)));
+  EXPECT_TRUE(LibFlute::is_3gpp_admissible_fec_scheme(LibFlute::FecScheme::CompactNoCode));
+  EXPECT_TRUE(LibFlute::is_3gpp_admissible_fec_scheme(LibFlute::FecScheme::Raptor));
+  EXPECT_FALSE(LibFlute::is_3gpp_admissible_fec_scheme(LibFlute::FecScheme::RaptorQ));
+
+  auto oti = raptorq_oti();
+  oti.encoding_id = static_cast<LibFlute::FecScheme>(7);
+  boost::asio::io_context io;
+  EXPECT_THROW(
+      LibFlute::Transmitter("239.1.4.13", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                            std::nullopt, LibFlute::FileDeliveryTable::FDT_NS_NONE,
+                            /*active*/ false, std::nullopt, oti,
+                            LibFlute::Profile::Ts26346),
+      std::runtime_error);
+}
+
+/* This branch adds the enumerator, so it has to add the wire identifier alongside it, or a
+   received FDT declaring RFC 6330's FEC Encoding ID 6 would be refused by the parser. */
+TEST(ProfileFecSchemeTest, TheRaptorQEncodingIdMapsToTheScheme) {
+  EXPECT_EQ(LibFlute::fec_scheme_from_encoding_id(6), LibFlute::FecScheme::RaptorQ);
+  EXPECT_EQ(LibFlute::fec_scheme_from_encoding_id(0), LibFlute::FecScheme::CompactNoCode);
+  EXPECT_EQ(LibFlute::fec_scheme_from_encoding_id(1), LibFlute::FecScheme::Raptor);
+  EXPECT_FALSE(LibFlute::fec_scheme_from_encoding_id(7).has_value());
 }

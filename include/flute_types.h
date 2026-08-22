@@ -64,11 +64,24 @@ namespace LibFlute {
    *  no branch handles and defer the failure to whichever switch reaches it first. Extend this
    *  alongside the enumeration, never separately. `code-derived, no spec claim`.
    */
+  /**
+   *  Whether a 3GPP profile admits this FEC scheme.
+   *
+   *  TS 26.346 V18.2.0 clause L.4.7 names exactly two, so this is written as a match against
+   *  those two rather than as a rejection of the schemes that happen to be outside them: adding
+   *  an enumerator must not silently widen what a profiled session will send.
+   */
+  constexpr bool is_3gpp_admissible_fec_scheme(FecScheme scheme)
+  {
+    return scheme == FecScheme::CompactNoCode || scheme == FecScheme::Raptor;
+  }
+
   constexpr auto fec_scheme_from_encoding_id(unsigned long id) -> std::optional<FecScheme>
   {
     switch (id) {
       case 0: return FecScheme::CompactNoCode;
       case 1: return FecScheme::Raptor;
+      case 6: return FecScheme::RaptorQ;
       default: return std::nullopt;
     }
   }

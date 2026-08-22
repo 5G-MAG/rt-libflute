@@ -230,7 +230,7 @@ static void send_with_new_api(struct ft_arguments &arguments)
         arguments.rate_limit,
         io, std::nullopt, fdt_namespace_from(arguments.fdt_schema), true, std::nullopt,
         content_fec_oti_from(arguments.fec_scheme),
-        LibFlute::Profile::Mbms3gpp, arguments.fec_redundancy_level);
+        LibFlute::Profile::Ts26517, arguments.fec_redundancy_level);
 
   // Configure IPSEC ESP, if enabled
   if (arguments.enable_ipsec)
@@ -300,7 +300,7 @@ static void send_with_old_api(struct ft_arguments &arguments)
         arguments.rate_limit,
         io, std::nullopt, fdt_namespace_from(arguments.fdt_schema), true, std::nullopt,
         content_fec_oti_from(arguments.fec_scheme),
-        LibFlute::Profile::Mbms3gpp, arguments.fec_redundancy_level);
+        LibFlute::Profile::Ts26517, arguments.fec_redundancy_level);
 
   // Configure IPSEC ESP, if enabled
   if (arguments.enable_ipsec)

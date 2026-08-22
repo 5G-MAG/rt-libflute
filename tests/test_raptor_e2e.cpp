@@ -53,9 +53,14 @@ std::shared_ptr<LibFlute::File> run_transfer(
   boost::asio::io_context transmitter_io;
 
   LibFlute::Receiver receiver("0.0.0.0", mcast_addr, port, tsi, receiver_io);
+  /* General FLUTE, not the MBMS Download Profile. RaptorQ is not among the schemes TS 26.346
+     clause L.4.7 admits, so a RaptorQ session is by definition a general-FLUTE one and the profile
+     refuses it at construction. Raptor would be accepted either way; both run here under the same
+     profile so the two cases stay comparable. */
   LibFlute::Transmitter transmitter(
       mcast_addr, port, tsi, 1400, 0, transmitter_io, std::nullopt,
-      LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005, true, std::nullopt, fec_oti);
+      LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005, true, std::nullopt, fec_oti,
+      LibFlute::Profile::Unprofiled);
 
   auto file_description = std::make_shared<LibFlute::Transmitter::FileDescription>(
       "e2e/payload.bin", expected_payload.c_str(), expected_payload.size());
