@@ -18,6 +18,7 @@
 #include <boost/bind/bind.hpp>
 #include <atomic>
 #include <memory>
+#include <set>
 #include <string>
 #include <map>
 #include <mutex>
@@ -115,6 +116,28 @@ namespace LibFlute {
       void register_close_notification_callback(close_notification_callback_t cb) { _close_cb = cb; };
 
       void stop() { _running = false; }
+
+     /**
+      *  Join an additional multicast channel of this session, or leave one.
+      *
+      *  A multiple rate congestion control building block adjusts a receiver's rate by changing
+      *  which of a session's channels it is joined to. RFC 5775 clause 2.1: "An ALC session
+      *  comprises multiple channels originating at a single sender". Nothing in the library calls
+      *  these yet: they are the capability such a building block needs, and are usable on their own
+      *  for a session announced on more than one address.
+      *
+      *  The interface, and the source where the session is source-specific, are those the Receiver
+      *  was constructed with. Joining a group already joined, or leaving one not joined, does
+      *  nothing and reports false.
+      *
+      *  @param group Multicast group to join or leave, of the same family as the session.
+      *  @return True if the membership actually changed.
+      */
+      bool join_channel(const std::string& group);
+      bool leave_channel(const std::string& group);
+
+     /** Groups currently joined, including the one given at construction. */
+      std::set<std::string> joined_channels() const { return _joined_groups; };
     private:
 
       void handle_receive_from(const boost::system::error_code& error,
@@ -148,8 +171,17 @@ namespace LibFlute {
        *  the per-packet check costs no parsing. Empty for an any-source session. */
       std::optional<boost::asio::ip::address> _expected_source;
 
+      /** Join or leave one multicast group, source-specific or not, on the session's interface. */
+      bool set_group_membership(const boost::asio::ip::address& group, bool join);
+
       std::string _mcast_address;
       unsigned short _mcast_port;
+      /** Retained so a channel joined after construction uses the same interface and, where the
+       *  session is source-specific, the same source. */
+      std::string _iface;
+      std::string _ssm_source;
+      /** Groups currently joined, the constructor's own among them. */
+      std::set<std::string> _joined_groups;
 
       completion_callback_t _completion_cb = nullptr;
       close_notification_callback_t _close_cb = nullptr;

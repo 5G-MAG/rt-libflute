@@ -936,3 +936,39 @@ TEST(FdtFecEncodingId, AnUnrecognisedIdentifierIsRefusedAtTheFileLevel) {
   EXPECT_THROW(parse_fdt(fdt_xml_with_encoding_id("99", /*at_file_level*/ true)),
                std::runtime_error);
 }
+
+/* A session's channels are what a multiple rate congestion control building block moves a receiver
+   between. RFC 5775 clause 2.1: "An ALC session comprises multiple channels originating at a single
+   sender". The Receiver joined exactly one group for the life of the session; it can now join and
+   leave others on the same interface. Nothing in the library drives this yet. */
+TEST(ReceiverChannelsTest, TheConstructedGroupIsJoined) {
+  boost::asio::io_context io;
+  LibFlute::Receiver rx("0.0.0.0", "239.9.9.1", 19501, /*tsi*/ 1, io);
+  EXPECT_EQ(rx.joined_channels().count("239.9.9.1"), 1u);
+  EXPECT_EQ(rx.joined_channels().size(), 1u);
+  rx.stop();
+}
+
+TEST(ReceiverChannelsTest, AFurtherChannelCanBeJoinedAndLeft) {
+  boost::asio::io_context io;
+  LibFlute::Receiver rx("0.0.0.0", "239.9.9.2", 19502, /*tsi*/ 1, io);
+
+  EXPECT_TRUE(rx.join_channel("239.9.9.3"));
+  EXPECT_EQ(rx.joined_channels().count("239.9.9.3"), 1u);
+  EXPECT_EQ(rx.joined_channels().size(), 2u);
+
+  EXPECT_TRUE(rx.leave_channel("239.9.9.3"));
+  EXPECT_EQ(rx.joined_channels().count("239.9.9.3"), 0u);
+  EXPECT_EQ(rx.joined_channels().size(), 1u);
+  rx.stop();
+}
+
+TEST(ReceiverChannelsTest, RedundantJoinsAndLeavesReportNoChange) {
+  boost::asio::io_context io;
+  LibFlute::Receiver rx("0.0.0.0", "239.9.9.4", 19503, /*tsi*/ 1, io);
+
+  EXPECT_FALSE(rx.join_channel("239.9.9.4")) << "already joined at construction";
+  EXPECT_FALSE(rx.leave_channel("239.9.9.5")) << "never joined";
+  EXPECT_EQ(rx.joined_channels().size(), 1u);
+  rx.stop();
+}

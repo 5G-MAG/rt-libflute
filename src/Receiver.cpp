@@ -103,6 +103,7 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
     _socket.set_option(boost::asio::socket_base::receive_buffer_size(16*1024*1024));
     _socket.bind(listen_endpoint);
 
+<<<<<<< HEAD
     if (!source_address.empty()) {
       _expected_source = boost::asio::ip::make_address(source_address);
     }
@@ -176,6 +177,12 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
           boost::asio::ip::multicast::join_group(
             mcast_address.to_v4(),
             boost::asio::ip::make_address(iface).to_v4()));
+=======
+    _iface = iface;
+    _ssm_source = source_address;
+    if (set_group_membership(mcast_address, /*join*/ true)) {
+      _joined_groups.insert(mcast_address.to_string());
+>>>>>>> e3ae5df (receiver: join and leave a session's multicast channels at runtime)
     }
 
     arm_receive();
@@ -204,6 +211,98 @@ namespace {
     return std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count() + 2'208'988'800;
   }
+}
+
+
+auto LibFlute::Receiver::set_group_membership(const boost::asio::ip::address& group, bool join) -> bool
+{
+  const bool is_v6 = group.is_v6();
+  const char* verb = join ? "join" : "leave";
+
+  if (!_ssm_source.empty()) {
+    /* Source-specific multicast (RFC 4607). boost::asio has no portable SSM call, so this uses the
+       socket options the stacks define: IPv4's ip_mreq_source identifies the interface by address,
+       IPv6's group_source_req by index, which is why the two build different structures. */
+    if (is_v6) {
+      struct group_source_req gsr{};
+      gsr.gsr_interface = resolve_iface_index(_iface);
+
+      struct sockaddr_in6 grp{};
+      grp.sin6_family = AF_INET6;
+      auto mcast_bytes = group.to_v6().to_bytes();
+      std::memcpy(&grp.sin6_addr, mcast_bytes.data(), mcast_bytes.size());
+      std::memcpy(&gsr.gsr_group, &grp, sizeof(grp));
+
+      struct sockaddr_in6 src{};
+      src.sin6_family = AF_INET6;
+      auto src_bytes = boost::asio::ip::make_address(_ssm_source).to_v6().to_bytes();
+      std::memcpy(&src.sin6_addr, src_bytes.data(), src_bytes.size());
+      std::memcpy(&gsr.gsr_source, &src, sizeof(src));
+
+      const int opt = join ? MCAST_JOIN_SOURCE_GROUP : MCAST_LEAVE_SOURCE_GROUP;
+      if (setsockopt(_socket.native_handle(), IPPROTO_IPV6, opt, &gsr, sizeof(gsr)) != 0) {
+        spdlog::error("Receiver: failed to {} SSM {} from {}: {}", verb, group.to_string(),
+                      _ssm_source, strerror(errno));
+        return false;
+      }
+    } else {
+      struct ip_mreq_source mreq_source{};
+      auto mcast_bytes = group.to_v4().to_bytes();
+      auto src_bytes = boost::asio::ip::make_address(_ssm_source).to_v4().to_bytes();
+      auto iface_bytes = boost::asio::ip::make_address(_iface).to_v4().to_bytes();
+      std::memcpy(&mreq_source.imr_multiaddr, mcast_bytes.data(), mcast_bytes.size());
+      std::memcpy(&mreq_source.imr_sourceaddr, src_bytes.data(), src_bytes.size());
+      std::memcpy(&mreq_source.imr_interface, iface_bytes.data(), iface_bytes.size());
+
+      const int opt = join ? IP_ADD_SOURCE_MEMBERSHIP : IP_DROP_SOURCE_MEMBERSHIP;
+      if (setsockopt(_socket.native_handle(), IPPROTO_IP, opt, &mreq_source,
+                     sizeof(mreq_source)) != 0) {
+        spdlog::error("Receiver: failed to {} SSM {} from {}: {}", verb, group.to_string(),
+                      _ssm_source, strerror(errno));
+        return false;
+      }
+    }
+    spdlog::info("Receiver: {}ed SSM {} from source {} on iface {}", verb, group.to_string(),
+                 _ssm_source, _iface);
+    return true;
+  }
+
+  /* Any-source multicast. The interface is named explicitly in both families: the single-argument
+     join_group() overload ignores it and uses whatever the system considers the default route for
+     the group, which silently breaks reception when the traffic arrives elsewhere. IPv6 names the
+     interface by index, IPv4 by address. */
+  try {
+    if (is_v6) {
+      const auto idx = resolve_iface_index(_iface);
+      if (join) _socket.set_option(boost::asio::ip::multicast::join_group(group.to_v6(), idx));
+      else      _socket.set_option(boost::asio::ip::multicast::leave_group(group.to_v6(), idx));
+    } else {
+      const auto iface_v4 = boost::asio::ip::make_address(_iface).to_v4();
+      if (join) _socket.set_option(boost::asio::ip::multicast::join_group(group.to_v4(), iface_v4));
+      else      _socket.set_option(boost::asio::ip::multicast::leave_group(group.to_v4(), iface_v4));
+    }
+  } catch (const std::exception& e) {
+    spdlog::error("Receiver: failed to {} group {}: {}", verb, group.to_string(), e.what());
+    return false;
+  }
+  spdlog::info("Receiver: {}ed group {} on iface {}", verb, group.to_string(), _iface);
+  return true;
+}
+
+auto LibFlute::Receiver::join_channel(const std::string& group) -> bool
+{
+  if (_joined_groups.count(group)) return false;
+  if (!set_group_membership(boost::asio::ip::make_address(group), /*join*/ true)) return false;
+  _joined_groups.insert(group);
+  return true;
+}
+
+auto LibFlute::Receiver::leave_channel(const std::string& group) -> bool
+{
+  if (!_joined_groups.count(group)) return false;
+  if (!set_group_membership(boost::asio::ip::make_address(group), /*join*/ false)) return false;
+  _joined_groups.erase(group);
+  return true;
 }
 
 auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key, const std::string& auth_key) -> void
