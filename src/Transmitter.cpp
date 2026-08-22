@@ -53,6 +53,13 @@ static void create_udp_pkt( char *udp_buffer, const boost::asio::ip::udp::endpoi
 static void create_ip_hdr( char *ip_buffer, const boost::asio::ip::udp::endpoint &endpoint, size_t pkt_size,
                            const boost::asio::ip::address &local_address );
 static uint16_t calculate_sum( const uint8_t *buffer, size_t len );
+
+/** Fixed IP header length for the family in use: 20 bytes for an IPv4 header without options,
+ *  40 for an IPv6 header, which is fixed length and needs no extension header here.
+ *
+ *  RFC 8200 clause 8.3: "an upper-layer protocol must take into account the larger size of the
+ *  IPv6 header relative to the IPv4 header." */
+static size_t ip_header_length(bool is_v6) { return is_v6 ? 40 : 20; }
 static void write_uint16_be( uint8_t *buffer, uint16_t value );
 static void write_uint32_be( uint8_t *buffer, uint32_t value );
 
@@ -507,13 +514,13 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
     _source_address = boost::asio::ip::make_address(source_address.value());
   }
   _max_payload = mtu -
-    20 - // IPv4 header
+    ip_header_length(_endpoint.address().is_v6()) - // IP header, v4 or v6
      8 - // UDP header
     32 - // ALC Header with EXT_FDT and EXT_FTI
      4;  // SBN and ESI for compact no-code FEC
   if (_tunnel_endpoint.has_value()) {
     // Remove extra overhead for UDP tunnelling, if set
-    _max_payload -= 20 + // IPv4 header
+    _max_payload -= ip_header_length(_endpoint.address().is_v6()) + // IP header, v4 or v6
                     8; // UDP header
     boost::asio::ip::udp::socket local_socket(_io_context, _tunnel_endpoint.value().protocol());
     local_socket.connect(_tunnel_endpoint.value());
@@ -569,13 +576,13 @@ auto Transmitter::udp_tunnel_address(std::optional<boost::asio::ip::udp::endpoin
     if (_tunnel_endpoint) _tunnel_endpoint = new_tunnel_endpoint;
   } else if (_tunnel_endpoint) {
     /* removing tunnel */
-    _max_payload += 20 + // IPv4 header
+    _max_payload += ip_header_length(_endpoint.address().is_v6()) + // IP header, v4 or v6
                     8; // UDP header
     _tunnel_endpoint = std::nullopt;
   } else {
     /* new tunnel */
     _tunnel_endpoint = std::move(new_tunnel_endpoint);
-    _max_payload -= 20 + // IPv4 header
+    _max_payload -= ip_header_length(_endpoint.address().is_v6()) + // IP header, v4 or v6
                     8; // UDP header
   }
 
@@ -825,7 +832,8 @@ auto Transmitter::send_next_packet() -> void
       std::shared_ptr<std::vector<char>> tunnel_data;
       if (_tunnel_endpoint) {
         send_endpoint = _tunnel_endpoint.value();
-        data_size = packet->size() + 20 /* IP header */ + 8 /* UDP header */;
+        const size_t ip_hdr_len = ip_header_length(_endpoint.address().is_v6());
+        data_size = packet->size() + ip_hdr_len + 8 /* UDP header */;
         // Own the encapsulated packet buffer via a shared_ptr held by the
         // async_send_to completion lambda below, so it stays alive until the
         // send actually completes (a raw new[] here with no matching delete[]
@@ -833,7 +841,7 @@ auto Transmitter::send_next_packet() -> void
         tunnel_data = std::make_shared<std::vector<char>>(data_size);
         data = tunnel_data->data();
         auto local_address = _source_address ? _source_address.value() : _tunnel_local_address;
-        create_udp_pkt(const_cast<char*>(data) + 20, _endpoint, packet->data(), packet->size(), local_address);
+        create_udp_pkt(const_cast<char*>(data) + ip_hdr_len, _endpoint, packet->data(), packet->size(), local_address);
         create_ip_hdr(const_cast<char*>(data), _endpoint, data_size, local_address);
       } else {
         send_endpoint = _endpoint;
@@ -937,8 +945,7 @@ static void create_udp_pkt(char *udp_buffer, const boost::asio::ip::udp::endpoin
 {
   auto *udp_bytes = reinterpret_cast<uint8_t*>(udp_buffer);
   const auto udp_length = static_cast<uint16_t>(data_len + 8);
-  const auto source_address = local_address.to_v4().to_uint();
-  const auto destination_address = endpoint.address().to_v4().to_uint();
+  const bool is_v6 = endpoint.address().is_v6();
 
   write_uint16_be(udp_bytes, endpoint.port());
   write_uint16_be(udp_bytes + 2, endpoint.port());
@@ -946,20 +953,59 @@ static void create_udp_pkt(char *udp_buffer, const boost::asio::ip::udp::endpoin
   write_uint16_be(udp_bytes + 6, 0);
   memcpy(udp_buffer + 8, data, data_len);
 
-  std::vector<uint8_t> checksum_bytes(12 + udp_length);
-  write_uint32_be(checksum_bytes.data(), source_address);
-  write_uint32_be(checksum_bytes.data() + 4, destination_address);
-  checksum_bytes[8] = 0;
-  checksum_bytes[9] = endpoint.protocol().protocol();
-  write_uint16_be(checksum_bytes.data() + 10, udp_length);
-  memcpy(checksum_bytes.data() + 12, udp_bytes, udp_length);
+  std::vector<uint8_t> checksum_bytes;
+  if (is_v6) {
+    /* RFC 8200 clause 8.1's pseudo-header: source (16), destination (16), upper-layer packet
+       length (32), three zero octets, next header (8). */
+    checksum_bytes.resize(40 + udp_length);
+    auto src_bytes = local_address.to_v6().to_bytes();
+    auto dst_bytes = endpoint.address().to_v6().to_bytes();
+    memcpy(checksum_bytes.data(), src_bytes.data(), src_bytes.size());
+    memcpy(checksum_bytes.data() + 16, dst_bytes.data(), dst_bytes.size());
+    write_uint32_be(checksum_bytes.data() + 32, udp_length);
+    checksum_bytes[36] = 0;
+    checksum_bytes[37] = 0;
+    checksum_bytes[38] = 0;
+    checksum_bytes[39] = endpoint.protocol().protocol();
+    memcpy(checksum_bytes.data() + 40, udp_bytes, udp_length);
+  } else {
+    checksum_bytes.resize(12 + udp_length);
+    write_uint32_be(checksum_bytes.data(), local_address.to_v4().to_uint());
+    write_uint32_be(checksum_bytes.data() + 4, endpoint.address().to_v4().to_uint());
+    checksum_bytes[8] = 0;
+    checksum_bytes[9] = endpoint.protocol().protocol();
+    write_uint16_be(checksum_bytes.data() + 10, udp_length);
+    memcpy(checksum_bytes.data() + 12, udp_bytes, udp_length);
+  }
 
-  write_uint16_be(udp_bytes + 6, calculate_sum(checksum_bytes.data(), checksum_bytes.size()));
+  uint16_t checksum = calculate_sum(checksum_bytes.data(), checksum_bytes.size());
+  if (is_v6 && checksum == 0) {
+    /* RFC 8200 clause 8.1: "whenever originating a UDP packet, an IPv6 node must compute a UDP
+       checksum over the packet and the pseudo-header, and, if that computation yields a result
+       of zero, it must be changed to hex FFFF for placement in the UDP header." */
+    checksum = 0xFFFF;
+  }
+  write_uint16_be(udp_bytes + 6, checksum);
 }
 
 static void create_ip_hdr(char *ip_buffer, const boost::asio::ip::udp::endpoint &endpoint, size_t pkt_size, const boost::asio::ip::address &local_address)
 {
   auto *ip_bytes = reinterpret_cast<uint8_t*>(ip_buffer);
+
+  if (endpoint.address().is_v6()) {
+    /* RFC 8200 clause 3 gives the header format. It is fixed at 40 bytes and carries no
+       checksum field of its own, which is why the UDP checksum above is mandatory. */
+    memset(ip_bytes, 0, 40);
+    ip_bytes[0] = 0x60; // version 6, traffic class high nibble zero
+    write_uint16_be(ip_bytes + 4, static_cast<uint16_t>(pkt_size - 40)); // payload, excluding this header
+    ip_bytes[6] = endpoint.protocol().protocol(); // next header
+    ip_bytes[7] = 63; // hop limit, matching the IPv4 path's TTL below
+    auto src_bytes = local_address.to_v6().to_bytes();
+    auto dst_bytes = endpoint.address().to_v6().to_bytes();
+    memcpy(ip_bytes + 8, src_bytes.data(), src_bytes.size());
+    memcpy(ip_bytes + 24, dst_bytes.data(), dst_bytes.size());
+    return;
+  }
 
   memset(ip_bytes, 0, 20);
   ip_bytes[0] = 0x45; // IPv4, 20-byte header
