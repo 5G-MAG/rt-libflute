@@ -20,6 +20,7 @@
 #include "File.h"
 #include "FileDeliveryTable.h"
 #include "Receiver.h"
+#include "Transmitter.h"
 
 using namespace LibFlute;
 using namespace std::chrono_literals;
@@ -50,9 +51,12 @@ FileDeliveryTable::FileEntry make_entry(const FecOti &oti) {
 
 // Serialise a one-file FDT. The profile argument is left at its library default unless a
 // test is specifically about the non-3GPP behaviour, so the default itself stays under test.
+/* General FLUTE, so the namespace under test is the one actually emitted. The 3GPP profiles derive
+   their own namespace from the profile, which is the point of those, so they cannot be used to
+   exercise an arbitrary namespace. */
 std::string emit(FileDeliveryTable::FdtNamespace ns) {
   auto oti = make_fec_oti();
-  FileDeliveryTable fdt(1, oti, ns);
+  FileDeliveryTable fdt(1, oti, ns, Profile::Rfc3926);
   fdt.add(make_entry(oti));
   return fdt.to_string();
 }
@@ -71,20 +75,33 @@ std::string emit(FileDeliveryTable::FdtNamespace ns, Profile profile) {
    emitted XML rather than on the FileEntry, because the object carrying a value the
    serialiser then withholds is exactly the case that has to pass. */
 
-TEST(MbmsDownloadProfileTest, TransferLengthNotCarriedInConsolidatedV2Schema) {
-  EXPECT_EQ(emit(FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2).find("Transfer-Length"),
+TEST(MbmsDownloadProfileTest, TransferLengthNotCarriedUnderTs26517) {
+  EXPECT_EQ(emit(FileDeliveryTable::FDT_NS_NONE, Profile::Ts26517).find("Transfer-Length"),
             std::string::npos);
 }
 
-TEST(MbmsDownloadProfileTest, TransferLengthNotCarriedInDraft2005Schema) {
-  EXPECT_EQ(emit(FileDeliveryTable::FDT_NS_DRAFT_2005).find("Transfer-Length"),
+TEST(MbmsDownloadProfileTest, TransferLengthNotCarriedUnderTs26346) {
+  EXPECT_EQ(emit(FileDeliveryTable::FDT_NS_NONE, Profile::Ts26346).find("Transfer-Length"),
             std::string::npos);
+}
+
+/* The namespace argument is ignored under a 3GPP profile, which derives its own. TS 26.517 V18.6.0
+   clause 6.2.1: "The MBSTF shall use the Profiled FDT Schema according to clause L.6 of TS 26.346
+   [7] to describe the object list currently being transmitted in the MBS Distribution Session." */
+TEST(MbmsDownloadProfileTest, ProfileDecidesTheSchemaNotTheNamespaceArgument) {
+  auto mbs = emit(FileDeliveryTable::FDT_NS_RFC3926, Profile::Ts26517);
+  EXPECT_NE(mbs.find("urn:3GPP:metadata:2022:FLUTE:FDT"), std::string::npos) << mbs;
+  EXPECT_NE(mbs.find("<schemaVersion>2</schemaVersion>"), std::string::npos);
+
+  auto mbms = emit(FileDeliveryTable::FDT_NS_RFC3926, Profile::Ts26346);
+  EXPECT_NE(mbms.find("urn:IETF:metadata:2005:FLUTE:FDT"), std::string::npos) << mbms;
+  EXPECT_NE(mbms.find("<schemaVersion>4</schemaVersion>"), std::string::npos);
 }
 
 TEST(GeneralFluteTest, TransferLengthStillCarriedOutsideTheProfile) {
   // Plain RFC 3926, where clause 3.4.2 permits the attribute, so it is kept. This has to be
   // asked for explicitly: the library default is the 3GPP profile.
-  EXPECT_NE(emit(FileDeliveryTable::FDT_NS_RFC3926, Profile::GeneralFlute).find("Transfer-Length"),
+  EXPECT_NE(emit(FileDeliveryTable::FDT_NS_RFC3926, Profile::Rfc3926).find("Transfer-Length"),
             std::string::npos);
 }
 
@@ -94,15 +111,15 @@ TEST(GeneralFluteTest, TransferLengthStillCarriedOutsideTheProfile) {
 TEST(ProfileDefaultTest, DefaultIsTheMbms3gppProfile) {
   auto oti = make_fec_oti();
   FileDeliveryTable fdt(1, oti);
-  EXPECT_EQ(fdt.profile(), Profile::Mbms3gpp);
+  EXPECT_EQ(fdt.profile(), Profile::Ts26517);
 }
 
 TEST(ProfileDefaultTest, ProfileNotFdtNamespaceDecidesTheRestriction) {
   // The namespace says which schema is emitted; the profile says which obligations apply.
   // Same namespace, opposite outcomes, driven only by the profile.
   const auto ns = FileDeliveryTable::FDT_NS_RFC3926;
-  EXPECT_EQ(emit(ns, Profile::Mbms3gpp).find("Transfer-Length"), std::string::npos);
-  EXPECT_NE(emit(ns, Profile::GeneralFlute).find("Transfer-Length"), std::string::npos);
+  EXPECT_EQ(emit(ns, Profile::Ts26517).find("Transfer-Length"), std::string::npos);
+  EXPECT_NE(emit(ns, Profile::Rfc3926).find("Transfer-Length"), std::string::npos);
 }
 
 TEST(MbmsDownloadProfileTest, ContentLengthIsCarriedInEveryMode) {
@@ -129,7 +146,7 @@ TEST(MbmsDownloadProfileTest, CompleteNotCarriedUnderThe3gppProfile) {
 TEST(GeneralFluteTest, CompleteStillCarriedOutsideTheProfile) {
   // RFC 3926 clause 3.4.2 permits it, so plain FLUTE keeps it.
   auto oti = make_fec_oti();
-  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::GeneralFlute);
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::Rfc3926);
   fdt.add(make_entry(oti));
   fdt.set_complete(true);
   EXPECT_NE(fdt.to_string().find("Complete"), std::string::npos);
@@ -155,7 +172,7 @@ TEST(GeneralFluteTest, FecInstanceIdNotCarriedOutsideTheProfileEither) {
      3GPP profile was never the binding constraint. */
   auto oti = make_fec_oti();
   oti.instance_id = 7;
-  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::GeneralFlute);
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::Rfc3926);
   fdt.add(make_entry(oti));
   EXPECT_EQ(fdt.to_string().find("FEC-OTI-FEC-Instance-ID"), std::string::npos);
 }
@@ -191,7 +208,7 @@ TEST(MbmsDownloadProfileTest, AbsentContentEncodingIsAccepted) {
 TEST(GeneralFluteTest, NonGzipContentEncodingIsAllowedOutsideTheProfile) {
   // RFC 3926 places no such restriction, so plain FLUTE accepts it.
   auto oti = make_fec_oti();
-  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::GeneralFlute);
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::Rfc3926);
   auto e = make_entry(oti);
   e.content_encoding = "deflate";
   EXPECT_NO_THROW(fdt.add(e));
@@ -333,10 +350,19 @@ TEST(ProfiledFdtSchemaTest, SchemaVersionFollowsTheFileElements) {
   EXPECT_LT(file_pos, sv_pos);
 }
 
-TEST(ProfiledFdtSchemaTest, SchemaVersionNotEmittedForOtherSchemas) {
-  // Meaningless in a document that does not declare the profiled schema.
+TEST(ProfiledFdtSchemaTest, SchemaVersionNotEmittedForSchemasThatDoNotDefineIt) {
+  // Meaningless in a document declaring a schema whose sequence has no such element.
   EXPECT_EQ(emit(FileDeliveryTable::FDT_NS_RFC3926).find("schemaVersion"), std::string::npos);
-  EXPECT_EQ(emit(FileDeliveryTable::FDT_NS_DRAFT_2005).find("schemaVersion"), std::string::npos);
+  EXPECT_EQ(emit(FileDeliveryTable::FDT_NS_NONE).find("schemaVersion"), std::string::npos);
+}
+
+/* TS 26.346 V18.2.0 clause 7.2.10.1: "In this version of the present document the network shall set
+   the content of the schemaVersion element, defined as a child of the FDT-Instance element, to the
+   value 4." That is the extended schema of that clause, which is the one MbmsDownload emits, and it
+   takes a different value from the annex L.6.1 profiled schema's 2. */
+TEST(ProfiledFdtSchemaTest, SchemaVersionFourForTheExtendedSchema) {
+  auto xml = emit(FileDeliveryTable::FDT_NS_DRAFT_2005);
+  EXPECT_NE(xml.find("<schemaVersion>4</schemaVersion>"), std::string::npos) << xml;
 }
 
 TEST(ProfiledFdtSchemaTest, DelimiterIsNotEmitted) {
@@ -623,4 +649,92 @@ TEST(ExtFtiBootstrapTest, ArrivingFdtMetadataIsAdoptedInPlace) {
   work_guard.reset();
   io.stop();
   io_thread.join();
+}
+
+
+/* The MBMS Download Profile fixes the TSI field at 16 bits, so a wider value cannot be signalled
+   under it. TS 26.346 V18.2.0 clause 7.2.7: "The Transmission Session Identifier (TSI) field shall
+   be of length 16 bits (S=0, H=1, 16 bits)." Outside the profile RFC 3451 permits the wider
+   encoding and the widening on this branch applies. */
+TEST(ProfileTsiWidthTest, WideTsiRefusedUnderTheMbmsDownloadProfile) {
+  boost::asio::io_context io;
+  EXPECT_THROW(
+      LibFlute::Transmitter("239.1.3.10", 5000, /*tsi*/ 0x10000, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                            std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false,
+                            std::nullopt, Profile::Ts26517),
+      std::runtime_error);
+}
+
+TEST(ProfileTsiWidthTest, SixteenBitTsiAcceptedUnderTheProfile) {
+  boost::asio::io_context io;
+  EXPECT_NO_THROW(
+      LibFlute::Transmitter("239.1.3.11", 5000, /*tsi*/ 0xFFFF, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                            std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false,
+                            std::nullopt, Profile::Ts26517));
+}
+
+TEST(ProfileTsiWidthTest, WideTsiAcceptedOutsideTheProfile) {
+  boost::asio::io_context io;
+  EXPECT_NO_THROW(
+      LibFlute::Transmitter("239.1.3.12", 5000, /*tsi*/ 0x10000, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                            std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false,
+                            std::nullopt, Profile::Rfc3926));
+}
+
+
+/* TS 26.346 V18.2.0 clause 7.2.9: "When the FEC Encoding ID indicates the "Compact No-Code FEC
+   scheme", the value of this data element shall not exceed 65535, consistent with the 16-bit
+   constraint on the Encoding Symbol ID". Refused rather than clamped, since clamping would
+   repartition the object without telling the operator. */
+TEST(ProfileSourceBlockLengthTest, AboveTheCompactNoCodeCeilingIsRefused) {
+  auto oti = make_fec_oti();
+  oti.max_source_block_length = 65536;
+  EXPECT_THROW(FileDeliveryTable(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26517),
+               std::runtime_error);
+  EXPECT_THROW(FileDeliveryTable(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26346),
+               std::runtime_error);
+}
+
+TEST(ProfileSourceBlockLengthTest, AtTheCeilingIsAccepted) {
+  auto oti = make_fec_oti();
+  oti.max_source_block_length = 65535;
+  EXPECT_NO_THROW(FileDeliveryTable(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26517));
+}
+
+TEST(ProfileSourceBlockLengthTest, NotAppliedOutsideThe3gppProfiles) {
+  auto oti = make_fec_oti();
+  oti.max_source_block_length = 65536;
+  EXPECT_NO_THROW(FileDeliveryTable(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Rfc3926));
+}
+
+/* TS 26.346 V18.2.0 annex L: "When the optional File@Expires attribute is provided, its value shall
+   take precedence over that of the FDT@Expires attribute." */
+TEST(EffectiveExpiryTest, FileExpiresTakesPrecedenceOverTheInstanceValue) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26517);
+  fdt.set_expires(1000);
+
+  auto entry = make_entry(oti);
+  entry.expires = 2000;
+  EXPECT_EQ(fdt.effective_expiry(entry), 2000u);
+
+  entry.expires = 0;  // attribute absent
+  EXPECT_EQ(fdt.effective_expiry(entry), 1000u);
+}
+
+/* TS 26.346 V18.2.0 clause 7.2.9: "For MBMS operation, the UE shall not use a received FDT Instance
+   to interpret packets received beyond the expiration time of the FDT Instance." */
+TEST(FdtExpiryTest, AnInstanceIsExpiredOnceItsExpiresHasPassed) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26517);
+  fdt.set_expires(1000);
+  EXPECT_FALSE(fdt.expired(999));
+  EXPECT_FALSE(fdt.expired(1000));
+  EXPECT_TRUE(fdt.expired(1001));
+}
+
+TEST(FdtExpiryTest, AnInstanceWithNoExpiresNeverExpires) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26517);
+  EXPECT_FALSE(fdt.expired(0xFFFFFFFFULL));
 }

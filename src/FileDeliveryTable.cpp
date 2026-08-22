@@ -141,6 +141,33 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, FecOti fec_
   , _fdt_namespace( fdt_namespace )
   , _profile( profile )
 {
+  /* Each 3GPP profile fixes the FDT schema, so the namespace is taken from the profile rather than
+     from a separate argument that could disagree with it.
+
+     TS 26.517 V18.6.0 clause 6.2.1, for Ts26517: "The MBSTF shall use the Profiled FDT Schema
+     according to clause L.6 of TS 26.346 [7] to describe the object list currently being
+     transmitted in the MBS Distribution Session."
+
+     TS 26.346 V18.2.0 clause 7.2.9, for Ts26346: "The extended FLUTE FDT instance schema
+     defined in clause 7.2.10.1 (based on the one in RFC 3926 [9]) shall be used."
+
+     General FLUTE keeps whatever the caller asked for, RFC 3926 fixing no namespace. */
+  /* TS 26.346 V18.2.0 clause 7.2.9: "When the FEC Encoding ID indicates the "Compact No-Code FEC
+     scheme", the value of this data element shall not exceed 65535, consistent with the 16-bit
+     constraint on the Encoding Symbol ID". Refused at construction rather than clamped: clamping
+     would silently repartition the object and leave the operator's configuration unexplained. */
+  if (is_3gpp(_profile) && _global_fec_oti.encoding_id == FecScheme::CompactNoCode &&
+      _global_fec_oti.max_source_block_length > 65535) {
+    throw std::runtime_error(
+        "FEC-OTI-Maximum-Source-Block-Length exceeds the 65535 the 3GPP profiles allow for the "
+        "Compact No-Code FEC scheme");
+  }
+
+  switch (_profile) {
+    case Profile::Ts26517:        _fdt_namespace = FDT_NS_3GPP_CONSOLIDATED_V2; break;
+    case Profile::Ts26346: _fdt_namespace = FDT_NS_DRAFT_2005; break;
+    case Profile::Rfc3926: break;
+  }
 }
 
 LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffer, size_t len) 
@@ -314,6 +341,9 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     uint64_t file_expires = 0;
     auto file_expires_attr = file_ns.findAttribute(file, "Expires", fdt_ns);
     if (file_expires_attr != nullptr) {
+      /* TS 26.346 V18.2.0 annex L: "When the optional File@Expires attribute is provided, its value
+         shall take precedence over that of the FDT@Expires attribute." Recorded on the entry; the
+         effective expiry accessor below applies the precedence so every caller gets it. */
       file_expires = strtoull(file_expires_attr->Value(), nullptr, 0);
     }
 
@@ -423,10 +453,10 @@ auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> void
      leave the payload encoded and the receiver with nothing saying so, which is undecodable
      content rather than a conformant session; RULES.md rule 12 prefers failing loudly over
      quietly adjusting away a caller's misconfiguration. Absent is fine: the attribute is a may. */
-  if (_profile == Profile::Mbms3gpp && !fe.content_encoding.empty() && fe.content_encoding != "gzip") {
+  if (is_3gpp(_profile) && !fe.content_encoding.empty() && fe.content_encoding != "gzip") {
     throw std::invalid_argument(
         "Content-Encoding must be absent or gzip in the MBMS Download Profile, got: " +
-        fe.content_encoding + ". Use Profile::GeneralFlute for a non-3GPP session.");
+        fe.content_encoding + ". Use Profile::Rfc3926 for a non-3GPP session.");
   }
   if (_instance_id == _instance_id_sent) advance_instance_id();
   _file_entries.push_back(fe);
@@ -479,7 +509,7 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
      receiver support for this one mandatory: "With the exception of Complete, which is mandatory,
      these parameters are optional to support by the FLUTE receiver." Reading the prohibition as
      binding both directions would break reception from a conformant peer. */
-  if (_complete && _profile != Profile::Mbms3gpp) root->SetAttribute("Complete", "true");
+  if (_complete && !is_3gpp(_profile)) root->SetAttribute("Complete", "true");
   root->SetAttribute("FEC-OTI-FEC-Encoding-ID", (unsigned)_global_fec_oti.encoding_id);
   /* The existing guard is on the value, not on the profile: it withholds the attribute only when
      the instance ID happens to be 0. The MBMS Download Profile forbids it outright, at both
@@ -531,7 +561,7 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
        Transfer-Length is the first item of that list.
 
        The prohibition binds a sender operating the MBMS Download Profile, which is what
-       Profile::Mbms3gpp selects. Under Profile::GeneralFlute the session is plain RFC 3926, where
+       Profile::Ts26517 selects. Under Profile::Rfc3926 the session is plain RFC 3926, where
        the attribute is permitted, so it is kept. Keyed on the profile rather than on the FDT
        namespace because the namespace says which schema is emitted, not which obligations apply.
 
@@ -539,8 +569,7 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
        mandatory for receivers: "With the exception of Transfer-Length, which is mandatory, these
        parameters are optional to support by the FLUTE receiver." Nothing is lost on the wire either:
        the receive path falls back to Content-Length when the attribute is absent. */
-    const bool mbms_download_profile = (_profile == Profile::Mbms3gpp);
-    if (!mbms_download_profile && file.fec_oti.transfer_length)
+    if (!is_3gpp(_profile) && file.fec_oti.transfer_length)
       f->SetAttribute("Transfer-Length", file.fec_oti.transfer_length);
     if (!file.content_md5.empty()) f->SetAttribute("Content-MD5", file.content_md5.c_str());
     if (!file.content_encoding.empty()) f->SetAttribute("Content-Encoding", file.content_encoding.c_str());
@@ -583,22 +612,24 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
   }
 
 
-  /* The profiled schema makes schemaVersion a mandatory child element of FDT-Instance, placed
-     after the File elements, so omitting it while declaring that namespace produces a document
-     that does not validate against the schema it claims. Its value is fixed, not derived.
+  /* Both 3GPP schemas make schemaVersion a mandatory child element of FDT-Instance, placed after
+     the File elements, and each fixes its own value. Omitting it, or emitting the other schema's
+     value, produces a document that does not validate against the schema it declares.
 
-     Keyed on the FDT namespace rather than on the profile, because this belongs to the schema
-     being emitted: it is required by the annex L.6.1 schema itself, and meaningless in a document
-     that does not declare it. The delimiter element is deliberately not emitted; annex L.6.3A
-     calls for it only when a future optional element is added ahead of the xs:any wildcard, and
-     the base schema's sequence does not contain one.
+     Keyed on the FDT namespace, because this belongs to the schema being emitted and is meaningless
+     in a document that declares neither.
 
-     TS 26.346 V18.2.0 clause L.6.3: "The BM-SC shall set the schemaVersion element to 2 in all
-     instance documents"
-     (the clause continues by naming the schema, which is the annex L.6.1 one selected here). */
-  if (_fdt_namespace == FDT_NS_3GPP_CONSOLIDATED_V2) {
+     TS 26.346 V18.2.0 clause L.6.3, for the annex L.6.1 profiled schema: "The BM-SC shall set the
+     schemaVersion element to 2 in all instance documents"
+
+     TS 26.346 V18.2.0 clause 7.2.10.1, for the extended schema of that clause: "In this version of
+     the present document the network shall set the content of the schemaVersion element, defined as
+     a child of the FDT-Instance element, to the value 4."
+
+     The delimiter element is deliberately not emitted: neither schema's sequence contains one. */
+  if (_fdt_namespace == FDT_NS_3GPP_CONSOLIDATED_V2 || _fdt_namespace == FDT_NS_DRAFT_2005) {
     auto sv = doc.NewElement("schemaVersion");
-    sv->SetText(2);
+    sv->SetText(_fdt_namespace == FDT_NS_3GPP_CONSOLIDATED_V2 ? 2 : 4);
     root->InsertEndChild(sv);
   }
 

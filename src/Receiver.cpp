@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
+#include <chrono>
 #include "Receiver.h"
 #include "AlcPacket.h"
 #include <cerrno>
@@ -191,6 +192,15 @@ auto LibFlute::Receiver::arm_receive() -> void
       });
 }
 
+namespace {
+  /** Current time on the NTP epoch, matching the base the FDT's Expires attribute uses. */
+  auto ntp_seconds_now() -> uint64_t
+  {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count() + 2'208'988'800;
+  }
+}
+
 auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key, const std::string& auth_key) -> void
 {
   LibFlute::IpSec::enable_esp(spi, _mcast_address, LibFlute::IpSec::Direction::In, key, auth_key);
@@ -214,6 +224,19 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
         }
 
         const std::lock_guard<std::mutex> lock(_files_mutex);
+
+        /* An expired FDT Instance may not be used to interpret anything that arrives after it.
+           TS 26.346 V18.2.0 clause 7.2.9: "For MBMS operation, the UE shall not use a received FDT
+           Instance to interpret packets received beyond the expiration time of the FDT Instance."
+           The same clause records that this is stricter than RFC 3926, which says only that the
+           receiver SHOULD NOT, so the held instance is dropped here and packets for TOIs it
+           described stop being interpreted until a fresh instance arrives. Reception of the next
+           FDT itself, on TOI 0, is unaffected. */
+        if (_fdt && _fdt->expired(ntp_seconds_now())) {
+          spdlog::debug("Discarding FDT instance {}, expired at {}", _fdt->instance_id(),
+                        _fdt->expires());
+          _fdt.reset();
+        }
 
         if (alc.toi() == 0 && (!_fdt || _fdt->instance_id() != alc.fdt_instance_id())) {
           // (Re)start reception of the FDT (TOI 0) for THIS instance. The FDT is

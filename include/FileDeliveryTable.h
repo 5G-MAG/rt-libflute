@@ -48,7 +48,7 @@ namespace LibFlute {
       *  @param fdt_namespace The XML namespace to use for FDT
       */
       FileDeliveryTable(uint32_t instance_id, FecOti fec_oti, FdtNamespace fdt_namespace = FDT_NS_NONE,
-                        Profile profile = Profile::Mbms3gpp);
+                        Profile profile = Profile::Ts26517);
 
      /**
       *  Parse an XML string and create a FDT class from it
@@ -68,6 +68,19 @@ namespace LibFlute {
       *  Get the FDT instance ID
       */
       uint32_t instance_id() { return _instance_id; };
+
+     /**
+      *  Whether this FDT Instance may still be used to interpret arriving packets.
+      *
+      *  TS 26.346 V18.2.0 clause 7.2.9: "For MBMS operation, the UE shall not use a received FDT
+      *  Instance to interpret packets received beyond the expiration time of the FDT Instance."
+      *  The same clause notes this is stricter than RFC 3926, which only says SHOULD NOT, so it is
+      *  enforced under the 3GPP profiles and advisory outside them.
+      */
+      bool expired(uint64_t now) const { return _expires != 0 && now > _expires; }
+
+     /** The FDT-Instance Expires attribute, in NTP-epoch seconds. */
+      uint64_t expires() const { return _expires; }
 
      /** 20-bit field width (RFC 3926 clause 3.4.1, "FDT Instance ID, 20 bits"). */
       static constexpr uint32_t kMaxFdtInstanceId = 0xFFFFF;
@@ -93,7 +106,7 @@ namespace LibFlute {
         uint32_t content_length;
         std::string content_md5;
         std::string content_type;
-        uint64_t expires;
+        uint64_t expires;   //< File@Expires, 0 when the attribute was absent
         FecOti fec_oti;
         struct {
           bool no_cache;
@@ -105,6 +118,17 @@ namespace LibFlute {
         bool operator==(const FileEntry &other) const;
         bool operator!=(const FileEntry &other) const { return !(*this == other); };
       };
+
+     /**
+      *  When the given entry stops being usable, in NTP-epoch seconds.
+      *
+      *  TS 26.346 V18.2.0 annex L: "When the optional File@Expires attribute is provided, its value
+      *  shall take precedence over that of the FDT@Expires attribute." So the File attribute wins
+      *  where present, and the FDT-Instance value applies otherwise.
+      */
+      uint64_t effective_expiry(const FileEntry& entry) const {
+        return entry.expires ? entry.expires : _expires;
+      }
 
      /**
       *  Set the expiry value
@@ -172,7 +196,7 @@ namespace LibFlute {
 
       uint32_t _instance_id;
       uint32_t _instance_id_sent;
-      Profile _profile = Profile::Mbms3gpp;
+      Profile _profile = Profile::Ts26517;
 
       /** FDT Instance IDs that have been sent, and the (NTP-epoch-seconds) time each stops
        *  being live -- i.e. the Expires value that was in effect while that ID was in use.

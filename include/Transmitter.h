@@ -441,7 +441,7 @@ namespace LibFlute {
           FdtNamespace fdt_namespace = FileDeliveryTable::FDT_NS_NONE,
           bool active = true,
           const std::optional<std::string>& source_address = std::nullopt,
-          Profile profile = Profile::Mbms3gpp);
+          Profile profile = Profile::Ts26517);
 
      /**
       *  Default destructor.
@@ -714,6 +714,10 @@ namespace LibFlute {
       void handle_send_to(const boost::system::error_code& error);
       boost::asio::ip::udp::endpoint _endpoint;
       std::optional<boost::asio::ip::address> _source_address;
+
+      /** Which obligation set this session is held to. Fixed at construction; the profile decides
+       *  what may be signalled, so it cannot change once a session is running. */
+      Profile _profile;
       boost::asio::ip::udp::socket _socket;
       boost::asio::io_context& _io_context;
       boost::asio::steady_timer _send_timer;

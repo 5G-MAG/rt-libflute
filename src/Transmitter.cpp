@@ -509,7 +509,25 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
     , _tunnel_endpoint(tunnel_endpoint)
     , _tunnel_local_address()
     , _active(active)
+    , _profile(profile)
 {
+  /* The 3GPP profiles fix the TSI field at its narrowest width, so a value that would need the
+     wider encoding cannot be signalled under either of them. This is a clause 7.2 rule, binding on
+     MBMS download generally, not one of annex L.4's profile restrictions.
+
+     TS 26.346 V18.2.0 clause 7.2.7: "The Transmission Session Identifier (TSI) field shall be of
+     length 16 bits (S=0, H=1, 16 bits)."
+
+     Outside the profile RFC 3451 permits 16, 32 or 48 bits and the wider encoding is used, which is
+     what the TSI widening on this branch is for. Refused rather than truncated, since truncation
+     puts the session on an identifier nobody configured, and rather than widened, since that emits
+     a header the profile forbids. */
+  if (is_3gpp(_profile) && tsi > 0xFFFF) {
+    throw std::runtime_error(
+        "TSI does not fit the 16-bit field TS 26.346 clause 7.2.7 fixes for it; use a TSI of 65535 "
+        "or less, or Profile::Rfc3926 where RFC 3451 permits the wider encoding");
+  }
+
   if (source_address) {
     _source_address = boost::asio::ip::make_address(source_address.value());
   }
