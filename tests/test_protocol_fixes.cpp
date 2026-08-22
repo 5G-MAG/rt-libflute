@@ -56,7 +56,7 @@ FileDeliveryTable::FileEntry make_entry(const FecOti &oti) {
    exercise an arbitrary namespace. */
 std::string emit(FileDeliveryTable::FdtNamespace ns) {
   auto oti = make_fec_oti();
-  FileDeliveryTable fdt(1, oti, ns, Profile::Rfc3926);
+  FileDeliveryTable fdt(1, oti, ns, Profile::Unprofiled);
   fdt.add(make_entry(oti));
   return fdt.to_string();
 }
@@ -68,6 +68,14 @@ std::string emit(FileDeliveryTable::FdtNamespace ns, Profile profile) {
   return fdt.to_string();
 }
 
+
+/* NTP-epoch seconds a little way ahead of now. RFC 3926 clause 3.3 requires an FDT Instance's expiry
+   to be in the future, so a fixed small constant is no longer a usable test value. */
+uint64_t future_ntp(uint64_t seconds_ahead) {
+  return (uint64_t)std::chrono::duration_cast<std::chrono::seconds>(
+             std::chrono::system_clock::now().time_since_epoch()).count()
+         + 2208988800ULL + seconds_ahead;
+}
 }  // namespace
 
 /* TS 26.346 V18.2.0 clause L.4.4 lists Transfer-Length among the attributes that
@@ -101,7 +109,7 @@ TEST(MbmsDownloadProfileTest, ProfileDecidesTheSchemaNotTheNamespaceArgument) {
 TEST(GeneralFluteTest, TransferLengthStillCarriedOutsideTheProfile) {
   // Plain RFC 3926, where clause 3.4.2 permits the attribute, so it is kept. This has to be
   // asked for explicitly: the library default is the 3GPP profile.
-  EXPECT_NE(emit(FileDeliveryTable::FDT_NS_RFC3926, Profile::Rfc3926).find("Transfer-Length"),
+  EXPECT_NE(emit(FileDeliveryTable::FDT_NS_RFC3926, Profile::Unprofiled).find("Transfer-Length"),
             std::string::npos);
 }
 
@@ -119,7 +127,7 @@ TEST(ProfileDefaultTest, ProfileNotFdtNamespaceDecidesTheRestriction) {
   // Same namespace, opposite outcomes, driven only by the profile.
   const auto ns = FileDeliveryTable::FDT_NS_RFC3926;
   EXPECT_EQ(emit(ns, Profile::Ts26517).find("Transfer-Length"), std::string::npos);
-  EXPECT_NE(emit(ns, Profile::Rfc3926).find("Transfer-Length"), std::string::npos);
+  EXPECT_NE(emit(ns, Profile::Unprofiled).find("Transfer-Length"), std::string::npos);
 }
 
 TEST(MbmsDownloadProfileTest, ContentLengthIsCarriedInEveryMode) {
@@ -146,7 +154,7 @@ TEST(MbmsDownloadProfileTest, CompleteNotCarriedUnderThe3gppProfile) {
 TEST(GeneralFluteTest, CompleteStillCarriedOutsideTheProfile) {
   // RFC 3926 clause 3.4.2 permits it, so plain FLUTE keeps it.
   auto oti = make_fec_oti();
-  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::Rfc3926);
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::Unprofiled);
   fdt.add(make_entry(oti));
   fdt.set_complete(true);
   EXPECT_NE(fdt.to_string().find("Complete"), std::string::npos);
@@ -172,7 +180,7 @@ TEST(GeneralFluteTest, FecInstanceIdNotCarriedOutsideTheProfileEither) {
      3GPP profile was never the binding constraint. */
   auto oti = make_fec_oti();
   oti.instance_id = 7;
-  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::Rfc3926);
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::Unprofiled);
   fdt.add(make_entry(oti));
   EXPECT_EQ(fdt.to_string().find("FEC-OTI-FEC-Instance-ID"), std::string::npos);
 }
@@ -208,7 +216,7 @@ TEST(MbmsDownloadProfileTest, AbsentContentEncodingIsAccepted) {
 TEST(GeneralFluteTest, NonGzipContentEncodingIsAllowedOutsideTheProfile) {
   // RFC 3926 places no such restriction, so plain FLUTE accepts it.
   auto oti = make_fec_oti();
-  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::Rfc3926);
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_RFC3926, Profile::Unprofiled);
   auto e = make_entry(oti);
   e.content_encoding = "deflate";
   EXPECT_NO_THROW(fdt.add(e));
@@ -678,7 +686,7 @@ TEST(ProfileTsiWidthTest, WideTsiAcceptedOutsideTheProfile) {
   EXPECT_NO_THROW(
       LibFlute::Transmitter("239.1.3.12", 5000, /*tsi*/ 0x10000, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                             std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false,
-                            std::nullopt, Profile::Rfc3926));
+                            std::nullopt, Profile::Unprofiled));
 }
 
 
@@ -704,7 +712,7 @@ TEST(ProfileSourceBlockLengthTest, AtTheCeilingIsAccepted) {
 TEST(ProfileSourceBlockLengthTest, NotAppliedOutsideThe3gppProfiles) {
   auto oti = make_fec_oti();
   oti.max_source_block_length = 65536;
-  EXPECT_NO_THROW(FileDeliveryTable(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Rfc3926));
+  EXPECT_NO_THROW(FileDeliveryTable(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Unprofiled));
 }
 
 /* TS 26.346 V18.2.0 annex L: "When the optional File@Expires attribute is provided, its value shall
@@ -712,14 +720,15 @@ TEST(ProfileSourceBlockLengthTest, NotAppliedOutsideThe3gppProfiles) {
 TEST(EffectiveExpiryTest, FileExpiresTakesPrecedenceOverTheInstanceValue) {
   auto oti = make_fec_oti();
   FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26517);
-  fdt.set_expires(1000);
+  const auto instance_expiry = future_ntp(600);
+  fdt.set_expires(instance_expiry);
 
   auto entry = make_entry(oti);
-  entry.expires = 2000;
-  EXPECT_EQ(fdt.effective_expiry(entry), 2000u);
+  entry.expires = instance_expiry + 1000;
+  EXPECT_EQ(fdt.effective_expiry(entry), instance_expiry + 1000);
 
   entry.expires = 0;  // attribute absent
-  EXPECT_EQ(fdt.effective_expiry(entry), 1000u);
+  EXPECT_EQ(fdt.effective_expiry(entry), instance_expiry);
 }
 
 /* TS 26.346 V18.2.0 clause 7.2.9: "For MBMS operation, the UE shall not use a received FDT Instance
@@ -727,14 +736,32 @@ TEST(EffectiveExpiryTest, FileExpiresTakesPrecedenceOverTheInstanceValue) {
 TEST(FdtExpiryTest, AnInstanceIsExpiredOnceItsExpiresHasPassed) {
   auto oti = make_fec_oti();
   FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26517);
-  fdt.set_expires(1000);
-  EXPECT_FALSE(fdt.expired(999));
-  EXPECT_FALSE(fdt.expired(1000));
-  EXPECT_TRUE(fdt.expired(1001));
+  const auto expiry = future_ntp(600);
+  fdt.set_expires(expiry);
+  EXPECT_FALSE(fdt.expired(expiry - 1));
+  EXPECT_FALSE(fdt.expired(expiry));
+  EXPECT_TRUE(fdt.expired(expiry + 1));
 }
 
 TEST(FdtExpiryTest, AnInstanceWithNoExpiresNeverExpires) {
   auto oti = make_fec_oti();
   FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26517);
   EXPECT_FALSE(fdt.expired(0xFFFFFFFFULL));
+}
+
+
+/* RFC 3926 clause 3.3: "A sender MUST use an expiry time in the future upon creation of an FDT
+   Instance relative to its Sender Current Time (SCT)." Binding under every profile. */
+TEST(FdtExpiryTest, APastExpiryIsRefused) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26517);
+  EXPECT_THROW(fdt.set_expires(1000), std::runtime_error);
+  EXPECT_THROW(fdt.set_expires(0), std::runtime_error);
+}
+
+TEST(FdtExpiryTest, APastExpiryIsRefusedWhenUnprofiledToo) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Unprofiled);
+  EXPECT_THROW(fdt.set_expires(1000), std::runtime_error);
+  EXPECT_NO_THROW(fdt.set_expires(future_ntp(60)));
 }

@@ -525,7 +525,7 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
   if (is_3gpp(_profile) && tsi > 0xFFFF) {
     throw std::runtime_error(
         "TSI does not fit the 16-bit field TS 26.346 clause 7.2.7 fixes for it; use a TSI of 65535 "
-        "or less, or Profile::Rfc3926 where RFC 3451 permits the wider encoding");
+        "or less, or Profile::Unprofiled where RFC 3451 permits the wider encoding");
   }
 
   if (source_address) {

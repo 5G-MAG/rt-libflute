@@ -166,7 +166,7 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, FecOti fec_
   switch (_profile) {
     case Profile::Ts26517:        _fdt_namespace = FDT_NS_3GPP_CONSOLIDATED_V2; break;
     case Profile::Ts26346: _fdt_namespace = FDT_NS_DRAFT_2005; break;
-    case Profile::Rfc3926: break;
+    case Profile::Unprofiled: break;
   }
 }
 
@@ -407,6 +407,21 @@ namespace {
   }
 }
 
+void LibFlute::FileDeliveryTable::set_expires(uint64_t exp)
+{
+  /* RFC 3926 clause 3.3: "A sender MUST use an expiry time in the future upon creation of an FDT
+     Instance relative to its Sender Current Time (SCT)." An instance created already expired can
+     never be used to interpret anything, and a receiver following clause 7.2.9 discards it on
+     arrival, so this is refused rather than sent. */
+  const auto now = ntp_seconds_since_epoch();
+  if (exp <= now) {
+    throw std::runtime_error(
+        "FDT Instance expiry must be in the future. A receiver discards an instance that has "
+        "already expired, so such a session delivers nothing. See the citation at this check.");
+  }
+  _expires = exp;
+}
+
 uint32_t LibFlute::FileDeliveryTable::next_instance_id(uint32_t current, uint64_t current_expires,
                                                         uint64_t now,
                                                         std::map<uint32_t, uint64_t>& expired_instance_ids)
@@ -456,7 +471,7 @@ auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> void
   if (is_3gpp(_profile) && !fe.content_encoding.empty() && fe.content_encoding != "gzip") {
     throw std::invalid_argument(
         "Content-Encoding must be absent or gzip in the MBMS Download Profile, got: " +
-        fe.content_encoding + ". Use Profile::Rfc3926 for a non-3GPP session.");
+        fe.content_encoding + ". Use Profile::Unprofiled for a non-3GPP session.");
   }
   if (_instance_id == _instance_id_sent) advance_instance_id();
   _file_entries.push_back(fe);
@@ -561,7 +576,7 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
        Transfer-Length is the first item of that list.
 
        The prohibition binds a sender operating the MBMS Download Profile, which is what
-       Profile::Ts26517 selects. Under Profile::Rfc3926 the session is plain RFC 3926, where
+       Profile::Ts26517 selects. Under Profile::Unprofiled the session is plain RFC 3926, where
        the attribute is permitted, so it is kept. Keyed on the profile rather than on the FDT
        namespace because the namespace says which schema is emitted, not which obligations apply.
 

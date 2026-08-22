@@ -133,7 +133,15 @@ namespace LibFlute {
      /**
       *  Set the expiry value
       */
-      void set_expires(uint64_t exp) { _expires = exp; };
+     /**
+      *  Set the FDT-Instance Expires attribute, in NTP-epoch seconds.
+      *
+      *  Refuses a time that is not in the future. RFC 3926 clause 3.3: "A sender MUST use an expiry
+      *  time in the future upon creation of an FDT Instance relative to its Sender Current Time
+      *  (SCT)." Binding under every profile, the 3GPP ones inheriting it through TS 26.346 clause
+      *  7.2.0's adoption of RFC 3926.
+      */
+      void set_expires(uint64_t exp);
 
      /**
       *  Set the RFC 3926 clause 3.4.2 Complete attribute: true once this FDT Instance describes the full,

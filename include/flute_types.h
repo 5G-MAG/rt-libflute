@@ -79,12 +79,23 @@ namespace LibFlute {
      */
     Ts26346,
 
-    /** RFC 3926 and the ALC and LCT documents it sits on, with no 3GPP restriction applied. */
-    Rfc3926
+    /**
+     *  No 3GPP profile: the session is bound only by the FLUTE specification in force and the ALC
+     *  and LCT documents beneath it.
+     *
+     *  Deliberately not named after a document, unlike the two above. Which FLUTE specification
+     *  applies here is decided separately, by the protocol version: RFC 3926 for version 1 and
+     *  RFC 6726 for version 2. Naming this value RFC 3926 would contradict itself the moment a
+     *  caller selected version 2, RFC 6726 being the document that obsoletes RFC 3926.
+     *
+     *  "Unprofiled" is the complement of the term TS 26.346 uses for the other direction, annex L.6
+     *  being titled "Profiled FLUTE FDT schema".
+     */
+    Unprofiled
   };
 
-  /** True for the profiles bound by the 3GPP obligations, i.e. anything but plain RFC 3926. */
-  constexpr bool is_3gpp(Profile p) { return p != Profile::Rfc3926; }
+  /** True for the profiles bound by the 3GPP obligations, i.e. anything but an unprofiled session. */
+  constexpr bool is_3gpp(Profile p) { return p != Profile::Unprofiled; }
 
   /**
    *  OTI values struct
