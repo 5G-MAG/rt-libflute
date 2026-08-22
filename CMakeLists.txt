@@ -72,7 +72,7 @@ target_link_libraries( flute
 )
 
 # ---- Tests Subdirectory (optional) ----
-option(BUILD_TESTING "Build unit tests" ON)
+include(CTest)
 if (BUILD_TESTING AND NOT DEFINED GTEST_DISABLE)
   add_subdirectory(tests)
 endif()
