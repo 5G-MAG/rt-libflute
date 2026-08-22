@@ -20,6 +20,8 @@
 #include <atomic>
 #include <chrono>
 #include <queue>
+#include <vector>
+#include <memory>
 #include <string>
 #include <map>
 #include <set>
@@ -540,6 +542,37 @@ namespace LibFlute {
       const boost::asio::ip::udp::endpoint &endpoint() const { return _endpoint; };
 
      /**
+      *  Add a further channel to this session, or remove one.
+      *
+      *  A multiple rate congestion control building block sends to several channels at different
+      *  rates and lets each receiver choose how many it is joined to. RFC 5775 clause 2.1: "An ALC
+      *  session comprises multiple channels originating at a single sender". Nothing in the library
+      *  drives these yet; they are the capability such a building block needs.
+      *
+      *  Channel 0 is always the one given at construction, WEBRC's base channel. An added channel
+      *  takes the same socket options and source-address binding.
+      *
+      *  @param address Destination address for the new channel.
+      *  @param port Destination port.
+      *  @return Index of the new channel, or 0 on failure; 0 is never an added channel.
+      */
+      size_t add_channel(const std::string& address, unsigned short port);
+
+     /**
+      *  Remove a channel added by add_channel(). Channel 0 cannot be removed. Indices above the one
+      *  removed shift down, so remove from the highest index first when removing several.
+      */
+      bool remove_channel(size_t index);
+
+     /** Number of channels in the session, always at least 1. */
+      size_t channel_count() const { return 1 + _extra_channels.size(); };
+
+     /** Destination of a channel by index; 0 is the one given at construction. */
+      const boost::asio::ip::udp::endpoint &channel_endpoint(size_t index) const {
+        return index == 0 ? _endpoint : _extra_channels.at(index - 1).endpoint;
+      };
+
+     /**
       * Set UDP Address for FLUTE session
       *
       * Sets the destination address for FLUTE session packets. If the UDP Tunnel Address is not set then FLUTE packets will be
@@ -720,6 +753,13 @@ namespace LibFlute {
        *  what may be signalled, so it cannot change once a session is running. */
       Profile _profile;
       boost::asio::ip::udp::socket _socket;
+
+      /** One further channel of the session, beyond the one given at construction. */
+      struct Channel {
+        boost::asio::ip::udp::endpoint endpoint;
+        std::unique_ptr<boost::asio::ip::udp::socket> socket;
+      };
+      std::vector<Channel> _extra_channels;
       boost::asio::io_context& _io_context;
       boost::asio::steady_timer _send_timer;
       boost::asio::steady_timer _fdt_timer;

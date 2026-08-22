@@ -953,6 +953,37 @@ auto Transmitter::send_next_packet() -> void
   }
 }
 
+auto Transmitter::add_channel(const std::string& address, unsigned short port) -> size_t
+{
+  /* Same options and binding as the channel built in the constructor, so every channel of the
+     session leaves from the announced source and behaves alike. Loopback is enabled for the same
+     reason it is there: a receiver on the same host must see the traffic. */
+  try {
+    boost::asio::ip::udp::endpoint endpoint(boost::asio::ip::make_address(address), port);
+    auto socket = std::make_unique<boost::asio::ip::udp::socket>(_io_context, endpoint.protocol());
+    socket->set_option(boost::asio::ip::multicast::enable_loopback(true));
+    socket->set_option(boost::asio::ip::udp::socket::reuse_address(true));
+    if (_source_address) {
+      socket->bind(boost::asio::ip::udp::endpoint(_source_address.value(), 0));
+    }
+    _extra_channels.push_back(Channel{endpoint, std::move(socket)});
+    spdlog::info("Transmitter: added channel {} to {}:{}", _extra_channels.size(), address, port);
+    return _extra_channels.size();
+  } catch (const std::exception& e) {
+    spdlog::error("Transmitter: could not add channel to {}:{}: {}", address, port, e.what());
+    return 0;
+  }
+}
+
+auto Transmitter::remove_channel(size_t index) -> bool
+{
+  /* Channel 0 is the session's own destination, given at construction and announced in the session
+     description, so it is not removable: a session with no channels is not a session. */
+  if (index == 0 || index > _extra_channels.size()) return false;
+  _extra_channels.erase(_extra_channels.begin() + static_cast<long>(index - 1));
+  return true;
+}
+
 auto Transmitter::activate() -> void
 {
   if (!_active) {
