@@ -11,6 +11,8 @@
 #include <cmath>
 #include <stdexcept>
 
+#include "AlcPacket.h"
+#include "EncodingSymbol.h"
 #include "Webrc.h"
 
 using namespace LibFlute::Webrc;
@@ -193,4 +195,61 @@ TEST(WebrcRates, AWaveDecreasesStrictlyWithinASlot) {
     EXPECT_GT(wave_channel_rate(remaining, 0.0, p), wave_channel_rate(remaining, 0.5, p));
     EXPECT_GT(wave_channel_rate(remaining, 0.5, p), wave_channel_rate(remaining, 1.0, p));
   }
+}
+
+
+/* RFC 3738 clause 5.1 lays the short-format Congestion Control Information out as CTSI (8 bits),
+   Channel Number (8) and Packet Sequence Number (16). The CCI sits immediately after the first
+   32-bit LCT header word, which is where C=0 puts it. */
+namespace {
+
+std::vector<LibFlute::EncodingSymbol> one_symbol(const char* data, size_t len) {
+  return {LibFlute::EncodingSymbol(0, 0, const_cast<char*>(data), len,
+                                   LibFlute::FecScheme::CompactNoCode)};
+}
+
+LibFlute::FecOti plain_oti() {
+  LibFlute::FecOti oti{};
+  oti.encoding_id = LibFlute::FecScheme::CompactNoCode;
+  oti.encoding_symbol_length = 1400;
+  oti.max_source_block_length = 64;
+  return oti;
+}
+
+}  // namespace
+
+TEST(WebrcCci, AbsentLeavesTheFieldZero) {
+  const char payload[] = "no congestion control";
+  LibFlute::AlcPacket pkt(/*tsi*/ 1, /*toi*/ 3, plain_oti(), one_symbol(payload, sizeof payload),
+                          1400, /*fdt_instance_id*/ 0);
+  const auto* b = reinterpret_cast<const unsigned char*>(pkt.data());
+  EXPECT_EQ(b[4], 0); EXPECT_EQ(b[5], 0); EXPECT_EQ(b[6], 0); EXPECT_EQ(b[7], 0);
+}
+
+TEST(WebrcCci, PresentIsEncodedInFieldOrder) {
+  const char payload[] = "with congestion control";
+  LibFlute::CongestionControlInfo cci;
+  cci.current_time_slot_index = 17;
+  cci.channel_number = 34;             // the base channel, T, for a 34 wave-channel session
+  cci.packet_sequence_number = 0xBEEF;
+
+  LibFlute::AlcPacket pkt(/*tsi*/ 1, /*toi*/ 3, plain_oti(), one_symbol(payload, sizeof payload),
+                          1400, /*fdt_instance_id*/ 0, false, false, cci);
+  const auto* b = reinterpret_cast<const unsigned char*>(pkt.data());
+  EXPECT_EQ(b[4], 17)   << "CTSI";
+  EXPECT_EQ(b[5], 34)   << "CN";
+  EXPECT_EQ(b[6], 0xBE) << "PSN high byte, network order";
+  EXPECT_EQ(b[7], 0xEF) << "PSN low byte";
+}
+
+/* "the last packet sent to the channel before the channel goes quiescent with PSN = 2^16-1" */
+TEST(WebrcCci, TheFinalPsnOfAWaveIsRepresentable) {
+  const char payload[] = "last of the wave";
+  LibFlute::CongestionControlInfo cci;
+  cci.packet_sequence_number = 65535;
+  LibFlute::AlcPacket pkt(/*tsi*/ 1, /*toi*/ 3, plain_oti(), one_symbol(payload, sizeof payload),
+                          1400, /*fdt_instance_id*/ 0, false, false, cci);
+  const auto* b = reinterpret_cast<const unsigned char*>(pkt.data());
+  EXPECT_EQ(b[6], 0xFF);
+  EXPECT_EQ(b[7], 0xFF);
 }
