@@ -47,4 +47,7 @@ endfunction()
 add_flute_test_executable(flute_unit_tests test_transmitter.cpp "unit:")
 add_flute_test_executable(flute_e2e_tests test_end_to_end.cpp "e2e:")
 add_flute_test_executable(flute_protocol_tests test_protocol_fixes.cpp "protocol:")
+add_flute_test_executable(flute_raptor_tests test_raptor_fec.cpp "raptor:")
+add_flute_test_executable(flute_raptor_e2e_tests test_raptor_e2e.cpp "raptor_e2e:")
+
 add_flute_test_executable(flute_raptor_codec_tests test_raptor_codec.cpp "raptor_codec:")

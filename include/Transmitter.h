@@ -429,6 +429,12 @@ namespace LibFlute {
       *  @param fdt_namespace Which XML namespace to use for the FDT (default: none)
       *  @param active Start as active/inactive FLUTE session (default: active)
       *  @param source_address Source address (default: automatically assign source address)
+      *  @param content_fec_oti FEC scheme to protect this session's content with (default: no value,
+      *                         meaning Compact No-Code -- today's behaviour, unchanged). Only
+      *                         encoding_id, max_source_block_length and max_number_of_encoding_symbols
+      *                         are read from it; encoding_symbol_length is always sized to this
+      *                         Transmitter's own path MTU, and the Raptor-specific OTI fields
+      *                         are computed fresh per file by LibFlute::File, not taken from here.
       *
       *  @throw boost::system::system_error When @p source_address is given a value and @p tunnel_endpoint has no value and the
       *                            address in @p source_address could not be bound as the local end of the connection.
@@ -441,12 +447,28 @@ namespace LibFlute {
           FdtNamespace fdt_namespace = FileDeliveryTable::FDT_NS_NONE,
           bool active = true,
           const std::optional<std::string>& source_address = std::nullopt,
-          Profile profile = Profile::Mbms3gpp);
+          const std::optional<FecOti>& content_fec_oti = std::nullopt,
+          Profile profile = Profile::Mbms3gpp,
+          uint32_t fec_redundancy_level = kDefaultFecRedundancyLevel);
 
      /**
       *  Default destructor.
       */
       virtual ~Transmitter();
+
+     /**
+      *  Get the FEC OTI this Transmitter applies to the content it sends
+      *  (see the @p content_fec_oti constructor parameter).
+      */
+      const FecOti& fec_oti() const { return _fec_oti; }
+
+     /**
+      *  Get the File Delivery Table this Transmitter maintains for its
+      *  content (mainly useful for inspecting/testing its serialised size
+      *  and entry count -- e.g. to confirm a carousel-repeated send didn't
+      *  leave a stale entry behind).
+      */
+      const FileDeliveryTable& fdt() const { return *_fdt; }
 
      /**
       * Get UDP Tunnel Address
@@ -719,6 +741,23 @@ namespace LibFlute {
       std::unique_ptr<FileDeliveryTable> _fdt;
       std::map<uint32_t, std::shared_ptr<File>> _files;
       std::mutex _files_mutex;
+      // Backing storage for the FDT's own File object (TOI 0): send_fdt()
+      // builds this from a local std::string whose lifetime must match the
+      // TOI-0 File entry in _files, not just the send_fdt() call that
+      // creates it - File only holds a raw pointer into this string's
+      // buffer, and send_next_packet() reads through that pointer later,
+      // asynchronously, well after send_fdt() would otherwise have returned
+      // and the local string been destroyed. This closes the definite,
+      // always-eventually-triggered dangling-pointer bug; it leaves a much
+      // narrower residual risk if send_fdt() is called again (e.g. from
+      // another file being added/removed) before the previous FDT's own
+      // packets finish sending, since this single buffer would then be
+      // overwritten while an old File's pointer still refers to it. FDT
+      // content is tiny (a handful of file entries' XML) and normally
+      // finishes transmitting well within one _fdt_repeat_interval, so this
+      // is expected to be rare in practice; a fully robust fix would give
+      // each File its own copy or ref-counted storage.
+      std::string _fdt_string_storage;
 
       bool _session_closing = false;
       std::set<uint32_t> _closing_objects;
@@ -737,6 +776,9 @@ namespace LibFlute {
       boost::asio::ip::address _tunnel_local_address;
 
       std::atomic<bool> _active;
+      // FEC redundancy level applied to content objects of this session, as a
+      // percentage of a source block's k symbols. See kDefaultFecRedundancyLevel.
+      uint32_t _fec_redundancy_level;
       std::atomic<bool> _deactivate_when_all_files_sent = false;
   };
 

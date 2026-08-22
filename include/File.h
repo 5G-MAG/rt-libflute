@@ -22,6 +22,8 @@
 #include "FileDeliveryTable.h"
 #include "EncodingSymbol.h"
 #include "Transmitter.h"
+#include "fec/FecBlockCodec.h"
+#include "fec/RaptorCodec.h"
 
 namespace LibFlute {
   /**
@@ -161,6 +163,13 @@ namespace LibFlute {
       */
       void set_fdt_instance_id( uint16_t id) { _fdt_instance_id = id; };
 
+      /**
+       *  Set the FEC redundancy level for this object, as a percentage of a source block's k
+       *  symbols. Ignored where the FEC OTI already fixes the budget through
+       *  max_number_of_encoding_symbols, and for a scheme that has no repair symbols.
+       */
+      void set_fec_redundancy_level( uint32_t percent ) { _fec_redundancy_level = percent; };
+
      /**
       *  Get the FDT instance ID
       */
@@ -168,7 +177,12 @@ namespace LibFlute {
 
     private:
       void calculate_partitioning();
-      void create_blocks();
+      // have_source_data: true from the transmit-side constructors (the
+      // file's bytes are already in _buffer, so source symbols start out
+      // complete and, for Raptor, the intermediate symbols get solved
+      // immediately); false from the receive-side constructor (empty
+      // buffer, everything arrives via put_symbol()).
+      void create_blocks(bool have_source_data);
 
       struct SourceBlock {
         bool complete = false;
@@ -178,13 +192,59 @@ namespace LibFlute {
           bool complete = false;
           bool queued = false;
         };
-        std::map<uint16_t, Symbol> symbols; 
+        std::map<uint16_t, Symbol> symbols;
       };
 
-      void check_source_block_completion(SourceBlock& block);
+      void check_source_block_completion(uint16_t source_block_number, SourceBlock& block);
       void check_file_completion();
 
-      std::map<uint16_t, SourceBlock> _source_blocks; 
+      // -- Raptor support -----------------------------------------------------
+      // File keeps the same SourceBlock/Symbol bookkeeping above for every
+      // scheme (source symbols are always the file's raw bytes, chopped up
+      // identically -- Raptor is a systematic code); a RaptorCodec per source
+      // block is the only extra state needed, handling the pre-coding/LT maths
+      // in complete isolation from this class. See fec/RaptorCodec.h for the
+      // codec itself.
+      //
+      // Encoder side: create_blocks() feeds all K source symbols of a block
+      // into its codec once and keeps the resulting intermediate symbols
+      // around (raptor_intermediate), so get_next_symbols() can manufacture
+      // any repair ESI on demand via RaptorCodec::generate_encoding_symbol().
+      //
+      // Decoder side: put_symbol() feeds every received symbol (source or
+      // repair) into the block's codec; the moment it becomes decodable, all
+      // of that block's source symbol slots are filled in one shot, whether
+      // or not they'd individually arrived.
+      bool is_raptor_family() const {
+        return _meta.fec_oti.encoding_id == FecScheme::Raptor;
+      }
+      void calculate_partitioning_raptor();
+      void setup_raptor_codec_for_block(uint16_t sbn, uint32_t k);
+      // How many repair (ESI >= K) symbols to generate for a block of k source
+      // symbols. Exactly one of two operator-set sources decides it: the FEC
+      // OTI's max_number_of_encoding_symbols, which fixes the total budget for
+      // the block, or failing that the session's FEC redundancy level, a
+      // percentage of k. Neither is invented here.
+      uint32_t nof_repair_symbols_for_block(uint32_t k) const;
+
+      // FEC redundancy level for this object, as a percentage of a source
+      // block's k symbols. See kDefaultFecRedundancyLevel for the unit, what
+      // sets it, and why it is not signalled.
+      uint32_t _fec_redundancy_level = kDefaultFecRedundancyLevel;
+
+      std::map<uint16_t, std::shared_ptr<FecBlockCodec>> _raptor_codecs; // one RaptorCodec per source block
+      std::map<uint16_t, std::vector<std::vector<uint8_t>>> _raptor_intermediate; // encoder side only, filled once per block
+      std::map<uint16_t, uint32_t> _raptor_repair_sent; // encoder side only: how many repair ESIs already queued for this block
+      // encoder side only: generated repair symbol bytes, cached so the
+      // pointers EncodingSymbol hands to the (possibly async) send path stay
+      // valid for as long as source-symbol pointers into _buffer do. Once
+      // queued a repair ESI is never regenerated or resent -- if that
+      // specific packet is lost in transit it's simply gone, same as any
+      // other repair symbol that was never received; the redundancy is in
+      // the overhead count as a whole, not in any one symbol.
+      std::map<uint16_t, std::map<uint32_t, std::vector<uint8_t>>> _raptor_repair_data;
+
+      std::map<uint16_t, SourceBlock> _source_blocks;
 
       bool _complete = false;;
 
