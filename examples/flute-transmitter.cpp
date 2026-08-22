@@ -14,6 +14,7 @@
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
+#include <optional>
 #include <argp.h>
 
 #include <cstdio>
@@ -66,6 +67,9 @@ static struct argp_option options[] = {  // NOLINT
     {"new-api", 'n', nullptr, 0, "Use the new FileDescription API", 0},
     {"retransmit", 'R', "COUNT", 0, "Number of times to repeatedly transmit a file, implies -n option (default: 1)", 0},
     {"etags", 'e', nullptr, 0, "Enable generation of ETag values for each file, implies -n option (default: no ETags)", 0},
+    {"fdt-schema", 'S', "NAME", 0, "FDT schema to emit: draft2005 (default), rfc3926, or profiled (TS 26.346 annex L.6.1)", 0},
+    {"fec", 'F', "NAME", 0, "FEC scheme for content objects: compact (default), raptor, or raptorq", 0},
+    {"fec-redundancy-level", 'L', "PERCENT", 0, "FEC redundancy as a percentage of a source block (default: 10), ignored for -F compact", 0},
     {nullptr, 0, nullptr, 0, nullptr, 0}};
 
 /**
@@ -82,10 +86,34 @@ struct ft_arguments {
   unsigned short mtu = 1500;
   uint32_t rate_limit = 1000;
   uint64_t tsi = 16;
+  const char *fdt_schema = "draft2005";
+  const char *fec_scheme = "compact";
+  uint32_t fec_redundancy_level = LibFlute::kDefaultFecRedundancyLevel;
   size_t retransmit_count = 1;
   unsigned log_level = 2;        /**< log level */
   char **files;
 };
+
+/** Map the --fdt-schema name onto the library's namespace selector. */
+static LibFlute::FileDeliveryTable::FdtNamespace fdt_namespace_from(const char *name) {
+  if (name != nullptr) {
+    const std::string n(name);
+    if (n == "profiled") return LibFlute::FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2;
+    if (n == "rfc3926") return LibFlute::FileDeliveryTable::FDT_NS_RFC3926;
+  }
+  return LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005;
+}
+
+/** Map the --fec name onto a content FEC OTI, or nullopt for the library default. */
+static std::optional<LibFlute::FecOti> content_fec_oti_from(const char *name) {
+  if (name == nullptr) return std::nullopt;
+  const std::string n(name);
+  if (n != "raptor" && n != "raptorq") return std::nullopt;
+  LibFlute::FecOti oti{};
+  oti.encoding_id = (n == "raptorq") ? LibFlute::FecScheme::RaptorQ : LibFlute::FecScheme::Raptor;
+  oti.max_source_block_length = 64;
+  return oti;
+}
 
 /**
  * Parses the command line options into the arguments struct.
@@ -125,6 +153,15 @@ static auto parse_opt(int key, char *arg, struct argp_state *state) -> error_t {
       break;
     case 'n':
       arguments->new_api = true;
+      break;
+    case 'S':
+      arguments->fdt_schema = arg;
+      break;
+    case 'F':
+      arguments->fec_scheme = arg;
+      break;
+    case 'L':
+      arguments->fec_redundancy_level = (uint32_t)std::stoul(arg);
       break;
     case 'R':
       arguments->retransmit_count = static_cast<size_t>(strtoul(arg, nullptr, 10));
@@ -191,7 +228,9 @@ static void send_with_new_api(struct ft_arguments &arguments)
         arguments.tsi,
         arguments.mtu,
         arguments.rate_limit,
-        io, std::nullopt, LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005);
+        io, std::nullopt, fdt_namespace_from(arguments.fdt_schema), true, std::nullopt,
+        content_fec_oti_from(arguments.fec_scheme),
+        LibFlute::Profile::Mbms3gpp, arguments.fec_redundancy_level);
 
   // Configure IPSEC ESP, if enabled
   if (arguments.enable_ipsec)
@@ -259,7 +298,9 @@ static void send_with_old_api(struct ft_arguments &arguments)
         arguments.tsi,
         arguments.mtu,
         arguments.rate_limit,
-        io, std::nullopt, LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005);
+        io, std::nullopt, fdt_namespace_from(arguments.fdt_schema), true, std::nullopt,
+        content_fec_oti_from(arguments.fec_scheme),
+        LibFlute::Profile::Mbms3gpp, arguments.fec_redundancy_level);
 
   // Configure IPSEC ESP, if enabled
   if (arguments.enable_ipsec)
