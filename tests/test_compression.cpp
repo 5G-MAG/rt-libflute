@@ -14,7 +14,13 @@
 #include <stdexcept>
 #include <vector>
 
+#include <boost/asio.hpp>
+
+#include <memory>
+#include <string>
+
 #include "File.h"
+#include "Transmitter.h"
 
 using namespace LibFlute;
 
@@ -64,4 +70,50 @@ TEST(PartitioningDivisorTest, DefaultConstructedFecOtiIsRefused) {
   bare.encoding_id = FecScheme::CompactNoCode;
   bare.transfer_length = 4096;
   EXPECT_THROW(build(bare, data), std::runtime_error);
+}
+
+
+/* The MBMS Download Profile permits content encoding and provides no carrier for the resulting
+   transfer length, so this sender declines it there. TS 26.346 V18.2.0 clause L.4.4 forbids
+   Transfer-Length in the FDT, clause 7.2.8 forbids EXT_FTI on a content packet, and RFC 3926 clause
+   3.4.2 lets Content-Length stand in only where no encoding was applied. Raised as
+   5G-MAG/Standards#212. Declining to encode is conformant, the attribute being optional for a
+   sender; the verbatim clauses are quoted at the check itself in Transmitter.cpp. */
+namespace {
+
+std::shared_ptr<Transmitter::FileDescription> gzipped_file() {
+  const std::vector<char> payload(4096, 'x');
+  auto fd = std::make_shared<Transmitter::FileDescription>("test/compressible.bin", payload);
+  fd->set_compression(Transmitter::FileDescription::COMPRESSION_GZIP);
+  return fd;
+}
+
+}  // namespace
+
+TEST(ProfileContentEncodingTest, RefusedUnderThe3gppProfiles) {
+  boost::asio::io_context io;
+  Transmitter tx("239.1.2.30", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                 /*tunnel_endpoint*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE,
+                 /*active*/ false, /*source_address*/ std::nullopt, Profile::Ts26517);
+  EXPECT_THROW(tx.send(gzipped_file()), std::runtime_error)
+      << "a gzip-encoded object was accepted under a profile that cannot carry its transfer length";
+}
+
+TEST(ProfileContentEncodingTest, AllowedOutsideTheProfile) {
+  boost::asio::io_context io;
+  Transmitter tx("239.1.2.31", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                 /*tunnel_endpoint*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE,
+                 /*active*/ false, /*source_address*/ std::nullopt, Profile::Unprofiled);
+  EXPECT_NO_THROW(tx.send(gzipped_file()))
+      << "plain RFC 3926 permits Content-Encoding, and Transfer-Length with it";
+}
+
+TEST(ProfileContentEncodingTest, AnUnencodedObjectIsUnaffected) {
+  boost::asio::io_context io;
+  Transmitter tx("239.1.2.32", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                 /*tunnel_endpoint*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE,
+                 /*active*/ false, /*source_address*/ std::nullopt, Profile::Ts26517);
+  const std::vector<char> payload(4096, 'y');
+  auto fd = std::make_shared<Transmitter::FileDescription>("test/plain.bin", payload);
+  EXPECT_NO_THROW(tx.send(fd));
 }

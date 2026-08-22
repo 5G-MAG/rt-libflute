@@ -240,13 +240,8 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
 }
 
 LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_oti, const std::vector<LibFlute::EncodingSymbol>& symbols, size_t max_encoding_symbol_size, uint32_t fdt_instance_id,
-<<<<<<< HEAD
-                                bool close_session_flag, bool close_object_flag)
-=======
                                 bool close_session_flag, bool close_object_flag,
-                                const std::optional<CongestionControlInfo>& cci)
-                                bool close_session_flag, bool close_object_flag, bool include_fti)
->>>>>>> 291f458 (alc+receiver: carry an encoded object's transfer length where the profile allows it)
+                                bool include_fti)
   : _fec_oti(fec_oti)
 {
   // TSI width: this wire scheme always carries a 16-bit half-word component (half_word_flag=1,

@@ -748,9 +748,6 @@ namespace LibFlute {
       boost::asio::ip::address _tunnel_local_address;
 
       std::atomic<bool> _active;
-      // Which profile's obligations apply to this session. Needed on the send path because it
-      // decides whether the object's transfer length can travel in the FDT at all.
-      Profile _profile;
       std::atomic<bool> _deactivate_when_all_files_sent = false;
   };
 

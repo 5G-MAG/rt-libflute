@@ -759,6 +759,25 @@ auto Transmitter::send(
 
 auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file_description) -> uint16_t
 {
+  /* The MBMS Download Profile permits content encoding but provides no carrier for the resulting
+     transfer length, so this sender does not use it there. TS 26.346 V18.2.0 clause L.4.2 makes it
+     a sender's choice, which is what makes declining it conformant: "The following FDT attribute,
+     defined at both the FDT-Instance and File levels, may be carried in the FDT sent by the FLUTE
+     sender". Refusing rather than silently dropping the encoding, because a caller that asked for
+     compression and got an uncompressed object with no warning has been misled.
+
+     Clause L.4.4 forbids Transfer-Length in the FDT and clause 7.2.8 forbids EXT_FTI on a content
+     packet, and RFC 3926 clause 3.4.2 lets Content-Length stand in only when no encoding was
+     applied, so an encoded object under this profile cannot state its length by any route. Raised
+     as 5G-MAG/Standards#212. Receiving a content-encoded object is unaffected: L.4.2 requires a
+     receiver to support gzip and this library does. */
+  if (is_3gpp(_profile) && !file_description->file_entry().content_encoding.empty()) {
+    throw std::runtime_error(
+        "Content encoding is not used by this sender under the 3GPP profiles, which provide "
+        "no way to carry the resulting transfer length. See 5G-MAG/Standards#212, and the "
+        "citations at this check. Use Profile::Unprofiled, or send the object uncompressed.");
+  }
+
   if (file_description->has_tsi() && file_description->tsi() != _tsi) {
     // Reset TOI if the file_description is being used on a new TSI
     file_description->toi(0);
@@ -872,24 +891,25 @@ auto Transmitter::send_next_packet() -> void
       for(const auto& symbol : symbols) {
         spdlog::debug("sending TOI {} SBN {} ID {}", file->meta().toi, symbol.source_block_number(), symbol.id() );
       }
-      auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id(),
-<<<<<<< HEAD
-                                                 _session_closing, _closing_objects.count(file->meta().toi) > 0);
-=======
-                                                 _session_closing, _closing_objects.count(file->meta().toi) > 0,
-                                                 cci);
-      /* A content-encoded object under the MBMS Download Profile has no way to state its transfer
-         length in the FDT: TS 26.346 V18.2.0 clause L.4.4 forbids Transfer-Length there, and
-         RFC 3926 clause 3.4.2 only lets Content-Length stand in when no encoding was applied. Carry
-         it in the object's own EXT_FTI instead, which every receiver must support. See AlcPacket for
-         why this is the route taken. */
+      /* EXT_FTI is never attached to a content packet under a 3GPP profile.
+
+         TS 26.346 V18.2.0 clause 7.2.8: "FLUTE packets carrying symbols of files (not FDT
+         Instances) shall not include an EXT_FTI."
+
+         This closes the second of the two carriers a content-encoded object's transfer length could
+         use, the first being the FDT's Transfer-Length attribute, which clause L.4.4 forbids. The
+         profile nonetheless permits gzip, so it allows a case it provides no way to signal. Raised
+         as 5G-MAG/Standards#212. Until that is answered the sender does not content encode under
+         these profiles at all, see Transmitter::send(), so the case does not arise; outside them
+         both the encoding and this extension remain available. */
       const bool fti_on_content_packet = file->meta().toi != 0 &&
-                                         _profile == Profile::Mbms3gpp &&
+                                         !is_3gpp(_profile) &&
                                          !file->meta().content_encoding.empty();
+
       auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id(),
                                                  _session_closing, _closing_objects.count(file->meta().toi) > 0,
                                                  fti_on_content_packet);
->>>>>>> 291f458 (alc+receiver: carry an encoded object's transfer length where the profile allows it)
+
       bytes_queued += packet->size();
 
       /* A tunnel is an additional path, not a replacement for the announced one. Sending only the
