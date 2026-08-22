@@ -261,7 +261,12 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
           if (_files[alc.toi()]->complete()) {
             for (auto it = _files.cbegin(); it != _files.cend();)
             {
-              if (it->second.get() != file && it->second->meta().content_location == file->meta().content_location)
+              // An empty content location is not an identifying URL. It is what the TOI 0 FDT's
+              // own transient file carries, and what a file bootstrapped from a packet's own
+              // EXT_FTI carries until its FDT entry arrives. Matching on it would erase an
+              // unrelated bootstrapped file the moment the FDT completed, which is every time.
+              if (it->second.get() != file && !file->meta().content_location.empty() &&
+                  it->second->meta().content_location == file->meta().content_location)
               {
                 spdlog::debug("Replacing file with TOI {}", it->first);
                 it = _files.erase(it);

@@ -1,15 +1,28 @@
 #include <gtest/gtest.h>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <boost/asio.hpp>
+
+#include <chrono>
+#include <cstring>
 #include <map>
 #include <stdexcept>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "AlcPacket.h"
+#include "File.h"
 #include "FileDeliveryTable.h"
+#include "Receiver.h"
 
 using namespace LibFlute;
+using namespace std::chrono_literals;
 
 namespace {
 
@@ -439,4 +452,175 @@ TEST(FdtInstanceIdWraparoundTest, IdStaysInsideTheFieldAcrossManySends) {
     fdt.add(entry);
     EXPECT_LE(fdt.instance_id(), FileDeliveryTable::kMaxFdtInstanceId);
   }
+}
+
+/* Reception bootstrapped from a content packet's own EXT_FTI, for a TOI the FDT has not yet
+   described. This library's own Transmitter carries EXT_FTI only on the FDT itself, so the packets
+   below are hand-built to stand in for a different, spec-general sender. */
+namespace {
+
+/* A minimal ALC/LCT packet for one TOI, Compact No-Code, carrying EXT_FTI and no EXT_FDT.
+   transfer_length defaults to the payload size, giving a single-packet object that completes on
+   arrival; a caller passes a larger value to keep the bootstrapped file incomplete. */
+std::vector<char> build_content_packet_with_fti(uint16_t tsi, uint16_t toi,
+                                                uint16_t encoding_symbol_length,
+                                                uint32_t max_source_block_length,
+                                                const std::string& symbol_data,
+                                                uint32_t declared_transfer_length = 0) {
+  const size_t lct_header_len_words = 7;  // LCT header + CCI, TSI/TOI half-words, EXT_FTI
+  const size_t header_bytes = lct_header_len_words * 4;
+  const size_t sbn_esi_bytes = 4;
+  std::vector<char> buf(header_bytes + sbn_esi_bytes + symbol_data.size(), 0);
+  auto* b = reinterpret_cast<unsigned char*>(buf.data());
+
+  b[0] = (1 << 4);  // FLUTE version 1, no congestion control, no PSI
+  b[1] = 0x10;      // half-word flag set, TSI/TOI flags and both Close flags clear
+  b[2] = static_cast<unsigned char>(lct_header_len_words);
+  b[3] = 0;         // codepoint: Compact No-Code
+
+  uint16_t tsi_be = htons(tsi);
+  uint16_t toi_be = htons(toi);
+  std::memcpy(b + 8, &tsi_be, 2);
+  std::memcpy(b + 10, &toi_be, 2);
+
+  size_t off = 12;
+  b[off] = 64;      // EXT_FTI
+  b[off + 1] = 4;   // HEL: 4 words
+  uint32_t transfer_length =
+      declared_transfer_length ? declared_transfer_length : static_cast<uint32_t>(symbol_data.size());
+  uint16_t transfer_len_hi_be = htons(0);
+  uint32_t transfer_len_lo_be = htonl(transfer_length);
+  std::memcpy(b + off + 2, &transfer_len_hi_be, 2);
+  std::memcpy(b + off + 4, &transfer_len_lo_be, 4);
+  uint16_t esl_be = htons(encoding_symbol_length);
+  std::memcpy(b + off + 10, &esl_be, 2);
+  uint32_t msbl_be = htonl(max_source_block_length);
+  std::memcpy(b + off + 12, &msbl_be, 4);
+
+  std::memcpy(buf.data() + header_bytes + sbn_esi_bytes, symbol_data.data(), symbol_data.size());
+  return buf;
+}
+
+std::vector<EncodingSymbol> make_symbols(const char* data, size_t len) {
+  return {EncodingSymbol(0, 0, const_cast<char*>(data), len, FecScheme::CompactNoCode)};
+}
+
+}  // namespace
+
+/* Checks the hand-built packet parses the way the two tests below assume, so a failure there is
+   read as a Receiver failure rather than a malformed fixture. */
+TEST(ExtFtiBootstrapTest, HandBuiltPacketCarriesItsOwnFti) {
+  auto buf = build_content_packet_with_fti(777, 5, 1000, 64, "0123456789");
+  AlcPacket alc(buf.data(), buf.size());
+  EXPECT_EQ(alc.tsi(), 777u);
+  EXPECT_EQ(alc.toi(), 5u);
+  EXPECT_TRUE(alc.has_fec_oti());
+  EXPECT_EQ(alc.fec_oti().encoding_symbol_length, 1000u);
+  EXPECT_EQ(alc.fec_oti().max_source_block_length, 64u);
+}
+
+TEST(ExtFtiBootstrapTest, ReceptionStartsFromThePacketsOwnFti) {
+  boost::asio::io_context io;
+  auto work_guard = boost::asio::make_work_guard(io);
+  LibFlute::Receiver receiver("0.0.0.0", "239.255.9.9", 19191, /*tsi*/ 777, io);
+  std::thread io_thread([&io]() { io.run(); });
+
+  auto buf = build_content_packet_with_fti(777, 5, 1000, 64, "0123456789");
+
+  int sock = socket(AF_INET, SOCK_DGRAM, 0);
+  ASSERT_GE(sock, 0);
+  sockaddr_in dst{};
+  dst.sin_family = AF_INET;
+  dst.sin_port = htons(19191);
+  inet_pton(AF_INET, "239.255.9.9", &dst.sin_addr);
+  auto sent = sendto(sock, buf.data(), buf.size(), 0, reinterpret_cast<sockaddr*>(&dst), sizeof(dst));
+  EXPECT_EQ(sent, static_cast<ssize_t>(buf.size()));
+  ::close(sock);
+
+  bool found = false;
+  for (int i = 0; i < 50 && !found; ++i) {
+    std::this_thread::sleep_for(20ms);
+    for (const auto& f : receiver.file_list()) {
+      if (f->meta().toi == 5) {
+        found = true;
+        EXPECT_EQ(f->fec_oti().encoding_symbol_length, 1000u);
+        EXPECT_EQ(f->fec_oti().max_source_block_length, 64u);
+      }
+    }
+  }
+  EXPECT_TRUE(found) << "no file was started for TOI 5 from the packet's own EXT_FTI";
+
+  receiver.stop();
+  work_guard.reset();
+  io.stop();
+  io_thread.join();
+}
+
+/* The head start is only worth taking if the FDT, once it arrives, fills in the metadata on the
+   file already being reassembled. Replacing it would discard every symbol received so far. */
+TEST(ExtFtiBootstrapTest, ArrivingFdtMetadataIsAdoptedInPlace) {
+  boost::asio::io_context io;
+  auto work_guard = boost::asio::make_work_guard(io);
+  LibFlute::Receiver receiver("0.0.0.0", "239.255.9.10", 19192, /*tsi*/ 778, io);
+  std::thread io_thread([&io]() { io.run(); });
+
+  int sock = socket(AF_INET, SOCK_DGRAM, 0);
+  ASSERT_GE(sock, 0);
+  sockaddr_in dst{};
+  dst.sin_family = AF_INET;
+  dst.sin_port = htons(19192);
+  inet_pton(AF_INET, "239.255.9.10", &dst.sin_addr);
+
+  auto send_buf = [&](const std::vector<char>& buf) {
+    auto sent = sendto(sock, buf.data(), buf.size(), 0, reinterpret_cast<sockaddr*>(&dst), sizeof(dst));
+    EXPECT_EQ(sent, static_cast<ssize_t>(buf.size()));
+  };
+
+  /* Two symbols declared, one delivered, so the file is still incomplete when the FDT arrives.
+     A completed file is replaced by the same-content-location handling before this can be seen. */
+  send_buf(build_content_packet_with_fti(778, 5, 1000, 64, "0123456789",
+                                         /*declared_transfer_length*/ 2000));
+
+  LibFlute::File* bootstrapped = nullptr;
+  for (int i = 0; i < 50 && !bootstrapped; ++i) {
+    std::this_thread::sleep_for(20ms);
+    for (const auto& f : receiver.file_list()) {
+      if (f->meta().toi == 5) bootstrapped = f.get();
+    }
+  }
+  ASSERT_NE(bootstrapped, nullptr) << "no file was started for TOI 5 from the packet's own EXT_FTI";
+  EXPECT_TRUE(bootstrapped->meta().content_location.empty());
+  EXPECT_FALSE(bootstrapped->complete());
+
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti);
+  FileDeliveryTable::FileEntry entry = make_entry(oti);
+  entry.toi = 5;
+  entry.content_location = "bootstrapped.bin";
+  entry.content_length = 2000;
+  fdt.add(entry);
+  auto xml = fdt.to_string();
+  FecOti fdt_oti{FecScheme::CompactNoCode, 0, xml.length(), 1400, 64, 0};
+  AlcPacket fdt_packet(/*tsi*/ 778, /*toi*/ 0, fdt_oti, make_symbols(xml.c_str(), xml.length()), 1400,
+                       fdt.instance_id());
+  send_buf(std::vector<char>(fdt_packet.data(), fdt_packet.data() + fdt_packet.size()));
+
+  bool adopted = false;
+  for (int i = 0; i < 50 && !adopted; ++i) {
+    std::this_thread::sleep_for(20ms);
+    for (const auto& f : receiver.file_list()) {
+      if (f->meta().toi == 5 && f->meta().content_location == "bootstrapped.bin") {
+        adopted = true;
+        EXPECT_EQ(f.get(), bootstrapped)
+            << "TOI 5 was replaced with a new file instead of adopting the FDT metadata in place";
+      }
+    }
+  }
+  EXPECT_TRUE(adopted) << "TOI 5 never took the content location the FDT gave it";
+
+  ::close(sock);
+  receiver.stop();
+  work_guard.reset();
+  io.stop();
+  io_thread.join();
 }
