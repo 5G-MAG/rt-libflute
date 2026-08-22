@@ -493,7 +493,9 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
                            const std::optional<boost::asio::ip::udp::endpoint> &tunnel_endpoint,
                            Transmitter::FdtNamespace fdt_namespace, bool active,
                            const std::optional<std::string> &source_address,
-                           Profile profile )
+                           const std::optional<FecOti> &content_fec_oti,
+                           Profile profile,
+                           uint32_t fec_redundancy_level )
     : _endpoint(boost::asio::ip::make_address(destination_address), port)
     , _source_address()
     , _socket(io_context, _endpoint.protocol())
@@ -510,6 +512,7 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
     , _tunnel_local_address()
     , _active(active)
     , _profile(profile)
+    , _fec_redundancy_level(fec_redundancy_level)
 {
   /* The 3GPP profiles fix the TSI field at its narrowest width, so a value that would need the
      wider encoding cannot be signalled under either of them. This is a clause 7.2 rule, binding on
@@ -570,10 +573,19 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
     }
   }
 
-  _fec_oti = FecOti{
-    .encoding_id = FecScheme::CompactNoCode,
-    .encoding_symbol_length = _max_payload,
-    .max_source_block_length = max_source_block_length};
+  // Caller-supplied FEC OTI selects the scheme; otherwise Compact No-Code.
+  if (content_fec_oti.has_value() && content_fec_oti->encoding_id != FecScheme::CompactNoCode) {
+    _fec_oti = FecOti{
+      .encoding_id = content_fec_oti->encoding_id,
+      .encoding_symbol_length = _max_payload,
+      .max_source_block_length = content_fec_oti->max_source_block_length,
+      .max_number_of_encoding_symbols = content_fec_oti->max_number_of_encoding_symbols};
+  } else {
+    _fec_oti = FecOti{
+      .encoding_id = FecScheme::CompactNoCode,
+      .encoding_symbol_length = _max_payload,
+      .max_source_block_length = max_source_block_length};
+  }
   _fdt = std::make_unique<FileDeliveryTable>(1, _fec_oti, fdt_namespace, profile);
 
   if (_active) {
@@ -707,15 +719,30 @@ auto Transmitter::seconds_since_epoch() -> uint64_t
 auto Transmitter::send_fdt() -> void {
   if (_fdt->file_entries().empty()) return;
   _fdt->set_expires(seconds_since_epoch() + _fdt_repeat_interval * 2);
-  auto fdt = _fdt->to_string();
+  // Store into the member, not a local - see _fdt_string_storage's own doc
+  // comment: the File below only keeps a raw pointer into this buffer, and
+  // that pointer is read later, asynchronously, by send_next_packet().
+  _fdt_string_storage = _fdt->to_string();
+  // The FDT itself always goes out as Compact No-Code, regardless of what
+  // FEC scheme protects this Transmitter's content: it's re-sent on its own
+  // repeat timer already (real redundancy without needing FEC), and
+  // Raptor has a minimum source-block size (K >= 4) that a small FDT's
+  // single source block can fall below --
+  // caught by testing a real Transmitter -> Receiver transfer, not by any
+  // in-process File/codec test, all of which constructed content Files
+  // directly and never exercised send_fdt()'s own File construction.
+  FecOti fdt_fec_oti{
+    .encoding_id = FecScheme::CompactNoCode,
+    .encoding_symbol_length = _fec_oti.encoding_symbol_length,
+    .max_source_block_length = 64};
   auto file = std::make_shared<File>(
         0,
-        _fec_oti,
+        fdt_fec_oti,
         "",
         "",
         seconds_since_epoch() + _fdt_repeat_interval * 2,
-        (char*)fdt.c_str(),
-        fdt.length(),
+        (char*)_fdt_string_storage.c_str(),
+        _fdt_string_storage.length(),
         true);
   if (file) {
     file->set_fdt_instance_id( _fdt->instance_id() );
@@ -747,6 +774,7 @@ auto Transmitter::send(
         expires,
         data,
         length);
+  file->set_fec_redundancy_level(_fec_redundancy_level);
 
   _fdt->add(file->meta());
   send_fdt();
@@ -787,6 +815,7 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
   file_description->merge_fec_oti(_fec_oti);
 
   auto file = std::make_shared<File>(file_description);
+  file->set_fec_redundancy_level(_fec_redundancy_level);
   {
     std::lock_guard<std::mutex> guard(_files_mutex);
     // A reused (carousel-repeat) FileDescription keeps the same TOI, but map::insert() is a

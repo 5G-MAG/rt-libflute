@@ -669,7 +669,7 @@ TEST(ProfileTsiWidthTest, WideTsiRefusedUnderTheMbmsDownloadProfile) {
   EXPECT_THROW(
       LibFlute::Transmitter("239.1.3.10", 5000, /*tsi*/ 0x10000, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                             std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false,
-                            std::nullopt, Profile::Ts26517),
+                            std::nullopt, /*content_fec_oti*/ std::nullopt, Profile::Ts26517),
       std::runtime_error);
 }
 
@@ -678,7 +678,7 @@ TEST(ProfileTsiWidthTest, SixteenBitTsiAcceptedUnderTheProfile) {
   EXPECT_NO_THROW(
       LibFlute::Transmitter("239.1.3.11", 5000, /*tsi*/ 0xFFFF, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                             std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false,
-                            std::nullopt, Profile::Ts26517));
+                            std::nullopt, /*content_fec_oti*/ std::nullopt, Profile::Ts26517));
 }
 
 TEST(ProfileTsiWidthTest, WideTsiAcceptedOutsideTheProfile) {
@@ -688,6 +688,8 @@ TEST(ProfileTsiWidthTest, WideTsiAcceptedOutsideTheProfile) {
                             std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false,
                             std::nullopt, Profile::Unprofiled));
 }
+
+                            std::nullopt, /*content_fec_oti*/ std::nullopt, Profile::Rfc3926));
 
 
 /* TS 26.346 V18.2.0 clause 7.2.9: "When the FEC Encoding ID indicates the "Compact No-Code FEC
