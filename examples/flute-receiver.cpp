@@ -128,6 +128,44 @@ void print_version(FILE *stream, struct argp_state * /*state*/) {
  * @param argv  Command line arguments
  * @return 0 on clean exit, -1 on failure
  */
+/**
+ *  Turn a sender-supplied Content-Location into a path that is safe to write.
+ *
+ *  Content-Location is a URI under the sender's control, so it is untrusted: it may be absolute,
+ *  walk upwards with "..", or carry a query or fragment, and any of those used directly as a path
+ *  lets the sender choose where the receiver writes. The URI's path is kept, so hierarchical
+ *  content locations still land in matching subdirectories, but every segment that could escape is
+ *  dropped: a leading slash, "." and "..". The result always sits under `output_path`, or the
+ *  current directory when none was given. Returns an empty string when nothing usable remains.
+ */
+static auto safe_output_path(const std::string& content_location, const char* output_path) -> std::string {
+  std::string s = content_location;
+  auto scheme = s.find("://");
+  if (scheme != std::string::npos) {
+    auto slash = s.find('/', scheme + 3);
+    s = (slash == std::string::npos) ? std::string() : s.substr(slash);
+  }
+  s = s.substr(0, s.find_first_of("?#"));
+
+  std::filesystem::path rel;
+  size_t pos = 0;
+  while (pos <= s.size()) {
+    auto next = s.find('/', pos);
+    auto seg = s.substr(pos, (next == std::string::npos) ? std::string::npos : next - pos);
+    if (!seg.empty() && seg != "." && seg != "..") {
+      rel /= seg;
+    }
+    if (next == std::string::npos) break;
+    pos = next + 1;
+  }
+  if (rel.empty() || rel.filename().empty()) return {};
+
+  std::filesystem::path dir = (output_path && std::strlen(output_path) > 0)
+                                ? std::filesystem::path(output_path)
+                                : std::filesystem::path(".");
+  return (dir / rel).string();
+}
+
 auto main(int argc, char **argv) -> int {
   struct ft_arguments arguments;
   /* Default values */
@@ -168,9 +206,14 @@ auto main(int argc, char **argv) -> int {
 
     receiver.register_completion_callback(
       [output_path = arguments.output_path](std::shared_ptr<LibFlute::File> file) { //NOLINT
-        std::string out_file = file->meta().content_location;
-        if (output_path && std::strlen(output_path) > 0) {
-          out_file = (std::filesystem::path(output_path) / std::filesystem::path(out_file).filename()).string();
+        // Content-Location is a URI chosen by the sender, so it is untrusted input: it can name an
+        // absolute path, walk upwards with "..", or carry a query string. Reduce it to a single safe
+        // filename before it reaches the filesystem, under the chosen output directory.
+        std::string out_file = safe_output_path(file->meta().content_location, output_path);
+        if (out_file.empty()) {
+          spdlog::warn("Refusing to write TOI {}: Content-Location yields no usable filename",
+                       file->meta().toi);
+          return;
         }
 
         spdlog::info("{} (TOI {}) has been received",
