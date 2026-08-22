@@ -826,47 +826,62 @@ auto Transmitter::send_next_packet() -> void
                                                  _session_closing, _closing_objects.count(file->meta().toi) > 0);
       bytes_queued += packet->size();
 
-      boost::asio::ip::udp::endpoint send_endpoint;
-      const char *data = nullptr;
-      size_t data_size = 0;
-      std::shared_ptr<std::vector<char>> tunnel_data;
+      /* A tunnel is an additional path, not a replacement for the announced one. Sending only the
+         encapsulated copy leaves a receiver that joins the announced destination directly, rather
+         than sitting behind the tunnel's decapsulation, with no packets at all. Both copies go out
+         when a tunnel is configured, and completion is tracked from the tunnelled send, which is
+         the primary path in that configuration; the plain copy is fire-and-forget. Without a
+         tunnel the plain send is the only one, and it carries the completion. */
       if (_tunnel_endpoint) {
-        send_endpoint = _tunnel_endpoint.value();
-        const size_t ip_hdr_len = ip_header_length(_endpoint.address().is_v6());
-        data_size = packet->size() + ip_hdr_len + 8 /* UDP header */;
-        // Own the encapsulated packet buffer via a shared_ptr held by the
-        // async_send_to completion lambda below, so it stays alive until the
-        // send actually completes (a raw new[] here with no matching delete[]
-        // would leak on every tunnelled packet).
-        tunnel_data = std::make_shared<std::vector<char>>(data_size);
-        data = tunnel_data->data();
-        auto local_address = _source_address ? _source_address.value() : _tunnel_local_address;
-        create_udp_pkt(const_cast<char*>(data) + ip_hdr_len, _endpoint, packet->data(), packet->size(), local_address);
-        create_ip_hdr(const_cast<char*>(data), _endpoint, data_size, local_address);
-      } else {
-        send_endpoint = _endpoint;
-        data = packet->data();
-        data_size = packet->size();
-      }
-      _socket.async_send_to(
-          boost::asio::buffer(data, data_size),
-          send_endpoint,
-          [file, symbols, packet, tunnel_data, this](
-              const boost::system::error_code& error,
-              std::size_t bytes_transferred)
-          {
-            (void)packet;
-            (void)tunnel_data;
-            (void)bytes_transferred;
-            if (error) {
-              spdlog::debug("sent_to error: {}", error.message());
-            } else {
-              file->mark_completed(symbols, !error);
-              if (file->complete()) {
-                file_transmitted(file->meta().toi);
+        _socket.async_send_to(
+            boost::asio::buffer(packet->data(), packet->size()), _endpoint,
+            [packet](const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
+            {
+              if (error) {
+                spdlog::debug("sent_to (plain) error: {}", error.message());
               }
-            }
-          });
+            });
+
+        /* The completion handler owns the encapsulated buffer through this shared_ptr, so it
+           outlives the asynchronous send. A raw new[] freed straight after issuing the send would
+           be read after free. */
+        const size_t ip_hdr_len = ip_header_length(_endpoint.address().is_v6());
+        const size_t data_size = packet->size() + ip_hdr_len + 8 /* UDP header */;
+        auto tunnel_data = std::make_shared<std::vector<char>>(data_size);
+        auto local_address = _source_address ? _source_address.value() : _tunnel_local_address;
+        create_udp_pkt(tunnel_data->data() + ip_hdr_len, _endpoint, packet->data(), packet->size(), local_address);
+        create_ip_hdr(tunnel_data->data(), _endpoint, data_size, local_address);
+
+        _socket.async_send_to(
+            boost::asio::buffer(*tunnel_data), _tunnel_endpoint.value(),
+            [file, symbols, packet, tunnel_data, this](
+                const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
+            {
+              if (error) {
+                spdlog::debug("sent_to (tunnel) error: {}", error.message());
+              } else {
+                file->mark_completed(symbols, !error);
+                if (file->complete()) {
+                  file_transmitted(file->meta().toi);
+                }
+              }
+            });
+      } else {
+        _socket.async_send_to(
+            boost::asio::buffer(packet->data(), packet->size()), _endpoint,
+            [file, symbols, packet, this](
+                const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
+            {
+              if (error) {
+                spdlog::debug("sent_to error: {}", error.message());
+              } else {
+                file->mark_completed(symbols, !error);
+                if (file->complete()) {
+                  file_transmitted(file->meta().toi);
+                }
+              }
+            });
+      }
     }
   }
   if (_active) {
