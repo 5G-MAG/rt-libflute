@@ -637,9 +637,9 @@ auto Transmitter::source_address(std::optional<boost::asio::ip::address> &&sourc
   return *this;
 }
 
-auto Transmitter::enable_ipsec(uint32_t spi, const std::string& key) -> void
+auto Transmitter::enable_ipsec(uint32_t spi, const std::string& key, const std::string& auth_key) -> void
 {
-  IpSec::enable_esp(spi, _mcast_address, IpSec::Direction::Out, key);
+  IpSec::enable_esp(spi, _mcast_address, IpSec::Direction::Out, key, auth_key);
 }
 
 auto Transmitter::handle_send_to(const boost::system::error_code& error) -> void

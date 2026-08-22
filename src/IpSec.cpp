@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <cstring>
+#include <vector>
 #include <iostream>
 #include "spdlog/spdlog.h"
 #include <netlink/netlink.h>
@@ -28,6 +29,11 @@
 #include <arpa/inet.h>
 #include "IpSec.h"
 #include <boost/algorithm/hex.hpp>
+
+/* The one-shot SHA256() API is deprecated in later OpenSSL versions. Transmitter.cpp uses the
+   equally-deprecated one-shot MD5() for the same reason, so the two stay consistent. */
+#define OPENSSL_SUPPRESS_DEPRECATED 1
+#include <openssl/sha.h>
 
 namespace LibFlute::IpSec {
   namespace {
@@ -97,7 +103,8 @@ namespace LibFlute::IpSec {
     /* Without this the netlink socket and its fd leak on every call. */
     nl_socket_free(sk);
   }
-  void configure_state(uint32_t spi, const std::string& dest_address, Direction direction, const std::string& key)
+  void configure_state(uint32_t spi, const std::string& dest_address, Direction direction, const std::string& key,
+                        const std::string& auth_key)
   {
     struct nl_sock *sk;
     struct nl_msg *msg;
@@ -137,9 +144,44 @@ namespace LibFlute::IpSec {
     algo->alg_key_len = binary_key.size() * 8;
     memcpy(algo->alg_key, &binary_key[0], binary_key.size());
 
+    /* RFC 4303 clause 1: "Using encryption without a strong integrity mechanism on top of it
+       (either in ESP or separately via AH) may render the confidentiality service insecure against
+       some forms of active attacks". The same clause makes confidentiality with integrity a MUST
+       for an ESP implementation and confidentiality alone a MAY, and RFC 3926 clause 7 recommends
+       packet level authentication for a FLUTE session, which this is the only means of providing.
+       So HMAC-SHA256 is attached alongside the AES encryption above. Neither document names an
+       algorithm; HMAC-SHA256 is an engineering choice, not a quoted requirement. */
+    std::vector<char> auth_algo_buf(sizeof(struct xfrm_algo) + 512, 0);
+    auto* auth_algo = reinterpret_cast<struct xfrm_algo*>(auth_algo_buf.data());
+
+    std::vector<unsigned char> auth_key_bytes;
+    if (!auth_key.empty()) {
+      for (unsigned int i = 0; i < auth_key.length(); i += 2) {
+        auth_key_bytes.push_back((unsigned char)strtol(auth_key.substr(i, 2).c_str(), nullptr, 16));
+      }
+    } else {
+      /* A caller that supplies one key predates this parameter. Deriving the authentication key
+         from the encryption key gives such a caller integrity protection without an API break,
+         and gives the two algorithms distinct key bytes. It is weaker than two independent keys,
+         which is why the parameter exists. */
+      static const std::string context = "libflute-ipsec-auth-key-v1";
+      std::vector<unsigned char> input(binary_key.begin(), binary_key.end());
+      input.insert(input.end(), context.begin(), context.end());
+      unsigned char digest[SHA256_DIGEST_LENGTH];
+      SHA256(input.data(), input.size(), digest);
+      auth_key_bytes.assign(digest, digest + SHA256_DIGEST_LENGTH);
+    }
+    if (auth_key_bytes.size() > 512) {
+      throw std::runtime_error("Authentication key is too long");
+    }
+    strcpy(auth_algo->alg_name, "hmac(sha256)");
+    auth_algo->alg_key_len = auth_key_bytes.size() * 8;
+    memcpy(auth_algo->alg_key, auth_key_bytes.data(), auth_key_bytes.size());
+
     msg = nlmsg_alloc_simple(XFRM_MSG_NEWSA, 0);
     nlmsg_append(msg, &xsinfo, sizeof(xsinfo), NLMSG_ALIGNTO);
     nla_put(msg, XFRMA_ALG_CRYPT, algo_buf.size(), algo);
+    nla_put(msg, XFRMA_ALG_AUTH, auth_algo_buf.size(), auth_algo);
 
     sk = nl_socket_alloc();
     nl_connect(sk, NETLINK_XFRM);
@@ -149,9 +191,10 @@ namespace LibFlute::IpSec {
     nl_socket_free(sk);
   }
 
-  void enable_esp(uint32_t spi, const std::string& dest_address, Direction direction, const std::string& key)
+  void enable_esp(uint32_t spi, const std::string& dest_address, Direction direction, const std::string& key,
+                   const std::string& auth_key)
   {
-    configure_state(spi, dest_address, direction, key);
+    configure_state(spi, dest_address, direction, key, auth_key);
     configure_policy(spi, dest_address, direction);
   }
 };

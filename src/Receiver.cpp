@@ -191,9 +191,9 @@ auto LibFlute::Receiver::arm_receive() -> void
       });
 }
 
-auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key) -> void
+auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key, const std::string& auth_key) -> void
 {
-  LibFlute::IpSec::enable_esp(spi, _mcast_address, LibFlute::IpSec::Direction::In, key);
+  LibFlute::IpSec::enable_esp(spi, _mcast_address, LibFlute::IpSec::Direction::In, key, auth_key);
 }
 
 auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& error,

@@ -600,7 +600,7 @@ namespace LibFlute {
       *  @param spi Security Parameter Index value to use
       *  @param aes_key AES key as a hex string (without leading 0x). Must be an even number of characters long.
       */
-      void enable_ipsec( uint32_t spi, const std::string& aes_key);
+      void enable_ipsec( uint32_t spi, const std::string& aes_key, const std::string& auth_key = "");
 
      /**
       *  Transmit a file (deprecated).

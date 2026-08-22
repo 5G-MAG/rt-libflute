@@ -19,5 +19,18 @@
 
 namespace LibFlute::IpSec {
   enum class Direction { In, Out };
-  void enable_esp(uint32_t spi, const std::string& dest_address, Direction direction, const std::string& key);
+  /**
+   *  Configure an IPsec ESP security association and policy for FLUTE traffic to or from
+   *  @p dest_address. The association carries both an encryption and an authentication
+   *  algorithm; see the citation at the call site in `IpSec.cpp` for why.
+   *
+   *  @param spi Security Parameter Index value to use
+   *  @param dest_address Destination address to apply the SA and policy to
+   *  @param direction In or Out
+   *  @param key AES encryption key, as a hex string, without a leading 0x, of even length
+   *  @param auth_key HMAC-SHA256 authentication key, in the same form. If empty, one is derived
+   *                  from @p key, so a caller supplying a single key still gets authentication.
+   */
+  void enable_esp(uint32_t spi, const std::string& dest_address, Direction direction, const std::string& key,
+                   const std::string& auth_key = "");
 };
