@@ -131,6 +131,13 @@ void ReceiverController::on_packet_event()
   _w += 1.0;
 }
 
+double ReceiverController::slow_start_floor() const
+{
+  /* RFC 3738 clause 3.2.2.6: "The recommended value for SSMINR_P is BCR_P*(1+1/P+1/P^2)." */
+  const double inv_p = 1.0 / _p.rate_drop_per_slot;
+  return _p.base_channel_rate_packets * (1.0 + inv_p + inv_p * inv_p);
+}
+
 void ReceiverController::on_loss_event_begin()
 {
   /* "At the beginning of each loss event, update W, X, and Y as follows: X = X + W, W = 0,
@@ -139,6 +146,11 @@ void ReceiverController::on_loss_event_begin()
   _w = 0.0;
   _y += 1.0;
   _loss_event = true;
+
+  /* The start-up period ends at the first loss, and every later loss lowers the threshold again.
+     RFC 3738 clause 3.2.3.4: "When a start of a loss event is detected, the value of SSR_P is
+     updated to max{SSMINR_P, P*TRR_P}." */
+  _ssr = std::max(slow_start_floor(), _p.rate_drop_per_slot * _trr);
 }
 
 void ReceiverController::on_epoch_end()
@@ -158,6 +170,23 @@ void ReceiverController::on_epoch_end()
        + G * _x / (G * _y + 1.0) * (1.0 - std::pow(one_minus_delta, G * _y + 1.0));
   _x *= (1.0 - G);
   _y *= (1.0 - G);
+
+  /* The start-up period also ends on reaching the maximum reception rate, checked here because
+     this runs once an epoch and the quantities it needs are current.
+
+     RFC 3738 clause 3.2.2.6: "When SSR_P = infinity, if (P^(-NWC-2)-1)/(P^(-NWC-1)-1)*ARR_P exceeds
+     MRR_P or SR_P, the receiver MUST set SSR_P to max{SSMINR_P, TRR_P}." */
+  if (std::isinf(_ssr) && _arr > 0.0) {
+    const double inv_p = 1.0 / _p.rate_drop_per_slot;
+    const double num = std::pow(inv_p, static_cast<double>(_nwc) + 2.0) - 1.0;
+    const double den = std::pow(inv_p, static_cast<double>(_nwc) + 1.0) - 1.0;
+    if (den > 0.0) {
+      const double projected = num / den * _arr;
+      if (projected > _t.max_reception_rate_packets || projected > _d.sender_rate_packets) {
+        _ssr = std::max(slow_start_floor(), _trr);
+      }
+    }
+  }
 
   const double z1 = _z * std::pow(one_minus_delta, _y)
                     + _x / (_y + 1.0) * (1.0 - std::pow(one_minus_delta, _y + 1.0));

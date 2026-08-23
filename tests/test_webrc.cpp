@@ -519,3 +519,69 @@ TEST(WebrcRates, AYoungerWaveOutrunsAnOlderOneAndBothOutrunTheBase) {
   EXPECT_NEAR(wave_channel_rate(1, 0.0, p) / wave_channel_rate(0, 0.0, p),
               1.0 / p.rate_drop_per_slot, 1e-12);
 }
+
+
+/* Slow start, RFC 3738 clause 3.2.2.6 and clause 3.2.3.4. SSR_P begins infinite and becomes finite
+   at the first event that ends the start-up period. */
+TEST(WebrcReceiver, StartUpBeginsWithAnInfiniteThreshold) {
+  auto rc = fresh_controller();
+  EXPECT_TRUE(rc.in_start_up());
+  EXPECT_TRUE(std::isinf(rc.slow_start_threshold()));
+}
+
+/* "The recommended value for SSMINR_P is BCR_P*(1+1/P+1/P^2)." */
+TEST(WebrcReceiver, TheSlowStartFloorMatchesTheClause) {
+  auto p = recommended();
+  ReceiverController rc(p, derive(p));
+  const double inv = 1.0 / p.rate_drop_per_slot;
+  EXPECT_NEAR(rc.slow_start_floor(),
+              p.base_channel_rate_packets * (1.0 + inv + inv * inv), 1e-12);
+}
+
+/* "When a start of a loss event is detected, the value of SSR_P is updated to
+   max{SSMINR_P, P*TRR_P}." */
+TEST(WebrcReceiver, ALossEventEndsStartUpAndSetsTheThreshold) {
+  auto p = recommended();
+  ReceiverController rc(p, derive(p));
+  rc.set_reception_rates(/*ARR_P*/ 50.0, /*TRR_P*/ 40.0);
+  ASSERT_TRUE(rc.in_start_up());
+
+  rc.on_loss_event_begin();
+  EXPECT_FALSE(rc.in_start_up());
+  EXPECT_NEAR(rc.slow_start_threshold(),
+              std::max(rc.slow_start_floor(), p.rate_drop_per_slot * 40.0), 1e-12);
+}
+
+TEST(WebrcReceiver, TheThresholdNeverFallsBelowItsFloor) {
+  auto p = recommended();
+  ReceiverController rc(p, derive(p));
+  rc.set_reception_rates(0.0, 0.0);   // P*TRR_P would be zero
+  rc.on_loss_event_begin();
+  EXPECT_NEAR(rc.slow_start_threshold(), rc.slow_start_floor(), 1e-12);
+}
+
+/* "When SSR_P = infinity, if (P^(-NWC-2)-1)/(P^(-NWC-1)-1)*ARR_P exceeds MRR_P or SR_P, the receiver
+   MUST set SSR_P to max{SSMINR_P, TRR_P}." */
+TEST(WebrcReceiver, ReachingTheMaximumReceptionRateEndsStartUp) {
+  auto p = recommended();
+  Tuning t; t.max_reception_rate_packets = 1.0;   // any real rate exceeds this
+  ReceiverController rc(p, derive(p), t);
+  rc.set_reception_rates(/*ARR_P*/ 100.0, /*TRR_P*/ 90.0);
+  ASSERT_TRUE(rc.in_start_up());
+
+  rc.on_epoch_end();
+  EXPECT_FALSE(rc.in_start_up());
+  EXPECT_NEAR(rc.slow_start_threshold(), std::max(rc.slow_start_floor(), 90.0), 1e-12);
+}
+
+/* Once the threshold is finite the target rate follows the other branch of clause 3.2.2.7. */
+TEST(WebrcReceiver, TargetRateSwitchesBranchWhenStartUpEnds) {
+  auto p = recommended();
+  Tuning t; t.max_reception_rate_packets = 1e9;
+  ReceiverController rc(p, derive(p), t);
+  rc.set_reception_rates(50.0, 40.0);
+  EXPECT_DOUBLE_EQ(rc.target_rate(), 160.0) << "4*TRR_P while SSR_P is infinite";
+
+  rc.on_loss_event_begin();
+  EXPECT_NE(rc.target_rate(), 160.0) << "now max{SSR_P, REQN} capped by MRR_P";
+}

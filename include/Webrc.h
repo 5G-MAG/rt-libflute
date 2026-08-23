@@ -14,6 +14,7 @@
 // under the License.
 
 #pragma once
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -152,6 +153,25 @@ namespace LibFlute::Webrc {
 
    /** Clears the in-progress loss event, so a join may again be considered. */
     void on_loss_event_end() { _loss_event = false; };
+
+   /**
+    *  Leave the start-up period because the maximum reception rate has been reached.
+    *
+    *  RFC 3738 clause 3.2.2.6: "When SSR_P = infinity, if (P^(-NWC-2)-1)/(P^(-NWC-1)-1)*ARR_P
+    *  exceeds MRR_P or SR_P, the receiver MUST set SSR_P to max{SSMINR_P, TRR_P}." Checked on each
+    *  epoch, so a caller need not call this itself.
+    */
+    bool in_start_up() const { return std::isinf(_ssr); };
+
+   /**
+    *  SSMINR_P, the floor a finite slow start threshold is held to.
+    *
+    *  RFC 3738 clause 3.2.2.6: "The recommended value for SSMINR_P is BCR_P*(1+1/P+1/P^2)."
+    */
+    double slow_start_floor() const;
+
+   /** SSR_P, the slow start threshold rate, infinite during the start-up period. */
+    double slow_start_threshold() const { return _ssr; };
 
    /** The end-of-epoch filter of clause 3.2.2.1, which is what updates LOSSP. */
     void on_epoch_end();
