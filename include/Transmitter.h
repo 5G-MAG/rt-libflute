@@ -704,6 +704,7 @@ namespace LibFlute {
     private:
       void send_fdt();
       void send_next_packet();
+      void send_close_session_packet();
       void fdt_send_tick(const boost::system::error_code& error);
       void start_fdt_repeat_timer();
 

@@ -765,3 +765,60 @@ TEST(FdtExpiryTest, APastExpiryIsRefusedWhenUnprofiledToo) {
   EXPECT_THROW(fdt.set_expires(1000), std::runtime_error);
   EXPECT_NO_THROW(fdt.set_expires(future_ntp(60)));
 }
+
+/* ------------------------------------------------------------------------------------------- */
+/* A packet that carries no payload, which RFC 3450 clause 4.1 provides for and RFC 3926 clause
+   3.1 gives a shape to in a FLUTE session.                                                     */
+
+/* RFC 3926 clause 3.1: "the exception that ALC packets sent in a FLUTE session with the Close
+   Session (A) flag set to 1 (signaling the end of the session) and that contain no payload
+   (carrying no information for any file or FDT) SHALL NOT carry the TOI" */
+TEST(DataLessClosePacket, CarriesTheCloseFlagAndNoToi) {
+  AlcPacket packet(/*tsi*/ 0x1234, AlcPacket::CloseSession{});
+
+  EXPECT_EQ(packet.size(), 12u) << "base word, CCI, TSI, and nothing else";
+  EXPECT_EQ(packet.size(), packet.header_length()) << "no payload means no FEC Payload ID either";
+
+  const auto* bytes = reinterpret_cast<const unsigned char*>(packet.data());
+  EXPECT_EQ(bytes[0] >> 4, 1) << "LCT version 1";
+  EXPECT_EQ((bytes[0] >> 2) & 0x03, 0) << "C=0, a 32-bit CCI";
+  EXPECT_EQ((bytes[1] >> 7) & 0x01, 1) << "S=1, a 32-bit TSI";
+  EXPECT_EQ((bytes[1] >> 5) & 0x03, 0) << "O=0, no TOI word";
+  EXPECT_EQ((bytes[1] >> 4) & 0x01, 0) << "H=0, no half-word for either field";
+  EXPECT_EQ((bytes[1] >> 1) & 0x01, 1) << "A=1, Close Session";
+  EXPECT_EQ(bytes[1] & 0x01, 0) << "B=0";
+  EXPECT_EQ(bytes[2], 3) << "three 32-bit words of header";
+
+  /* The CCI word is zero: there is no data to pace. */
+  EXPECT_EQ(bytes[4], 0); EXPECT_EQ(bytes[5], 0);
+  EXPECT_EQ(bytes[6], 0); EXPECT_EQ(bytes[7], 0);
+
+  /* The TSI, in the single word the encoding leaves for it. */
+  const uint32_t tsi = (uint32_t(bytes[8]) << 24) | (uint32_t(bytes[9]) << 16) |
+                       (uint32_t(bytes[10]) << 8) | uint32_t(bytes[11]);
+  EXPECT_EQ(tsi, 0x1234u);
+}
+
+/* Dropping the TOI drops the half-word the two fields share, which leaves the TSI one whole word.
+   RFC 5651 clause 5.1: "The TSI field is 32*S + 16*H bits in length" */
+TEST(DataLessClosePacket, RefusedRatherThanTruncatedForAWiderTsi) {
+  EXPECT_NO_THROW(AlcPacket(0xFFFFFFFFULL, AlcPacket::CloseSession{}));
+  EXPECT_THROW(AlcPacket(0x100000000ULL, AlcPacket::CloseSession{}), std::runtime_error);
+}
+
+/* The packet this library now sends must be one it can also read back, and reading it must not
+   invent a TOI.
+   RFC 3450 clause 4.1: "The total datagram length, conveyed by outer protocol headers
+   (e.g., the IP or UDP header), enables receivers to detect the absence of the ALC payload and FEC
+   Payload ID." */
+TEST(DataLessClosePacket, RoundTripsThroughTheParser) {
+  AlcPacket sent(/*tsi*/ 0xABCD, AlcPacket::CloseSession{});
+  std::vector<char> wire(sent.data(), sent.data() + sent.size());
+
+  AlcPacket received(wire.data(), wire.size());
+  EXPECT_EQ(received.tsi(), 0xABCDu);
+  EXPECT_TRUE(received.close_session_flag());
+  EXPECT_FALSE(received.close_object_flag());
+  EXPECT_EQ(received.header_length(), wire.size())
+      << "the whole datagram is header, so a receiver sees a zero-length payload";
+}

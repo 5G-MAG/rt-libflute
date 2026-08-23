@@ -329,6 +329,45 @@ LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_
   }
 }
 
+LibFlute::AlcPacket::AlcPacket(uint64_t tsi, CloseSession)
+{
+  /* RFC 3926 clause 3.1: "the exception that ALC packets sent in a FLUTE session with the Close
+     Session (A) flag set to 1 (signaling the end of the session) and that contain no payload
+     (carrying no information for any file or FDT) SHALL NOT carry the TOI"
+
+     The TSI and TOI share the half-word flag, so dropping the TOI drops the half-word too and the
+     TSI becomes a whole number of 32-bit words.
+     RFC 5651 clause 5.1: "The TSI field is 32*S + 16*H
+     bits in length"
+     One word is what this builds, which caps the TSI at 32 bits; a session with a
+     wider TSI cannot express this packet at all and says so rather than emitting a TOI the clause
+     forbids. */
+  if (tsi > 0xFFFFFFFFULL) {
+    throw std::runtime_error(
+        "a data-less Close Session packet carries no TOI, so its TSI must fit in 32 bits");
+  }
+
+  /* Base word, CCI, TSI. No TOI, no extensions, no FEC Payload ID, no payload. */
+  const uint8_t lct_header_len = 3;
+  _len = 4 * lct_header_len;
+  _buffer = (char*)calloc(_len, sizeof(char));
+
+  /* Written through the member so that this object's own accessors describe the packet it built,
+     not just the bytes on the wire. */
+  std::memset(&_lct_header, 0, sizeof(_lct_header));
+  _lct_header.version = 1;
+  _lct_header.half_word_flag = 0;
+  _lct_header.tsi_flag = 1;
+  _lct_header.toi_flag = 0;
+  _lct_header.close_session_flag = 1;
+  _lct_header.lct_header_len = lct_header_len;
+  std::memcpy(_buffer, &_lct_header, sizeof(_lct_header));
+
+  /* The CCI word stays at the zero calloc left. A session running a congestion control building
+     block has nothing to say in a packet that carries no data. */
+  *((uint32_t*)(_buffer + 8)) = htonl(static_cast<uint32_t>(tsi));
+}
+
 LibFlute::AlcPacket::~AlcPacket()
 {
   if (_buffer) free(_buffer);

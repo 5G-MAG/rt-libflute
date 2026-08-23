@@ -808,11 +808,20 @@ auto Transmitter::file_transmitted(uint32_t toi) -> void
     }
   }
 
+  bool drained = false;
   {
     std::lock_guard<std::mutex> guard(_files_mutex);
-    if (_deactivate_when_all_files_sent && _files.empty()) {
+    drained = _files.empty();
+    if (_deactivate_when_all_files_sent && drained) {
       _complete_deactivation();
     }
+  }
+
+  /* The last packet with the flag set has now gone out, but a receiver that lost it has no other
+     way to learn the session ended: once the file set empties, send_fdt() has nothing to repeat.
+     One data-less packet, once. */
+  if (_session_closing && drained) {
+    send_close_session_packet();
   }
 }
 
@@ -961,6 +970,67 @@ auto Transmitter::close_session() -> void
 {
   _session_closing = true;
   _fdt->set_complete(true);
+
+  /* Every packet from here on carries the flag, which is the whole signal while there is still
+     something to send. With an empty queue there is nothing to attach it to, so the flag would
+     reach no receiver at all; RFC 3926 clause 3.1 provides a packet for exactly that case and this
+     is where it is due. */
+  bool queue_empty = false;
+  {
+    std::lock_guard<std::mutex> guard(_files_mutex);
+    queue_empty = _files.empty();
+  }
+  if (queue_empty) {
+    send_close_session_packet();
+  }
+}
+
+/* RFC 3450 clause 4.1: "In some special cases an ALC sender may need to produce ALC packets that do
+   not contain any payload.  This may be required, for example, to signal the end of a session or to
+   convey congestion control information."
+
+   Fire and forget on both paths. There is no file to mark complete and nothing to retransmit: the
+   flag is advisory on the receiver's side, which RFC 5651 clause 5.1 puts as "the receiver SHOULD
+   assume that no more packets will be sent to the session", so a lost one costs a receiver a
+   timeout rather than data. */
+auto Transmitter::send_close_session_packet() -> void
+{
+  std::shared_ptr<AlcPacket> packet;
+  try {
+    packet = std::make_shared<AlcPacket>(_tsi, AlcPacket::CloseSession{});
+  } catch (const std::exception& ex) {
+    spdlog::warn("Not signalling end of session: {}", ex.what());
+    return;
+  }
+
+  _socket.async_send_to(
+      boost::asio::buffer(packet->data(), packet->size()), _endpoint,
+      [packet](const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
+      {
+        if (error) {
+          spdlog::debug("close session send error: {}", error.message());
+        }
+      });
+
+  if (_tunnel_endpoint) {
+    const size_t ip_hdr_len = ip_header_length(_endpoint.address().is_v6());
+    const size_t data_size = packet->size() + ip_hdr_len + 8 /* UDP header */;
+    auto tunnel_data = std::make_shared<std::vector<char>>(data_size);
+    auto local_address = _source_address ? _source_address.value() : _tunnel_local_address;
+    create_udp_pkt(tunnel_data->data() + ip_hdr_len, _endpoint, packet->data(), packet->size(),
+                   local_address);
+    create_ip_hdr(tunnel_data->data(), _endpoint, data_size, local_address);
+
+    _socket.async_send_to(
+        boost::asio::buffer(*tunnel_data), _tunnel_endpoint.value(),
+        [packet, tunnel_data](const boost::system::error_code& error,
+                              std::size_t /*bytes_transferred*/)
+        {
+          if (error) {
+            spdlog::debug("close session tunnel send error: {}", error.message());
+          }
+        });
+  }
 }
 
 auto Transmitter::close_object(uint32_t toi) -> void

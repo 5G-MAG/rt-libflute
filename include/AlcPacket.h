@@ -46,6 +46,27 @@ namespace LibFlute {
       *  @param close_session_flag Set the LCT Close Session flag (RFC 3451 clause 5.1, 'A' bit) on this packet
       *  @param close_object_flag Set the LCT Close Object flag (RFC 3451 clause 5.1, 'B' bit) on this packet
       */
+     /**
+      *  Tag selecting the data-less Close Session packet constructor below.
+      */
+      struct CloseSession {};
+
+     /**
+      *  Build a packet that carries the Close Session flag and nothing else: no payload, and
+      *  therefore no FEC Payload ID and no TOI.
+      *
+      *  RFC 3450 clause 4.1 provides for such a packet: "In some special cases an ALC sender may
+      *  need to produce ALC packets that do not contain any payload." RFC 3926 clause 3.1 gives it
+      *  this shape in a FLUTE session, requiring that it not carry the TOI.
+      *
+      *  Only expressible for a TSI of 32 bits or fewer. Dropping the TOI means dropping the
+      *  half-word flag the two fields share, which leaves the TSI a whole number of 32-bit words,
+      *  and one word is all this encoding uses. Throws above that.
+      *
+      *  @param tsi The session's Transport Session Identifier.
+      */
+      AlcPacket(uint64_t tsi, CloseSession);
+
       AlcPacket(uint64_t tsi, uint16_t toi, FecOti fec_oti, const std::vector<EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id,
                 bool close_session_flag = false, bool close_object_flag = false);
 
