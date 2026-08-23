@@ -15,6 +15,7 @@
 
 #pragma once
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace LibFlute::Webrc {
@@ -118,5 +119,104 @@ namespace LibFlute::Webrc {
   */
   double wave_channel_rate(uint32_t slots_remaining, double fraction_through_slot,
                            const Parameters& p);
+
+ /**
+  *  Receiver-side control loop of WEBRC, RFC 3738 clause 3.2.
+  *
+  *  Pure logic: it is fed events and produces a decision, and performs no I/O and joins nothing.
+  *  That is deliberate. A rate-control loop cannot be validated against itself, and RFC 3738's own
+  *  receiver depends on measurements this library has no way to reproduce in a test, so the
+  *  decision is exposed for a caller to act on rather than wired into Receiver's joins. Nothing in
+  *  the library calls it.
+  *
+  *  Not for a 3GPP session: TS 26.346 clause 7.2.4 excludes congestion control for MBMS download.
+  */
+ /** Constants of clause 3.2, at the values the RFC recommends. */
+  struct Tuning {
+    double nu = 0.3;         //< time-based smoothing, clause 3.2.2.1
+    double delta = 0.3;      //< loss-based smoothing, clause 3.2.2.1
+    double alpha = 0.25;     //< round-trip variance smoothing, clause 3.2.2.2
+    double epoch_seconds = 0.5;   //< EL, clause 3.2.2.1
+    double max_reception_rate_packets = 1e9;  //< MRR_P, clause 3.2.1
+  };
+
+  class ReceiverController {
+   public:
+    ReceiverController(const Parameters& p, const Derived& d, Tuning t = Tuning());
+
+   /** "For each packet event (whether it is a received packet or a lost packet), W = W + 1" */
+    void on_packet_event();
+
+   /** "At the beginning of each loss event, update W, X, and Y" */
+    void on_loss_event_begin();
+
+   /** Clears the in-progress loss event, so a join may again be considered. */
+    void on_loss_event_end() { _loss_event = false; };
+
+   /** The end-of-epoch filter of clause 3.2.2.1, which is what updates LOSSP. */
+    void on_epoch_end();
+
+   /**
+    *  Record the round-trip measurement a join produces, per clause 3.2.2.2.
+    *
+    *  @param join_to_first_packet_seconds FirstTime - JoinTime.
+    *  @param is_base_channel True for the base channel, which sets ARTT directly.
+    */
+    void on_join_measured(double join_to_first_packet_seconds, bool is_base_channel);
+
+   /** Marks the base channel's first packet as arrived; no join is allowed before it. */
+    void on_first_base_packet() { _base_packet_seen = true; };
+
+   /** Reception rates of clause 3.2.2.5, supplied by the caller's own measurement. */
+    void set_reception_rates(double average_packets, double target_packets);
+
+   /** Number of wave channels currently joined, NWC. */
+    void set_wave_channels_joined(uint32_t nwc) { _nwc = nwc; };
+    uint32_t wave_channels_joined() const { return _nwc; };
+
+   /** True while a join is outstanding, which blocks another. */
+    void set_joining(bool joining) { _joining = joining; };
+
+    double average_loss_probability() const { return _lossp; };
+    double average_round_trip_seconds() const { return _artt; };
+
+   /**
+    *  REQN, the TCP throughput equation.
+    *
+    *  RFC 3738 clause 3.2.2.3: "REQN = 1/(ARTT*sqrt{LOSSP}(0.816 + 7.35*LOSSP*(1+32*LOSSP^2)))"
+    */
+    double rate_equation() const;
+
+   /**
+    *  TRATE, the target rate.
+    *
+    *  RFC 3738 clause 3.2.2.7: "TRATE = min{max{SSR_P, REQN}, MRR_P}. When SSR_P = infinity, TRATE
+    *  is computed as TRATE = min{4*TRR_P, MRR_P}."
+    */
+    double target_rate() const;
+
+   /**
+    *  Whether the next higher layer may be joined, clause 3.2.3.6.
+    *
+    *  Applies the mandatory refusals of that clause and its rate inequality. The optional checks it
+    *  describes are not applied, and are named in the implementation.
+    */
+    bool may_join_next_layer() const;
+
+   private:
+    Parameters _p;
+    Derived _d;
+    Tuning _t;
+    // clause 3.2.2.1
+    double _w = 0.0, _x = 0.0, _y = 0.0, _z = 0.0, _lossp = 0.0;
+    // clause 3.2.2.2
+    double _artt = 0.0, _v = 0.0;
+    uint32_t _k = 0;
+    // clause 3.2.2.5 and 3.2.2.6
+    double _arr = 0.0, _trr = 0.0;
+    double _ssr = std::numeric_limits<double>::infinity();
+    uint32_t _nwc = 0;
+    bool _loss_event = false, _joining = false, _base_packet_seen = false;
+  };
 
 }  // namespace LibFlute::Webrc

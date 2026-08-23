@@ -337,3 +337,139 @@ TEST(WebrcTransmitter, NoCciBeforeTheBuildingBlockIsEnabled) {
   auto tx = unprofiled_tx(io, "239.31.0.5");
   EXPECT_FALSE(tx->webrc_cci_for(0).has_value());
 }
+
+
+/* The receiver control loop of RFC 3738 clause 3.2. Pure logic, driven by events, producing a
+   decision. Nothing in the library calls it; these check the formulas, not a running session. */
+namespace {
+
+ReceiverController fresh_controller() {
+  auto p = recommended();
+  return ReceiverController(p, derive(p));
+}
+
+}  // namespace
+
+/* "For each packet event (whether it is a received packet or a lost packet), W = W + 1" and
+   "At the beginning of each loss event, update W, X, and Y". With no loss at all, LOSSP stays at
+   its floor, because max{Z1,Z2,1} keeps the reciprocal at or below 1. */
+TEST(WebrcReceiver, LossProbabilityStaysBoundedWithoutLossEvents) {
+  auto rc = fresh_controller();
+  for (int i = 0; i < 1000; ++i) rc.on_packet_event();
+  rc.on_epoch_end();
+  EXPECT_GT(rc.average_loss_probability(), 0.0);
+  EXPECT_LE(rc.average_loss_probability(), 1.0);
+}
+
+TEST(WebrcReceiver, LossEventsRaiseTheLossProbability) {
+  auto rc = fresh_controller();
+  for (int i = 0; i < 200; ++i) rc.on_packet_event();
+  rc.on_epoch_end();
+  const double quiet = rc.average_loss_probability();
+
+  for (int e = 0; e < 20; ++e) {
+    for (int i = 0; i < 5; ++i) rc.on_packet_event();
+    rc.on_loss_event_begin();
+    rc.on_loss_event_end();
+    rc.on_epoch_end();
+  }
+  EXPECT_GT(rc.average_loss_probability(), quiet)
+      << "frequent loss events must raise the estimate";
+}
+
+/* "REQN = 1/(ARTT*sqrt{LOSSP}(0.816 + 7.35*LOSSP*(1+32*LOSSP^2)))" */
+TEST(WebrcReceiver, TheRateEquationMatchesTheClause) {
+  auto rc = fresh_controller();
+  rc.on_join_measured(0.100, /*is_base_channel*/ true);   // ARTT = 100 ms
+  for (int i = 0; i < 50; ++i) { rc.on_packet_event(); }
+  rc.on_loss_event_begin(); rc.on_loss_event_end();
+  rc.on_epoch_end();
+
+  const double artt = rc.average_round_trip_seconds();
+  const double l = rc.average_loss_probability();
+  const double expected = 1.0 / (artt * std::sqrt(l) * (0.816 + 7.35 * l * (1.0 + 32.0 * l * l)));
+  EXPECT_NEAR(rc.rate_equation(), expected, expected * 1e-12);
+}
+
+/* "If it is the base channel that has been joined, ARTT is set to FirstTime-JoinTime" */
+TEST(WebrcReceiver, TheBaseChannelSetsTheRoundTripDirectly) {
+  auto rc = fresh_controller();
+  rc.on_join_measured(0.250, true);
+  EXPECT_DOUBLE_EQ(rc.average_round_trip_seconds(), 0.250);
+}
+
+/* "ARTT is updated to max{P*ARTT,(1-Rho)*ARTT+Rho*MRTT}" -- the floor is what keeps a negative
+   MRTT, which the clause says can happen, from dragging ARTT down without limit. */
+TEST(WebrcReceiver, ANegativeMeasurementCannotDragTheRoundTripBelowItsFloor) {
+  auto p = recommended();
+  ReceiverController rc(p, derive(p));
+  rc.on_join_measured(0.200, true);
+  const double before = rc.average_round_trip_seconds();
+  rc.on_join_measured(-5.0, /*wave channel*/ false);
+  EXPECT_GE(rc.average_round_trip_seconds(), p.rate_drop_per_slot * before);
+}
+
+/* "When SSR_P = infinity, TRATE is computed as TRATE = min{4*TRR_P, MRR_P}." SSR_P starts at
+   infinity, per clause 3.2.2.6. */
+TEST(WebrcReceiver, TargetRateDuringStartUpIsFourTimesTheTargetReceptionRate) {
+  auto p = recommended();
+  Tuning t; t.max_reception_rate_packets = 1e9;
+  ReceiverController rc(p, derive(p), t);
+  rc.set_reception_rates(/*ARR_P*/ 10.0, /*TRR_P*/ 25.0);
+  EXPECT_DOUBLE_EQ(rc.target_rate(), 100.0);
+}
+
+TEST(WebrcReceiver, TargetRateIsCappedByTheMaximumReceptionRate) {
+  auto p = recommended();
+  Tuning t; t.max_reception_rate_packets = 40.0;
+  ReceiverController rc(p, derive(p), t);
+  rc.set_reception_rates(10.0, 25.0);
+  EXPECT_DOUBLE_EQ(rc.target_rate(), 40.0) << "MRR_P caps it";
+}
+
+/* Clause 3.2.3.6's mandatory refusals. */
+TEST(WebrcReceiver, NoJoinBeforeTheFirstBaseChannelPacket) {
+  auto rc = fresh_controller();
+  rc.set_reception_rates(1.0, 1000.0);
+  EXPECT_FALSE(rc.may_join_next_layer());
+}
+
+TEST(WebrcReceiver, NoJoinDuringALossEventOrAnOutstandingJoin) {
+  auto rc = fresh_controller();
+  rc.on_first_base_packet();
+  rc.set_reception_rates(1.0, 1000.0);
+  ASSERT_TRUE(rc.may_join_next_layer()) << "otherwise the refusals below prove nothing";
+
+  rc.on_loss_event_begin();
+  EXPECT_FALSE(rc.may_join_next_layer()) << "loss event in progress";
+  rc.on_loss_event_end();
+
+  rc.set_joining(true);
+  EXPECT_FALSE(rc.may_join_next_layer()) << "join in progress";
+  rc.set_joining(false);
+  EXPECT_TRUE(rc.may_join_next_layer());
+}
+
+/* "If NWC = N the receiver MUST not join." */
+TEST(WebrcReceiver, NoJoinOnceEveryActiveWaveIsJoined) {
+  auto p = recommended();
+  ReceiverController rc(p, derive(p));
+  rc.on_first_base_packet();
+  rc.set_reception_rates(1.0, 1000.0);
+  rc.set_wave_channels_joined(p.wave_duration_slots);
+  EXPECT_FALSE(rc.may_join_next_layer());
+}
+
+/* "If ... TRATE < ARR_P*((1/P)^{NWC+2}-1)/((1/P)^{NWC+1}-1), the receiver MUST not join." */
+TEST(WebrcReceiver, NoJoinWhenTheTargetRateIsBelowTheThreshold) {
+  auto p = recommended();
+  ReceiverController rc(p, derive(p));
+  rc.on_first_base_packet();
+  // A large average reception rate puts the threshold above any target rate.
+  rc.set_reception_rates(/*ARR_P*/ 1e6, /*TRR_P*/ 1.0);
+  EXPECT_FALSE(rc.may_join_next_layer());
+
+  // A target rate well above the threshold permits it.
+  rc.set_reception_rates(/*ARR_P*/ 1.0, /*TRR_P*/ 1e6);
+  EXPECT_TRUE(rc.may_join_next_layer());
+}
