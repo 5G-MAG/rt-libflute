@@ -884,10 +884,30 @@ auto Transmitter::send_next_packet() -> void
       if (_webrc) {
         const auto active = Webrc::active_wave_channels(_webrc->ctsi, _webrc->params,
                                                         _webrc->derived);
-        /* The base channel is always active, so the choice runs over it plus the active waves. */
-        const size_t choices = active.size() + 1;
-        const size_t pick = _webrc_next_channel++ % choices;
-        channel_index = (pick == 0) ? 0 : active[pick - 1] + 1;
+        /* An FDT Instance goes to the base channel and nowhere else. Every receiver is joined to
+           the base channel, and none can interpret a single content packet until it holds the FDT
+           describing that object, so spreading the FDT over wave channels would deny the whole
+           session to any receiver that has not climbed to those layers.
+
+           RFC 3926 clause 4, recommendation 1: "The layers to which packets for FDT Instances are
+           sent SHOULD NOT be biased towards those layers to which lower rate receivers are not
+           joined."
+
+           The same recommendation names putting every FDT packet in the lowest layer as an
+           acceptable way to satisfy it, which is what this does. Its recommendation 2 is thereby
+           moot: it applies only where FDT packets do go to layers a
+           lower rate receiver does not receive, and asks for an FEC scheme other than Encoding ID 0
+           in that case. This sender always carries the FDT as Compact No-Code, so keeping the FDT
+           on the base channel is what makes that safe.
+
+           Content objects are spread over the base channel and the waves active in this slot. */
+        if (file->meta().toi == 0) {
+          channel_index = 0;
+        } else {
+          const size_t choices = active.size() + 1;
+          const size_t pick = _webrc_next_channel++ % choices;
+          channel_index = (pick == 0) ? 0 : active[pick - 1] + 1;
+        }
         cci = webrc_cci_for(channel_index);
         if (cci) {
           auto& psn = _webrc->psn[cci->channel_number];

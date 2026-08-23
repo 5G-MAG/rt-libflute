@@ -473,3 +473,25 @@ TEST(WebrcReceiver, NoJoinWhenTheTargetRateIsBelowTheThreshold) {
   rc.set_reception_rates(/*ARR_P*/ 1.0, /*TRR_P*/ 1e6);
   EXPECT_TRUE(rc.may_join_next_layer());
 }
+
+
+/* RFC 3926 clause 4, recommendation 1: "The layers to which packets for FDT Instances are sent
+   SHOULD NOT be biased towards those layers to which lower rate receivers are not joined."
+
+   A
+   receiver holds no object until it holds the FDT describing it, so an FDT spread over wave
+   channels denies the session to anyone who has not climbed to those layers. The FDT therefore goes
+   to the base channel only, which is the case the clause explicitly calls ok. */
+TEST(WebrcTransmitter, TheFdtGoesOnlyToTheBaseChannel) {
+  boost::asio::io_context io;
+  auto tx = unprofiled_tx(io, "239.31.0.6");
+  auto d = derive(recommended());
+  tx->enable_webrc(recommended(), wave_addresses(d.wave_channels));
+
+  /* The base channel's Congestion Control Information is what an FDT packet must carry, whatever
+     the round-robin over content channels has reached. */
+  auto base = tx->webrc_cci_for(0);
+  ASSERT_TRUE(base.has_value());
+  EXPECT_EQ(base->channel_number, d.wave_channels)
+      << "the FDT rides the base channel, which takes CN = T";
+}
