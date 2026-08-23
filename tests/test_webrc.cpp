@@ -11,7 +11,10 @@
 #include <cmath>
 #include <stdexcept>
 
+#include <boost/asio.hpp>
+
 #include "AlcPacket.h"
+#include "Transmitter.h"
 #include "EncodingSymbol.h"
 #include "Webrc.h"
 
@@ -252,4 +255,85 @@ TEST(WebrcCci, TheFinalPsnOfAWaveIsRepresentable) {
   const auto* b = reinterpret_cast<const unsigned char*>(pkt.data());
   EXPECT_EQ(b[6], 0xFF);
   EXPECT_EQ(b[7], 0xFF);
+}
+
+
+/* Wiring the schedule to a real Transmitter. */
+namespace {
+
+std::vector<std::pair<std::string, unsigned short>> wave_addresses(uint32_t count) {
+  std::vector<std::pair<std::string, unsigned short>> v;
+  for (uint32_t i = 0; i < count; ++i) {
+    v.emplace_back("239.30." + std::to_string(i / 250) + "." + std::to_string(1 + i % 250),
+                   static_cast<unsigned short>(6000 + i));
+  }
+  return v;
+}
+
+std::unique_ptr<LibFlute::Transmitter> unprofiled_tx(boost::asio::io_context& io, const char* addr) {
+  return std::make_unique<LibFlute::Transmitter>(
+      addr, 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io, std::nullopt,
+      LibFlute::FileDeliveryTable::FDT_NS_NONE, /*active*/ false, std::nullopt,
+      LibFlute::Profile::Unprofiled);
+}
+
+}  // namespace
+
+/* TS 26.346 V18.2.0 clause 7.2.4: "For simplicity of congestion control, FLUTE channelization shall
+   be provided by a single FLUTE channel with single rate transport." */
+TEST(WebrcTransmitter, RefusedUnderThe3gppProfiles) {
+  boost::asio::io_context io;
+  LibFlute::Transmitter tx("239.31.0.1", 5000, 1, 1400, 0, io, std::nullopt,
+                           LibFlute::FileDeliveryTable::FDT_NS_NONE, false, std::nullopt,
+                           LibFlute::Profile::Ts26517);
+  auto d = derive(recommended());
+  EXPECT_THROW(tx.enable_webrc(recommended(), wave_addresses(d.wave_channels)),
+               std::runtime_error);
+  EXPECT_FALSE(tx.webrc_enabled());
+}
+
+TEST(WebrcTransmitter, EnablingOpensOneChannelPerWaveChannel) {
+  boost::asio::io_context io;
+  auto tx = unprofiled_tx(io, "239.31.0.2");
+  auto d = derive(recommended());
+
+  tx->enable_webrc(recommended(), wave_addresses(d.wave_channels));
+  EXPECT_TRUE(tx->webrc_enabled());
+  // The session's own destination is the base channel, so T wave channels plus it.
+  EXPECT_EQ(tx->channel_count(), d.wave_channels + 1);
+}
+
+TEST(WebrcTransmitter, TheWrongNumberOfAddressesIsRefused) {
+  boost::asio::io_context io;
+  auto tx = unprofiled_tx(io, "239.31.0.3");
+  auto d = derive(recommended());
+  EXPECT_THROW(tx->enable_webrc(recommended(), wave_addresses(d.wave_channels - 1)),
+               std::runtime_error);
+  EXPECT_FALSE(tx->webrc_enabled());
+}
+
+/* "CN for the base channel is T, and the CNs for the wave channels are 0 through T-1." */
+TEST(WebrcTransmitter, ChannelZeroIsTheBaseChannelAndTakesCnEqualToT) {
+  boost::asio::io_context io;
+  auto tx = unprofiled_tx(io, "239.31.0.4");
+  auto d = derive(recommended());
+  tx->enable_webrc(recommended(), wave_addresses(d.wave_channels));
+
+  auto base = tx->webrc_cci_for(0);
+  ASSERT_TRUE(base.has_value());
+  EXPECT_EQ(base->channel_number, d.wave_channels) << "the base channel takes CN = T";
+
+  auto first_wave = tx->webrc_cci_for(1);
+  ASSERT_TRUE(first_wave.has_value());
+  EXPECT_EQ(first_wave->channel_number, 0) << "added channel 1 is wave channel 0";
+
+  auto last_wave = tx->webrc_cci_for(d.wave_channels);
+  ASSERT_TRUE(last_wave.has_value());
+  EXPECT_EQ(last_wave->channel_number, d.wave_channels - 1);
+}
+
+TEST(WebrcTransmitter, NoCciBeforeTheBuildingBlockIsEnabled) {
+  boost::asio::io_context io;
+  auto tx = unprofiled_tx(io, "239.31.0.5");
+  EXPECT_FALSE(tx->webrc_cci_for(0).has_value());
 }

@@ -872,8 +872,32 @@ auto Transmitter::send_next_packet() -> void
       for(const auto& symbol : symbols) {
         spdlog::debug("sending TOI {} SBN {} ID {}", file->meta().toi, symbol.source_block_number(), symbol.id() );
       }
+      /* With WEBRC running, each packet goes to one of the session's channels rather than always to
+         the announced destination, and carries the Congestion Control Information naming that
+         channel. Channels are taken in turn among those active in the current time slot, the base
+         channel included, which spreads an object over the waves a receiver may or may not have
+         joined. The per-slot rates of RFC 3738 clause 3.1.2 are not yet used to weight that choice;
+         see the note in enable_webrc's documentation. */
+      advance_webrc_slot_if_due();
+      size_t channel_index = 0;
+      std::optional<CongestionControlInfo> cci;
+      if (_webrc) {
+        const auto active = Webrc::active_wave_channels(_webrc->ctsi, _webrc->params,
+                                                        _webrc->derived);
+        /* The base channel is always active, so the choice runs over it plus the active waves. */
+        const size_t choices = active.size() + 1;
+        const size_t pick = _webrc_next_channel++ % choices;
+        channel_index = (pick == 0) ? 0 : active[pick - 1] + 1;
+        cci = webrc_cci_for(channel_index);
+        if (cci) {
+          auto& psn = _webrc->psn[cci->channel_number];
+          psn = static_cast<uint16_t>(psn + 1);  // consecutive modulo 2^16, clause 5.1
+        }
+      }
+
       auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id(),
-                                                 _session_closing, _closing_objects.count(file->meta().toi) > 0);
+                                                 _session_closing, _closing_objects.count(file->meta().toi) > 0,
+                                                 cci);
       bytes_queued += packet->size();
 
       /* A tunnel is an additional path, not a replacement for the announced one. Sending only the
@@ -917,8 +941,10 @@ auto Transmitter::send_next_packet() -> void
               }
             });
       } else {
-        _socket.async_send_to(
-            boost::asio::buffer(packet->data(), packet->size()), _endpoint,
+        /* The chosen channel, which is the session's own destination unless WEBRC is spreading the
+           object over its wave channels. */
+        channel_socket(channel_index).async_send_to(
+            boost::asio::buffer(packet->data(), packet->size()), channel_endpoint(channel_index),
             [file, symbols, packet, this](
                 const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
             {
@@ -982,6 +1008,84 @@ auto Transmitter::remove_channel(size_t index) -> bool
   if (index == 0 || index > _extra_channels.size()) return false;
   _extra_channels.erase(_extra_channels.begin() + static_cast<long>(index - 1));
   return true;
+}
+
+auto Transmitter::enable_webrc(
+    const Webrc::Parameters& params,
+    const std::vector<std::pair<std::string, unsigned short>>& wave_channel_addresses) -> void
+{
+  /* Not available to a 3GPP session.
+
+     TS 26.346 V18.2.0 clause 7.2.4: "For simplicity of congestion
+     control, FLUTE channelization shall be provided by a single FLUTE channel with single rate
+     transport." Clause 7.2.7 fixes the CCI at a 32-bit zero besides. */
+  if (is_3gpp(_profile)) {
+    throw std::runtime_error(
+        "congestion control is not used under the 3GPP profiles, which require a single channel at "
+        "a single rate; use Profile::Unprofiled");
+  }
+
+  auto derived = Webrc::derive(params);  // throws on inputs that cannot produce a schedule
+
+  /* One address per wave channel. The session's own destination is the base channel, so it is not
+     among them. Refused rather than padded or truncated: a session sending waves to the wrong
+     number of channels is not the session its description announces. */
+  if (wave_channel_addresses.size() != derived.wave_channels) {
+    throw std::runtime_error(
+        "WEBRC needs exactly one address per wave channel, T of them, and T is derived from the "
+        "parameters; " + std::to_string(derived.wave_channels) + " expected, " +
+        std::to_string(wave_channel_addresses.size()) + " given");
+  }
+
+  for (const auto& [address, port] : wave_channel_addresses) {
+    if (add_channel(address, port) == 0) {
+      throw std::runtime_error("WEBRC: could not open wave channel to " + address);
+    }
+  }
+
+  WebrcState state;
+  state.params = params;
+  state.derived = derived;
+  state.slot_started = std::chrono::steady_clock::now();
+  state.ctsi = 0;
+  /* One sequence number per channel, the base channel taking index T. */
+  state.psn.assign(derived.wave_channels + 1, 0);
+  _webrc = std::move(state);
+
+  spdlog::info("Transmitter: WEBRC enabled, {} wave channels plus the base channel, {}s time slots",
+               derived.wave_channels, params.time_slot_duration_seconds);
+}
+
+auto Transmitter::advance_webrc_slot_if_due() -> void
+{
+  if (!_webrc) return;
+  /* RFC 3738 clause 5.1: "The Current Time Slot Index increases by one modulo T each TSD seconds at
+     the sender". */
+  const auto now = std::chrono::steady_clock::now();
+  const double elapsed = std::chrono::duration<double>(now - _webrc->slot_started).count();
+  if (elapsed < _webrc->params.time_slot_duration_seconds) return;
+
+  const auto slots = static_cast<uint32_t>(elapsed / _webrc->params.time_slot_duration_seconds);
+  _webrc->ctsi = (_webrc->ctsi + slots) % _webrc->derived.wave_channels;
+  _webrc->slot_started += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double>(slots * _webrc->params.time_slot_duration_seconds));
+}
+
+auto Transmitter::webrc_cci_for(size_t channel_index) const -> std::optional<CongestionControlInfo>
+{
+  if (!_webrc) return std::nullopt;
+  /* Channel 0 is the session's own destination, which is WEBRC's base channel and takes CN = T.
+     Added channel i is wave channel i-1. */
+  const uint8_t cn = channel_index == 0
+      ? Webrc::base_channel_number(_webrc->derived)
+      : static_cast<uint8_t>(channel_index - 1);
+  if (cn >= _webrc->psn.size()) return std::nullopt;
+
+  CongestionControlInfo cci;
+  cci.current_time_slot_index = static_cast<uint8_t>(_webrc->ctsi);
+  cci.channel_number = cn;
+  cci.packet_sequence_number = _webrc->psn[cn];
+  return cci;
 }
 
 auto Transmitter::activate() -> void

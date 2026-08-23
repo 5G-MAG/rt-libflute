@@ -20,6 +20,7 @@
 #include <atomic>
 #include <chrono>
 #include <queue>
+#include <utility>
 #include <vector>
 #include <memory>
 #include <string>
@@ -29,6 +30,7 @@
 #include <optional>
 //#include "File.h"
 #include "AlcPacket.h"
+#include "Webrc.h"
 #include "FileDeliveryTable.h"
 
 namespace LibFlute {
@@ -559,6 +561,32 @@ namespace LibFlute {
       size_t add_channel(const std::string& address, unsigned short port);
 
      /**
+      *  Run the WEBRC congestion control building block over this session's channels.
+      *
+      *  RFC 5775 clause 2.2: "At a minimum, implementations of ALC MUST support [RFC3738]." This is
+      *  the sender half. Packets are distributed over a base channel and T wave channels according
+      *  to the schedule of RFC 3738 clause 3.1, and each carries the Congestion Control Information
+      *  of clause 5.1 so a receiver can tell the channels apart.
+      *
+      *  Refused under a 3GPP profile: TS 26.346 clause 7.2.4 excludes congestion control for MBMS
+      *  download and clause 7.2.7 fixes the CCI at a 32-bit zero.
+      *
+      *  @param params WEBRC inputs; the derived cycle length T decides how many addresses are needed.
+      *  @param wave_channel_addresses One address per wave channel, T of them, each distinct from
+      *         the session's own address, which serves as the base channel.
+      *  @throws std::runtime_error under a 3GPP profile, or if the wrong number of addresses is
+      *          given, so a misconfigured session fails at setup rather than on the wire.
+      */
+      void enable_webrc(const Webrc::Parameters& params,
+                        const std::vector<std::pair<std::string, unsigned short>>& wave_channel_addresses);
+
+     /** Whether the WEBRC building block is running on this session. */
+      bool webrc_enabled() const { return _webrc.has_value(); };
+
+     /** The Congestion Control Information the next packet on a channel would carry, for tests. */
+      std::optional<CongestionControlInfo> webrc_cci_for(size_t channel_index) const;
+
+     /**
       *  Remove a channel added by add_channel(). Channel 0 cannot be removed. Indices above the one
       *  removed shift down, so remove from the highest index first when removing several.
       */
@@ -760,6 +788,23 @@ namespace LibFlute {
         std::unique_ptr<boost::asio::ip::udp::socket> socket;
       };
       std::vector<Channel> _extra_channels;
+
+      /** WEBRC state, present only while the building block is running. */
+      struct WebrcState {
+        Webrc::Parameters params;
+        Webrc::Derived derived;
+        std::chrono::steady_clock::time_point slot_started;
+        uint32_t ctsi = 0;
+        /** Packet sequence number per channel, indexed by channel number; the base channel is T. */
+        std::vector<uint16_t> psn;
+      };
+      std::optional<WebrcState> _webrc;
+      size_t _webrc_next_channel = 0;
+      /** Socket a channel sends on; channel 0 is the session's own. */
+      boost::asio::ip::udp::socket& channel_socket(size_t index) {
+        return index == 0 ? _socket : *_extra_channels.at(index - 1).socket;
+      };
+      void advance_webrc_slot_if_due();
       boost::asio::io_context& _io_context;
       boost::asio::steady_timer _send_timer;
       boost::asio::steady_timer _fdt_timer;
