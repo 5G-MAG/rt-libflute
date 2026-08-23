@@ -170,7 +170,12 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                         ext_ptr += 2;
                         _fec_oti.transfer_length |= (uint64_t)(ntohl(*(uint32_t*)ext_ptr));
                         ext_ptr += 4;
-                        ext_ptr += 2; // reserved
+                        /* The FEC Instance ID, not a reserved field. RFC 3926 clause 5.1.1:
+                           "It is only present if the value of FEC Encoding ID is in the range of
+                           128-255. When the value of FEC Encoding ID is in the range of 0-127, this
+                           field is set to 0." Compact No-Code is 0, so it is stepped over rather
+                           than read; the width is the same either way. */
+                        ext_ptr += 2;
                         _fec_oti.encoding_symbol_length = ntohs(*(uint16_t*)ext_ptr);
                         ext_ptr += 2;
                         _fec_oti.max_source_block_length = ntohl(*(uint32_t*)ext_ptr);
@@ -208,12 +213,22 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                       break;
                     }
       case EXT_CENC: {
+                       /* The set of algorithms is open: RFC 3926 clause 3.4.3 says of the CENC
+                          field that "The definition of this field is outside the scope of this
+                          specification." A value this library does not know therefore has to be
+                          refused rather than ignored. Falling through to NONE would hand the
+                          undecoded bytes to the FDT parser as though they were XML, which fails
+                          somewhere further on with an error naming the wrong thing. */
                        uint8_t encoding = *ext_ptr;
                        switch (encoding) {
                          case 0: _content_encoding = ContentEncoding::NONE; break;
                          case 1: _content_encoding = ContentEncoding::ZLIB; break;
                          case 2: _content_encoding = ContentEncoding::DEFLATE; break;
                          case 3: _content_encoding = ContentEncoding::GZIP; break;
+                         default:
+                           throw std::runtime_error(
+                               "EXT_CENC names content encoding " + std::to_string(encoding) +
+                               ", which this library cannot decode");
                        }
                        break;
                      }
@@ -302,7 +317,12 @@ LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_
     hdr_ptr += 2;
     *((uint32_t*)hdr_ptr) = htonl(static_cast<uint32_t>(_fec_oti.transfer_length & 0xFFFFFFFF));
     hdr_ptr += 4;
-    hdr_ptr += 2; // reserved
+    /* The FEC Instance ID, left at the zero the buffer already holds, which is what a
+       Fully-Specified scheme requires.
+
+       RFC 3926 clause 5.1.1: "When the value of FEC Encoding ID is in the range of 0-127, this
+       field is set to 0." */
+    hdr_ptr += 2;
     *((uint16_t*)hdr_ptr) = htons(_fec_oti.encoding_symbol_length);
     hdr_ptr += 2;
     *((uint32_t*)hdr_ptr) = htonl(_fec_oti.max_source_block_length);
