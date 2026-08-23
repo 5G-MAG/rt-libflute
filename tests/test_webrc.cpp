@@ -585,3 +585,69 @@ TEST(WebrcReceiver, TargetRateSwitchesBranchWhenStartUpEnds) {
   rc.on_loss_event_begin();
   EXPECT_NE(rc.target_rate(), 160.0) << "now max{SSR_P, REQN} capped by MRR_P";
 }
+
+/* ------------------------------------------------------------------------------------------- */
+/* The receiver side: a session with no congestion control is refused, and a received packet's
+   Congestion Control Information is read back in WEBRC's short format.                         */
+
+#include <boost/asio.hpp>
+
+#include "AlcPacket.h"
+#include "Receiver.h"
+
+namespace {
+  LibFlute::Webrc::SessionChannels session_channels() {
+    LibFlute::Webrc::SessionChannels sc;
+    sc.params = recommended();
+    const auto d = derive(sc.params);
+    for (uint32_t i = 0; i < d.wave_channels; i++) {
+      sc.wave_channels.emplace_back("232.0.1." + std::to_string(i + 1), 40085);
+    }
+    return sc;
+  }
+}
+
+/* RFC 3450 clause 4.5: "If a receiver is not able to implement the multiple rate congestion control
+   building block it MUST NOT join the session." */
+TEST(WebrcReceiverWiring, UnprofiledSessionIsRefusedWithoutCongestionControl) {
+  boost::asio::io_context io;
+  EXPECT_THROW(
+      LibFlute::Receiver("0.0.0.0", "232.0.0.1", 40085, 0, io, "", LibFlute::Profile::Unprofiled),
+      std::runtime_error);
+}
+
+/* The count of wave channel addresses is not free: T comes out of the parameters. */
+TEST(WebrcReceiverWiring, WaveChannelAddressesMustMatchTheDerivedCount) {
+  boost::asio::io_context io;
+  auto sc = session_channels();
+  sc.wave_channels.pop_back();
+  EXPECT_THROW(
+      LibFlute::Receiver("0.0.0.0", "232.0.0.1", 40085, 0, io, "", LibFlute::Profile::Unprofiled,
+                         sc),
+      std::runtime_error);
+}
+
+/* RFC 3738 clause 5.1 gives the short format the C=0 header selects: one byte of CTSI, one byte of
+   channel number, two bytes of packet sequence number. */
+TEST(WebrcReceiverWiring, ShortFormatCongestionControlInformationIsReadBack) {
+  /* An LCT header with V=1, C=0, a 32-bit TSI and a 32-bit TOI, so the CCI sits where the short
+     format puts it: immediately after the fixed four bytes. */
+  unsigned char pkt[24] = {0};
+  pkt[0] = 0x10;   // V=1, C=0, PSI=0
+  pkt[1] = 0xa0;   // S=1 (32-bit TSI), O=1 (32-bit TOI), no half-word, no SCT/ERT, no Close flags
+  pkt[2] = 0x04;   // LCT header length, in 32-bit words: fixed, CCI, TSI, TOI
+  pkt[3] = 0x00;   // codepoint
+  pkt[4] = 0x2a;   // CTSI
+  pkt[5] = 0x05;   // channel number
+  pkt[6] = 0x01;   // PSN, high byte
+  pkt[7] = 0x02;   // PSN, low byte
+  pkt[11] = 0x01;  // TSI
+  pkt[15] = 0x00;  // TOI, the FDT
+
+  LibFlute::AlcPacket alc(reinterpret_cast<char*>(pkt), sizeof(pkt));
+  const auto cci = alc.congestion_control_info();
+  ASSERT_TRUE(cci.has_value());
+  EXPECT_EQ(cci->current_time_slot_index, 0x2a);
+  EXPECT_EQ(cci->channel_number, 0x05);
+  EXPECT_EQ(cci->packet_sequence_number, 0x0102);
+}

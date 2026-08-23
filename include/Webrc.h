@@ -17,6 +17,8 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace LibFlute::Webrc {
@@ -120,6 +122,18 @@ namespace LibFlute::Webrc {
   */
   double wave_channel_rate(uint32_t slots_remaining, double fraction_through_slot,
                            const Parameters& p);
+
+ /**
+  *  Everything a receiver needs to run the building block: the parameters, and the channels the
+  *  session announces. RFC 3738 clause 3.2.1: "Before joining a session the receiver MUST know the
+  *  mapping between the CNs and the channels."
+  */
+  struct SessionChannels {
+    Parameters params;
+    /** One entry per wave channel, in channel-number order. The session's own address is the base
+     *  channel and is not among them. */
+    std::vector<std::pair<std::string, unsigned short>> wave_channels;
+  };
 
  /**
   *  Receiver-side control loop of WEBRC, RFC 3738 clause 3.2.

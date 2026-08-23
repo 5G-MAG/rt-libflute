@@ -117,6 +117,16 @@ namespace LibFlute {
       size_t header_length() const  { return _lct_header.lct_header_len * 4; };
 
      /**
+      *  Congestion Control Information carried by a received packet, if the field held one.
+      *
+      *  A session running no building block sends the field as zeros, which reads back as a
+      *  well-formed value naming channel 0 with sequence number 0. Only a receiver that knows the
+      *  session runs WEBRC should interpret it, which is why this is a plain accessor rather than
+      *  something the parser acts on. Absent for a packet this object built for sending.
+      */
+      std::optional<CongestionControlInfo> congestion_control_info() const { return _cci; };
+
+     /**
       *  Get the FDT instance ID
       */
       uint32_t fdt_instance_id() const { return _fdt_instance_id; };
@@ -178,6 +188,7 @@ namespace LibFlute {
       ContentEncoding _content_encoding = ContentEncoding::NONE;
       FecOti _fec_oti = {};
       bool _has_fti = false;
+      std::optional<CongestionControlInfo> _cci;
 
       char* _buffer = nullptr;
       size_t _len;

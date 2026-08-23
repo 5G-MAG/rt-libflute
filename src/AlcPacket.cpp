@@ -71,6 +71,18 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
   if (_lct_header.congestion_control_flag != 0) {
     throw std::runtime_error("Unsupported CCI field length");
   }
+  /* The 32 bits C=0 selects, read as WEBRC's short format of RFC 3738 clause 5.1. A session with no
+     building block sends zeros, which read back as channel 0 at sequence 0; only a receiver that
+     knows the session runs WEBRC should act on this. */
+  {
+    const auto* cci_bytes = reinterpret_cast<const uint8_t*>(hdr_ptr);
+    CongestionControlInfo cci;
+    cci.current_time_slot_index = cci_bytes[0];
+    cci.channel_number = cci_bytes[1];
+    cci.packet_sequence_number =
+        static_cast<uint16_t>((static_cast<uint16_t>(cci_bytes[2]) << 8) | cci_bytes[3]);
+    _cci = cci;
+  }
   // [TODO] read CCI
   hdr_ptr += 4;
 

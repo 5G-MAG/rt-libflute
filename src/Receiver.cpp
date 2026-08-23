@@ -69,12 +69,48 @@ namespace {
 LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& address,
     short port, uint64_t tsi,
     boost::asio::io_context& io_context,
-    const std::string& source_address)
+    const std::string& source_address,
+    Profile profile,
+    const std::optional<Webrc::SessionChannels>& webrc)
     : _socket(io_context)
     , _tsi(tsi)
     , _mcast_address(address)
     , _mcast_port(static_cast<unsigned short>(port))
+    , _profile(profile)
 {
+    /* A receiver that cannot run the session's congestion control must not be in the session at
+       all, so this is refused at construction rather than joined and then handled badly.
+
+       RFC 3450 clause 4.5: "If a receiver is not able to implement the multiple rate congestion
+       control building block it MUST NOT join the session."
+
+       RFC 3451 clause 6.2 obliges the same at the LCT layer:
+       "If a receiver is not able to implement the congestion control protocol used in the session,
+       it MUST NOT join the session."
+
+       Neither applies to the 3GPP profiles, which run no congestion control at all.
+       TS 26.346 V18.2.0 clause 7.2.4:
+       "a single FLUTE channel with single rate transport"
+       so joining one of those without a building block is correct. */
+    if (!is_3gpp(profile)) {
+      if (!webrc) {
+        throw std::runtime_error(
+            "a session outside the 3GPP profiles must run a congestion control building block, so "
+            "this receiver will not join one without WEBRC configured; supply the session's "
+            "channels, or use a 3GPP profile where congestion control is excluded");
+      }
+      _webrc_channels = *webrc;
+      _webrc_derived = Webrc::derive(webrc->params);
+      if (_webrc_channels.wave_channels.size() != _webrc_derived.wave_channels) {
+        throw std::runtime_error(
+            "WEBRC needs one address per wave channel, T of them, and T is derived from the "
+            "parameters");
+      }
+      _webrc = std::make_unique<Webrc::ReceiverController>(webrc->params, _webrc_derived);
+      _webrc_last_psn.assign(_webrc_derived.wave_channels + 1, std::nullopt);
+      _webrc_epoch_timer = std::make_unique<boost::asio::steady_timer>(io_context);
+    }
+
     // Restored alongside the ANY-bind/specific-interface-join fixes below:
     // an earlier version of those fixes made this whole constructor IPv4
     // only, where the original code let Boost pick v4 vs v6 based on the
@@ -114,6 +150,7 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
     }
 
     arm_receive();
+    start_webrc_epoch_timer();
 }
 
 LibFlute::Receiver::~Receiver()
@@ -233,6 +270,73 @@ auto LibFlute::Receiver::leave_channel(const std::string& group) -> bool
   return true;
 }
 
+auto LibFlute::Receiver::note_webrc_packet(const AlcPacket& alc) -> void
+{
+  if (!_webrc) return;
+  const auto cci = alc.congestion_control_info();
+  if (!cci) return;
+  if (cci->channel_number >= _webrc_last_psn.size()) return;
+
+  _webrc->on_packet_event();
+
+  /* Loss is inferred from the per-channel sequence numbers, which is where the clause says to look.
+     RFC 3738 clause 3.2.3.4:
+     "Each time the receiver detects a lost packet (based on the sequence numbers in the packets
+     scoped by the channel number), the receiver records the start of a new loss event"
+
+     Only a forward gap counts. RFC 3738 clause 3.2.3.4, on why:
+     "It is RECOMMENDED that the receiver account for simple misordering of packets without
+     inferring a loss."
+     So a sequence number at or behind the last one seen is taken as reordering and passed over. */
+  auto& last = _webrc_last_psn[cci->channel_number];
+  if (last) {
+    const uint16_t expected = static_cast<uint16_t>(*last + 1);
+    const uint16_t gap = static_cast<uint16_t>(cci->packet_sequence_number - expected);
+    /* A gap of half the sequence space or more reads as reordering rather than a vast loss. */
+    if (gap > 0 && gap < 0x8000) {
+      _webrc->on_loss_event_begin();
+    }
+  }
+  last = cci->packet_sequence_number;
+}
+
+auto LibFlute::Receiver::start_webrc_epoch_timer() -> void
+{
+  if (!_webrc || !_webrc_epoch_timer) return;
+  auto alive = _alive;
+  _webrc_epoch_timer->expires_after(
+      std::chrono::milliseconds(static_cast<int>(Webrc::Tuning().epoch_seconds * 1000)));
+  _webrc_epoch_timer->async_wait([this, alive](const boost::system::error_code& ec) {
+    if (!*alive || ec) return;
+    on_webrc_epoch();
+  });
+}
+
+auto LibFlute::Receiver::on_webrc_epoch() -> void
+{
+  if (!_running || !_webrc) return;
+
+  /* The end-of-epoch filter, then the decision. RFC 3450 clause 4.5: "The receiver MUST process and
+     act on the CCI field in accordance with the multiple rate congestion control building block."
+     Acting is what this does: the controller's answer turns into a real join or leave. */
+  _webrc->on_epoch_end();
+  _webrc->on_loss_event_end();
+
+  const uint32_t joined = _webrc->wave_channels_joined();
+  if (_webrc->may_join_next_layer() && joined < _webrc_channels.wave_channels.size()) {
+    const auto& [address, port] = _webrc_channels.wave_channels[joined];
+    (void)port;  // the session listens on one port; the channel is the group
+    _webrc->set_joining(true);
+    if (join_channel(address)) {
+      _webrc->set_wave_channels_joined(joined + 1);
+      spdlog::info("WEBRC: joined wave channel {} ({})", joined, address);
+    }
+    _webrc->set_joining(false);
+  }
+
+  start_webrc_epoch_timer();
+}
+
 auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key, const std::string& auth_key) -> void
 {
   LibFlute::IpSec::enable_esp(spi, _mcast_address, _mcast_port, LibFlute::IpSec::Direction::In,
@@ -268,6 +372,8 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
 
     try {
       auto alc = LibFlute::AlcPacket(_data, bytes_recvd);
+
+      note_webrc_packet(alc);
 
       if (alc.tsi() == _tsi) {
 

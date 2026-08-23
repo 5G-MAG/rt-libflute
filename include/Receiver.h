@@ -24,6 +24,7 @@
 #include <mutex>
 #include "File.h"
 #include "FileDeliveryTable.h"
+#include "Webrc.h"
 
 namespace LibFlute {
   /**
@@ -63,7 +64,9 @@ namespace LibFlute {
       Receiver( const std::string& iface, const std::string& address,
           short port, uint64_t tsi,
           boost::asio::io_context& io_context,
-          const std::string& source_address = "");
+          const std::string& source_address = "",
+          Profile profile = Profile::Ts26517,
+          const std::optional<Webrc::SessionChannels>& webrc = std::nullopt);
 
      /**
       *  Destructor. Marks the receiver as no longer alive so that any async_receive_from
@@ -170,6 +173,18 @@ namespace LibFlute {
       /** The session's source address where the caller named one, parsed once at construction so
        *  the per-packet check costs no parsing. Empty for an any-source session. */
       std::optional<boost::asio::ip::address> _expected_source;
+
+      Profile _profile = Profile::Ts26517;
+      /** The building block, present only where the session runs one. */
+      std::unique_ptr<Webrc::ReceiverController> _webrc;
+      Webrc::SessionChannels _webrc_channels;
+      Webrc::Derived _webrc_derived{};
+      /** Last packet sequence number seen per channel number, for detecting loss. */
+      std::vector<std::optional<uint16_t>> _webrc_last_psn;
+      std::unique_ptr<boost::asio::steady_timer> _webrc_epoch_timer;
+      void start_webrc_epoch_timer();
+      void on_webrc_epoch();
+      void note_webrc_packet(const AlcPacket& alc);
 
       /** Join or leave one multicast group, source-specific or not, on the session's interface. */
       bool set_group_membership(const boost::asio::ip::address& group, bool join);
