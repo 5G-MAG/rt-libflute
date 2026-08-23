@@ -153,6 +153,10 @@ namespace LibFlute::Webrc {
     double alpha = 0.25;     //< round-trip variance smoothing, clause 3.2.2.2
     double epoch_seconds = 0.5;   //< EL, clause 3.2.2.1
     double max_reception_rate_packets = 1e9;  //< MRR_P, clause 3.2.1
+    /** Zeta in start-up mode. Negative means "derive it from P", which is what clause 3.2.2.1
+     *  recommends: "In start-up mode, it is RECOMMENDED that Beta = (1 - P^(0.25))/2 and Zeta =
+     *  sqrt(P)/(1 + sqrt(P))." */
+    double zeta_start_up = -1.0;
   };
 
   class ReceiverController {
@@ -201,6 +205,11 @@ namespace LibFlute::Webrc {
    /** Marks the base channel's first packet as arrived; no join is allowed before it. */
     void on_first_base_packet() { _base_packet_seen = true; };
 
+    /** Called when the first packet of the newest wave channel arrives. Clause 3.2.2.6 asks the
+     *  receiver to "wait at least one full epoch after the first packet of a wave is received
+     *  before joining the next wave", so the epochs since then are what gates the next join. */
+    void on_wave_first_packet() { _epochs_since_wave_first = 0; };
+
    /** Reception rates of clause 3.2.2.5, supplied by the caller's own measurement. */
     void set_reception_rates(double average_packets, double target_packets);
 
@@ -213,6 +222,16 @@ namespace LibFlute::Webrc {
 
     double average_loss_probability() const { return _lossp; };
     double average_round_trip_seconds() const { return _artt; };
+
+    /** Zeta as clause 3.2.2.1 recommends for start-up mode, or the configured override. */
+    double zeta() const;
+
+    /** Whether TRR_P is "greatly below" ARR_P by clause 3.2.2.6's recommended comparison. */
+    bool trr_greatly_below_arr() const;
+
+    /** Run once an epoch. Applies clause 3.2.2.6's fourth exit from start-up: having declined to
+     *  join because TRR_P did not rise, set the threshold rate and stop climbing. */
+    void note_start_up_progress();
 
    /**
     *  REQN, the TCP throughput equation.
@@ -251,6 +270,21 @@ namespace LibFlute::Webrc {
     double _ssr = std::numeric_limits<double>::infinity();
     uint32_t _nwc = 0;
     bool _loss_event = false, _joining = false, _base_packet_seen = false;
+    /** Successive (FirstTime - JoinTime) measurements from wave channels, whose differences
+     *  clause 3.2.2.6 requires be watched while the threshold rate is infinite. Negative until the
+     *  first wave measurement arrives. */
+    double _prev_wave_join_delay = -1.0;
+    /** Epochs completed since the newest wave's first packet, clause 3.2.2.6. */
+    uint32_t _epochs_since_wave_first = 0;
+
+    /** Ends the start-up period: sets the threshold rate and resets the loss variables.
+     *  Clause 3.2.2.6: "In any of these four cases, the variables associated with LOSSP are reset
+     *  to make REQN, calculated as in Section 3.2.2.3 with the current value of ARTT, equal
+     *  TRR_P." */
+    void leave_start_up(double threshold_rate);
+    /** Solves the rate equation backwards for the loss probability that puts REQN at TRR_P, and
+     *  sets the LOSSP variables to it. */
+    void reset_loss_variables_to_target_rate();
   };
 
 }  // namespace LibFlute::Webrc

@@ -207,6 +207,8 @@ namespace LibFlute {
       /** Groups currently joined, the constructor's own among them. */
       std::set<std::string> _joined_groups;
       uint64_t _webrc_packets_noted = 0;
+      /** Set on joining a wave channel, cleared by that wave's first arriving packet. */
+      bool _webrc_wave_awaiting_first_packet = false;
 
       completion_callback_t _completion_cb = nullptr;
       close_notification_callback_t _close_cb = nullptr;

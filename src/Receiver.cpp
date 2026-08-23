@@ -274,6 +274,13 @@ auto LibFlute::Receiver::note_webrc_packet(const AlcPacket& alc) -> void
 {
   if (!_webrc) return;
   _webrc_packets_noted++;
+
+  /* Clause 3.2.2.6 counts the wait from "the first packet of a wave", so the newest wave's first
+     arrival is what starts the epoch the next join has to wait for. */
+  if (_webrc_wave_awaiting_first_packet) {
+    _webrc_wave_awaiting_first_packet = false;
+    _webrc->on_wave_first_packet();
+  }
   const auto cci = alc.congestion_control_info();
   if (!cci) return;
   if (cci->channel_number >= _webrc_last_psn.size()) return;
@@ -322,6 +329,9 @@ auto LibFlute::Receiver::on_webrc_epoch() -> void
      Acting is what this does: the controller's answer turns into a real join or leave. */
   _webrc->on_epoch_end();
   _webrc->on_loss_event_end();
+  /* Clause 3.2.2.6's fourth exit: a wave that had a full epoch and did not raise the true reception
+     rate ends the climb, which has to happen outside the const join decision. */
+  _webrc->note_start_up_progress();
 
   const uint32_t joined = _webrc->wave_channels_joined();
   if (_webrc->may_join_next_layer() && joined < _webrc_channels.wave_channels.size()) {
@@ -330,6 +340,7 @@ auto LibFlute::Receiver::on_webrc_epoch() -> void
     _webrc->set_joining(true);
     if (join_channel(address)) {
       _webrc->set_wave_channels_joined(joined + 1);
+      _webrc_wave_awaiting_first_packet = true;
       spdlog::info("WEBRC: joined wave channel {} ({})", joined, address);
     }
     _webrc->set_joining(false);

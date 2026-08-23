@@ -725,3 +725,135 @@ TEST(WebrcReceiverWiring, AForeignSessionsPacketsDoNotDriveCongestionControl) {
   io.stop();
   io_thread.join();
 }
+
+/* ------------------------------------------------------------------------------------------- */
+/* The remaining two exits from start-up, and the loss-variable reset that all four share.       */
+
+/* RFC 3738 clause 3.2.2.6: "While SSR_P = infinity the receiver MUST compute, in the notation of
+   Section 3.2.2.2, differences in successive measurements of (FirstTime-JoinTime) from successive
+   waves and MUST set SSR_P to max{SSMINR_P, P*TRR_P} when a large increase in (FirstTime-JoinTime)
+   is observed." */
+TEST(WebrcStartUp, ASharpRiseInTheJoinDelayEndsStartUp) {
+  auto p = recommended();
+  ReceiverController rc(p, derive(p));
+  rc.set_reception_rates(/*ARR_P*/ 100.0, /*TRR_P*/ 90.0);
+  ASSERT_TRUE(rc.in_start_up());
+
+  /* One measurement gives nothing to difference against. */
+  rc.on_join_measured(0.05, /*is_base_channel*/ false);
+  EXPECT_TRUE(rc.in_start_up());
+
+  /* The recommended bound, computed the way the clause states it. */
+  const double P = p.rate_drop_per_slot;
+  const double nwc1 = static_cast<double>(rc.wave_channels_joined()) + 1.0;
+  const double large = (std::pow(P, nwc1) - 1.0) / (P * std::log(P)) / 100.0;
+  ASSERT_GT(large, 0.0) << "the bound is positive for P below 1";
+
+  rc.on_join_measured(0.05 + large * 1.5, /*is_base_channel*/ false);
+  EXPECT_FALSE(rc.in_start_up());
+  EXPECT_NEAR(rc.slow_start_threshold(), std::max(rc.slow_start_floor(), P * 90.0), 1e-9);
+}
+
+/* A rise below the bound is not a large one. */
+TEST(WebrcStartUp, AModestRiseInTheJoinDelayDoesNot) {
+  auto p = recommended();
+  ReceiverController rc(p, derive(p));
+  rc.set_reception_rates(100.0, 90.0);
+  const double P = p.rate_drop_per_slot;
+  const double large = (std::pow(P, 1.0) - 1.0) / (P * std::log(P)) / 100.0;
+
+  rc.on_join_measured(0.05, false);
+  rc.on_join_measured(0.05 + large * 0.5, false);
+  EXPECT_TRUE(rc.in_start_up());
+}
+
+/* RFC 3738 clause 3.2.2.6: "While SSR_P = infinity, it is RECOMMENDED that the receiver wait at
+   least one full epoch after the first packet of a wave is received before joining the next
+   wave." */
+TEST(WebrcStartUp, ANewWaveGetsAFullEpochBeforeTheNextJoin) {
+  auto p = recommended();
+  ReceiverController rc(p, derive(p));
+  rc.on_first_base_packet();
+  rc.set_reception_rates(/*ARR_P*/ 1.0, /*TRR_P*/ 1e6);   // clears clause 3.2.3.6's rate refusal
+  rc.set_wave_channels_joined(1);
+  rc.on_wave_first_packet();
+
+  EXPECT_FALSE(rc.may_join_next_layer()) << "no full epoch has passed since the wave's first packet";
+  rc.on_epoch_end();
+  EXPECT_TRUE(rc.may_join_next_layer());
+}
+
+/* RFC 3738 clause 3.2.2.6: "If the TRR_P after that full epoch is greatly below ARR_P the receiver
+   SHOULD NOT join and SHOULD then set SSR_P to max{SSMINR_P, TRR_P}." */
+TEST(WebrcStartUp, ATrueRateThatDoesNotRiseStopsTheClimbAndEndsStartUp) {
+  auto p = recommended();
+  Tuning t; t.max_reception_rate_packets = 1e12;   // keep the other exit out of the way
+  ReceiverController rc(p, derive(p), t);
+  rc.on_first_base_packet();
+  rc.set_wave_channels_joined(1);
+  rc.on_wave_first_packet();
+  /* ARR_P is kept low enough that clause 3.2.2.6's maximum-reception-rate exit does not fire
+     first, so what ends start-up here is this exit and not that one. SR_P is 100 for these
+     parameters and the projection is 1.76*ARR_P. */
+  rc.set_reception_rates(/*ARR_P*/ 50.0, /*TRR_P*/ 1.0);
+  ASSERT_TRUE(rc.trr_greatly_below_arr());
+
+  rc.on_epoch_end();
+  ASSERT_TRUE(rc.in_start_up()) << "another exit fired first, so this test proves nothing";
+
+  rc.note_start_up_progress();
+  EXPECT_FALSE(rc.in_start_up());
+  EXPECT_NEAR(rc.slow_start_threshold(), std::max(rc.slow_start_floor(), 1.0), 1e-9);
+}
+
+/* A true rate that did rise leaves start-up alone. */
+TEST(WebrcStartUp, ATrueRateThatRisesDoesNotEndStartUp) {
+  auto p = recommended();
+  Tuning t; t.max_reception_rate_packets = 1e12;
+  ReceiverController rc(p, derive(p), t);
+  rc.on_first_base_packet();
+  rc.set_wave_channels_joined(1);
+  rc.on_wave_first_packet();
+  rc.set_reception_rates(/*ARR_P*/ 50.0, /*TRR_P*/ 48.0);
+  EXPECT_FALSE(rc.trr_greatly_below_arr());
+
+  rc.on_epoch_end();
+  rc.note_start_up_progress();
+  EXPECT_TRUE(rc.in_start_up());
+}
+
+/* RFC 3738 clause 3.2.2.6: "In any of these four cases, the variables associated with LOSSP are
+   reset to make REQN, calculated as in Section 3.2.2.3 with the current value of ARTT, equal
+   TRR_P." Checked through the exit that is easiest to trigger in isolation. */
+TEST(WebrcStartUp, LeavingStartUpPutsTheRateEquationAtTheTrueRate) {
+  auto p = recommended();
+  ReceiverController rc(p, derive(p));
+  rc.on_join_measured(/*ARTT*/ 0.1, /*is_base_channel*/ true);
+  rc.set_reception_rates(/*ARR_P*/ 100.0, /*TRR_P*/ 40.0);
+  ASSERT_TRUE(rc.in_start_up());
+
+  rc.on_loss_event_begin();
+  ASSERT_FALSE(rc.in_start_up());
+
+  /* P*TRR_P, not TRR_P, is where this exit puts the threshold; the reset is about REQN. */
+  EXPECT_NEAR(rc.rate_equation(), 40.0, 40.0 * 1e-6)
+      << "the loss variables were not reset to put REQN at TRR_P";
+  EXPECT_GT(rc.average_loss_probability(), 0.0);
+  EXPECT_LT(rc.average_loss_probability(), 1.0);
+}
+
+/* A later loss event is not an exit from start-up, so it must not re-run the reset. */
+TEST(WebrcStartUp, ALaterLossEventDoesNotResetTheLossVariablesAgain) {
+  auto p = recommended();
+  ReceiverController rc(p, derive(p));
+  rc.on_join_measured(0.1, true);
+  rc.set_reception_rates(100.0, 40.0);
+  rc.on_loss_event_begin();
+  const double after_first = rc.average_loss_probability();
+
+  rc.on_loss_event_end();
+  rc.set_reception_rates(100.0, 10.0);   // a different TRR_P, which a second reset would follow
+  rc.on_loss_event_begin();
+  EXPECT_DOUBLE_EQ(rc.average_loss_probability(), after_first)
+      << "the reset ran again outside an exit from start-up";
+}
