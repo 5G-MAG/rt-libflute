@@ -73,6 +73,7 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
     : _socket(io_context)
     , _tsi(tsi)
     , _mcast_address(address)
+    , _mcast_port(static_cast<unsigned short>(port))
 {
     // Restored alongside the ANY-bind/specific-interface-join fixes below:
     // an earlier version of those fixes made this whole constructor IPv4
@@ -207,7 +208,8 @@ namespace {
 
 auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key, const std::string& auth_key) -> void
 {
-  LibFlute::IpSec::enable_esp(spi, _mcast_address, LibFlute::IpSec::Direction::In, key, auth_key);
+  LibFlute::IpSec::enable_esp(spi, _mcast_address, _mcast_port, LibFlute::IpSec::Direction::In,
+                              key, auth_key);
 }
 
 auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& error,

@@ -149,6 +149,7 @@ namespace LibFlute {
       std::optional<boost::asio::ip::address> _expected_source;
 
       std::string _mcast_address;
+      unsigned short _mcast_port;
 
       completion_callback_t _completion_cb = nullptr;
       close_notification_callback_t _close_cb = nullptr;
