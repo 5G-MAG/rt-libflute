@@ -139,8 +139,13 @@ TEST(TransmitterIPv6TunnelTest, BuildsCorrectInnerIPv6AndUdpHeaders) {
   ASSERT_GE(bytes_received, 40u + 8u); // IPv6 header + UDP header, at minimum
 
   const uint8_t* ip = received.data();
-  // IPv6 header (RFC 8200 clause 3): version nibble, payload length, next header, hop limit, addrs.
-  EXPECT_EQ(ip[0] >> 4, 6) << "IP version nibble should be 6";
+  /* The fields checked below are RFC 8200 clause 3's, in its order: version nibble, payload length,
+     next header, hop limit, then the two addresses.
+
+     RFC 8200 clause 3:
+     "Version             4-bit Internet Protocol version number = 6."
+  */
+  EXPECT_EQ(ip[0] >> 4, 6) << "the version nibble is not 6";
   uint16_t payload_length = read_be16(ip + 4);
   EXPECT_EQ(static_cast<size_t>(payload_length) + 40, bytes_received)
       << "IPv6 payload length field should equal the actual UDP segment size";
