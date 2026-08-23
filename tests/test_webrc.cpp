@@ -590,10 +590,20 @@ TEST(WebrcReceiver, TargetRateSwitchesBranchWhenStartUpEnds) {
 /* The receiver side: a session with no congestion control is refused, and a received packet's
    Congestion Control Information is read back in WEBRC's short format.                         */
 
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <atomic>
+#include <chrono>
+#include <thread>
+
 #include <boost/asio.hpp>
 
 #include "AlcPacket.h"
 #include "Receiver.h"
+
+using namespace std::chrono_literals;
 
 namespace {
   LibFlute::Webrc::SessionChannels session_channels() {
@@ -650,4 +660,68 @@ TEST(WebrcReceiverWiring, ShortFormatCongestionControlInformationIsReadBack) {
   EXPECT_EQ(cci->current_time_slot_index, 0x2a);
   EXPECT_EQ(cci->channel_number, 0x05);
   EXPECT_EQ(cci->packet_sequence_number, 0x0102);
+}
+
+/* Step 2 of the receiver procedure disposes of a packet whose session does not match, and step 3,
+   the congestion control step, comes after it.
+   RFC 3450 clause 4.5: "If there is not a match then the packet MUST be discarded without further
+   processing."
+   A foreign session's packets on the same group must therefore leave this session's rate alone. */
+TEST(WebrcReceiverWiring, AForeignSessionsPacketsDoNotDriveCongestionControl) {
+  boost::asio::io_context io;
+  auto sc = session_channels();
+  LibFlute::Receiver rx("0.0.0.0", "239.9.9.21", 19601, /*tsi*/ 4242, io,
+                        "", LibFlute::Profile::Unprofiled, sc);
+  std::thread io_thread([&io]() { io.run(); });
+
+  int sock = socket(AF_INET, SOCK_DGRAM, 0);
+  ASSERT_GE(sock, 0);
+  sockaddr_in dst{};
+  dst.sin_family = AF_INET;
+  dst.sin_port = htons(19601);
+  inet_pton(AF_INET, "239.9.9.21", &dst.sin_addr);
+
+  /* Twenty packets on this group, all carrying a different session's TSI and a sequence number
+     jumping by more than one, which is what the loss estimator reads as a loss event. */
+  for (uint16_t i = 0; i < 20; i++) {
+    unsigned char pkt[24] = {0};
+    pkt[0] = 0x10;
+    pkt[1] = 0xa0;
+    pkt[2] = 0x04;
+    pkt[5] = 0x00;                                        // channel number
+    pkt[6] = static_cast<unsigned char>((i * 7) >> 8);    // PSN, gapped on purpose
+    pkt[7] = static_cast<unsigned char>((i * 7) & 0xFF);
+    pkt[11] = 0x63;                                       // TSI 99, not this session's 4242
+    ASSERT_EQ(sendto(sock, pkt, sizeof(pkt), 0, reinterpret_cast<sockaddr*>(&dst), sizeof(dst)),
+              static_cast<ssize_t>(sizeof(pkt)));
+  }
+  ::close(sock);
+  std::this_thread::sleep_for(150ms);
+
+  EXPECT_EQ(rx.webrc_packets_noted(), 0u)
+      << "a foreign session's CCI reached this session's congestion control loop";
+
+  /* The same packets carrying this session's own TSI do reach it, so the counter is measuring the
+     session check and not simply never incrementing. */
+  int sock2 = socket(AF_INET, SOCK_DGRAM, 0);
+  ASSERT_GE(sock2, 0);
+  for (uint16_t i = 0; i < 5; i++) {
+    unsigned char pkt[24] = {0};
+    pkt[0] = 0x10;
+    pkt[1] = 0xa0;
+    pkt[2] = 0x04;
+    pkt[7] = static_cast<unsigned char>(i);
+    pkt[10] = 0x10;                                       // TSI 4242 = 0x1092
+    pkt[11] = 0x92;
+    ASSERT_EQ(sendto(sock2, pkt, sizeof(pkt), 0, reinterpret_cast<sockaddr*>(&dst), sizeof(dst)),
+              static_cast<ssize_t>(sizeof(pkt)));
+  }
+  ::close(sock2);
+  std::this_thread::sleep_for(150ms);
+
+  EXPECT_EQ(rx.webrc_packets_noted(), 5u) << "this session's own CCI did not reach the loop";
+
+  rx.stop();
+  io.stop();
+  io_thread.join();
 }

@@ -273,6 +273,7 @@ auto LibFlute::Receiver::leave_channel(const std::string& group) -> bool
 auto LibFlute::Receiver::note_webrc_packet(const AlcPacket& alc) -> void
 {
   if (!_webrc) return;
+  _webrc_packets_noted++;
   const auto cci = alc.congestion_control_info();
   if (!cci) return;
   if (cci->channel_number >= _webrc_last_psn.size()) return;
@@ -373,9 +374,18 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
     try {
       auto alc = LibFlute::AlcPacket(_data, bytes_recvd);
 
-      note_webrc_packet(alc);
-
       if (alc.tsi() == _tsi) {
+
+        /* The congestion control step comes after the session has been identified, not before.
+           RFC 3450 clause 4.5 numbers the receiver's steps, and step 2 disposes of a packet that
+           does not match: "If there is not a match then the packet MUST be discarded without
+           further processing." Handing its CCI to the controller is further processing, so a
+           packet on this group carrying another session's TSI must not move this session's rate.
+
+           Step 3 is what this is.
+           RFC 3450 clause 4.5: "The receiver MUST process and act on the CCI field in accordance
+           with the multiple rate congestion control building block." */
+        note_webrc_packet(alc);
 
         if (_close_cb && (alc.close_session_flag() || alc.close_object_flag())) {
           _close_cb(alc.close_session_flag(), alc.close_object_flag(), alc.toi());

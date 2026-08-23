@@ -141,6 +141,15 @@ namespace LibFlute {
 
      /** Groups currently joined, including the one given at construction. */
       std::set<std::string> joined_channels() const { return _joined_groups; };
+
+     /**
+      *  Packets whose Congestion Control Information has reached the congestion control loop.
+      *
+      *  Diagnostic only. RFC 3450 clause 4.5 orders the receiver's steps, and step 3 acts on the
+      *  CCI only for a packet step 2 has already matched to this session; this counter makes that
+      *  ordering observable. Stays zero on a session with no congestion control.
+      */
+      uint64_t webrc_packets_noted() const { return _webrc_packets_noted; };
     private:
 
       void handle_receive_from(const boost::system::error_code& error,
@@ -197,6 +206,7 @@ namespace LibFlute {
       std::string _ssm_source;
       /** Groups currently joined, the constructor's own among them. */
       std::set<std::string> _joined_groups;
+      uint64_t _webrc_packets_noted = 0;
 
       completion_callback_t _completion_cb = nullptr;
       close_notification_callback_t _close_cb = nullptr;
