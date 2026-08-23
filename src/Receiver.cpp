@@ -246,6 +246,43 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
           _close_cb(alc.close_session_flag(), alc.close_object_flag(), alc.toi());
         }
 
+        /* A packet may legitimately carry nothing, and one that does carries no FEC Payload ID
+           either, so there is nothing here to reassemble.
+
+           RFC 3450 clause 4.1: "In some special cases an ALC sender may need to produce ALC
+           packets that do not contain any payload."
+           The same clause says how to tell: "The total datagram length, conveyed by outer protocol
+           headers (e.g., the IP or UDP header), enables receivers to detect the absence of the ALC
+           payload and FEC Payload ID."
+
+           FLUTE gives this shape a specific meaning and a specific header.
+           RFC 3926 clause 3.1: "the exception that ALC packets sent in a FLUTE session with the
+           Close Session (A) flag set to 1 (signaling the end of the session) and that contain no
+           payload (carrying no information for any file or FDT) SHALL NOT carry the TOI"
+
+           Falling through was not merely useless. With no TOI the decoded value is zero, so such a
+           packet was taken for an FDT packet and restarted FDT reassembly, discarding the instance
+           in progress; then the payload walk subtracted a four-byte FEC Payload ID from a length of
+           zero, wrapped, and read far past the buffer. One datagram from a conformant peer ending
+           its session, and RFC 3926 clause 3.1 is what makes such a peer send one. */
+        const size_t payload_len = bytes_recvd - alc.header_length();
+        if (payload_len == 0) {
+          arm_receive();
+          return;
+        }
+
+        /* Anything shorter than a FEC Payload ID is not a valid packet, and step 1 of the receiver
+           procedure disposes of it before the payload is touched.
+           RFC 3450 clause 4.5: "The receiver MUST parse the packet header and verify that it is a
+           valid header.  If it is not valid then the packet MUST be discarded without further
+           processing." */
+        if (payload_len < 4) {
+          spdlog::warn("Discarding a {}-byte payload, too short to hold a FEC Payload ID",
+                       payload_len);
+          arm_receive();
+          return;
+        }
+
         const std::lock_guard<std::mutex> lock(_files_mutex);
 
         /* An expired FDT Instance may not be used to interpret anything that arrives after it.
@@ -294,7 +331,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
         if (_files.find(alc.toi()) != _files.end() && !_files[alc.toi()]->complete()) {
           auto encoding_symbols = LibFlute::EncodingSymbol::from_payload(
               _data + alc.header_length(),
-              bytes_recvd - alc.header_length(),
+              payload_len,
               _files[alc.toi()]->fec_oti(),
               alc.content_encoding());
 

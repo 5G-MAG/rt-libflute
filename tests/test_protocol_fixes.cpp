@@ -822,3 +822,61 @@ TEST(DataLessClosePacket, RoundTripsThroughTheParser) {
   EXPECT_EQ(received.header_length(), wire.size())
       << "the whole datagram is header, so a receiver sees a zero-length payload";
 }
+
+/* Before this was handled, a data-less packet was taken for an FDT packet, because a header with no
+   TOI decodes to TOI 0, and then the payload walk subtracted a four-byte FEC Payload ID from a
+   zero-length payload, wrapped, and read far past the buffer. This delivers one to a live receiver
+   and then a real content packet, so a receiver that survived intact is the thing being checked. */
+TEST(DataLessClosePacket, DoesNotDisturbALiveReceiver) {
+  boost::asio::io_context io;
+  auto work_guard = boost::asio::make_work_guard(io);
+  LibFlute::Receiver receiver("0.0.0.0", "239.255.9.11", 19193, /*tsi*/ 779, io);
+
+  std::atomic<bool> close_seen{false};
+  receiver.register_close_notification_callback(
+      [&close_seen](bool session, bool /*object*/, uint64_t /*toi*/) {
+        if (session) close_seen = true;
+      });
+
+  std::thread io_thread([&io]() { io.run(); });
+
+  int sock = socket(AF_INET, SOCK_DGRAM, 0);
+  ASSERT_GE(sock, 0);
+  sockaddr_in dst{};
+  dst.sin_family = AF_INET;
+  dst.sin_port = htons(19193);
+  inet_pton(AF_INET, "239.255.9.11", &dst.sin_addr);
+
+  AlcPacket close_packet(779, AlcPacket::CloseSession{});
+  ASSERT_EQ(sendto(sock, close_packet.data(), close_packet.size(), 0,
+                   reinterpret_cast<sockaddr*>(&dst), sizeof(dst)),
+            static_cast<ssize_t>(close_packet.size()));
+
+  std::this_thread::sleep_for(100ms);
+
+  auto buf = build_content_packet_with_fti(779, 7, 1000, 64, "0123456789");
+  ASSERT_EQ(sendto(sock, buf.data(), buf.size(), 0,
+                   reinterpret_cast<sockaddr*>(&dst), sizeof(dst)),
+            static_cast<ssize_t>(buf.size()));
+  ::close(sock);
+
+  bool found = false;
+  for (int i = 0; i < 50 && !found; ++i) {
+    std::this_thread::sleep_for(20ms);
+    for (const auto& f : receiver.file_list()) {
+      if (f->meta().toi == 7) found = true;
+    }
+  }
+  EXPECT_TRUE(found) << "the receiver did not go on to handle a real packet";
+  EXPECT_TRUE(close_seen.load()) << "the Close Session flag was not reported";
+
+  for (const auto& f : receiver.file_list()) {
+    EXPECT_NE(f->meta().toi, 0u)
+        << "the data-less packet was taken for an FDT packet and started a TOI 0 object";
+  }
+
+  receiver.stop();
+  work_guard.reset();
+  io.stop();
+  io_thread.join();
+}
