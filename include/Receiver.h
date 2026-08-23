@@ -144,6 +144,10 @@ namespace LibFlute {
       uint32_t _fdt_in_progress_instance_id = 0xFFFFFFFF;
       std::map<uint64_t, std::shared_ptr<LibFlute::File>> _files;
       std::mutex _files_mutex;
+      /** The session's source address where the caller named one, parsed once at construction so
+       *  the per-packet check costs no parsing. Empty for an any-source session. */
+      std::optional<boost::asio::ip::address> _expected_source;
+
       std::string _mcast_address;
 
       completion_callback_t _completion_cb = nullptr;

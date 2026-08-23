@@ -103,6 +103,10 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
     _socket.bind(listen_endpoint);
 
     if (!source_address.empty()) {
+      _expected_source = boost::asio::ip::make_address(source_address);
+    }
+
+    if (!source_address.empty()) {
       // Source-specific multicast (SSM, RFC 4607): admits only packets from source_address,
       // as indicated by an SDP a=source-filter line (RFC 4570; TS 26.517 cl.6.2.2.3's own
       // examples use this for FLUTE sessions). boost::asio has no portable SSM join, so this
@@ -214,6 +218,25 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
   if (!error)
   {
     spdlog::trace("Received {} bytes", bytes_recvd);
+    /* The source is checked before the packet is parsed, so traffic that is not this session's
+       cannot reach the parser at all, let alone influence how a parse failure is handled.
+
+       RFC 3450 clause 4.5 orders the receiver's steps and puts this one before any processing of the
+       payload: "The receiver MUST verify that the sender IP address together with the TSI carried in
+       the header matches one of the (sender IP address, TSI) pairs that was received in a Session
+       Description and that the receiver is currently joined to."
+
+       Only checkable where the caller named the source. A source-specific join already has the
+       kernel filtering on it, so this is defence in depth there against a routing or membership
+       mistake; for an any-source session the library has no source to compare against and the
+       obligation cannot be met, which is recorded as a limitation rather than passed over. */
+    if (_expected_source && _sender_endpoint.address() != *_expected_source) {
+      spdlog::warn("Discarding packet from {}, which is not this session's source {}",
+                   _sender_endpoint.address().to_string(), _expected_source->to_string());
+      arm_receive();
+      return;
+    }
+
     try {
       auto alc = LibFlute::AlcPacket(_data, bytes_recvd);
 
