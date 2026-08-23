@@ -495,3 +495,27 @@ TEST(WebrcTransmitter, TheFdtGoesOnlyToTheBaseChannel) {
   EXPECT_EQ(base->channel_number, d.wave_channels)
       << "the FDT rides the base channel, which takes CN = T";
 }
+
+
+/* RFC 3450 clause 4.4: "The ALC sender MUST obey the rules for filling in the CCI field in the
+   packet headers and MUST send packets at the appropriate rates to the channels associated with the
+   session as dictated by the multiple rate congestion control building block."
+
+   The credit scheme the sender uses to honour that is checked here directly on the rates, since the
+   rates are what decide the shares: a wave with more active slots left is sending faster than one
+   about to end, and both are above the base channel, so packets must be biased towards the younger
+   wave. */
+TEST(WebrcRates, AYoungerWaveOutrunsAnOlderOneAndBothOutrunTheBase) {
+  auto p = recommended();
+  const double youngest = wave_channel_rate(p.wave_duration_slots - 1, 0.0, p);
+  const double oldest = wave_channel_rate(0, 0.0, p);
+  const double base = base_channel_rate(0.0, p);
+
+  EXPECT_GT(youngest, oldest) << "a wave with more slots to run sends faster";
+  EXPECT_GT(oldest, base) << "even a wave in its last slot starts above the base channel";
+
+  /* Over one slot the shares are the ratio of the rates, which is what the credit scheme converges
+     on. A wave one slot younger than another is exactly 1/P times its rate. */
+  EXPECT_NEAR(wave_channel_rate(1, 0.0, p) / wave_channel_rate(0, 0.0, p),
+              1.0 / p.rate_drop_per_slot, 1e-12);
+}

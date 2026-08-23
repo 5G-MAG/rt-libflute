@@ -103,86 +103,14 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
     _socket.set_option(boost::asio::socket_base::receive_buffer_size(16*1024*1024));
     _socket.bind(listen_endpoint);
 
-<<<<<<< HEAD
     if (!source_address.empty()) {
       _expected_source = boost::asio::ip::make_address(source_address);
     }
 
-    if (!source_address.empty()) {
-      // Source-specific multicast (SSM, RFC 4607): admits only packets from source_address,
-      // as indicated by an SDP a=source-filter line (RFC 4570; TS 26.517 cl.6.2.2.3's own
-      // examples use this for FLUTE sessions). boost::asio has no portable SSM join, so this
-      // goes straight to the socket options Linux (and most other stacks) actually define --
-      // IPv4's ip_mreq_source/IP_ADD_SOURCE_MEMBERSHIP identifies the interface by address;
-      // IPv6's group_source_req/MCAST_JOIN_SOURCE_GROUP identifies it by index instead
-      // (see resolve_iface_index() above), which is why the two branches build genuinely
-      // different structures rather than sharing one.
-      if (is_v6) {
-        struct group_source_req gsr{};
-        gsr.gsr_interface = resolve_iface_index(iface);
-
-        struct sockaddr_in6 grp{};
-        grp.sin6_family = AF_INET6;
-        auto mcast_bytes = mcast_address.to_v6().to_bytes();
-        std::memcpy(&grp.sin6_addr, mcast_bytes.data(), mcast_bytes.size());
-        std::memcpy(&gsr.gsr_group, &grp, sizeof(grp));
-
-        struct sockaddr_in6 src{};
-        src.sin6_family = AF_INET6;
-        auto src_bytes = boost::asio::ip::make_address(source_address).to_v6().to_bytes();
-        std::memcpy(&src.sin6_addr, src_bytes.data(), src_bytes.size());
-        std::memcpy(&gsr.gsr_source, &src, sizeof(src));
-
-        if (setsockopt(_socket.native_handle(), IPPROTO_IPV6, MCAST_JOIN_SOURCE_GROUP,
-                        &gsr, sizeof(gsr)) != 0) {
-          spdlog::error("Receiver: MCAST_JOIN_SOURCE_GROUP for {} from {} failed: {}", address,
-                        source_address, strerror(errno));
-        } else {
-          spdlog::info("Receiver: joined SSM {} from source {} on iface {}", address,
-                       source_address, iface);
-        }
-      } else {
-        struct ip_mreq_source mreq_source{};
-        auto mcast_bytes = mcast_address.to_v4().to_bytes();
-        auto src_bytes = boost::asio::ip::make_address(source_address).to_v4().to_bytes();
-        auto iface_bytes = boost::asio::ip::make_address(iface).to_v4().to_bytes();
-        std::memcpy(&mreq_source.imr_multiaddr, mcast_bytes.data(), mcast_bytes.size());
-        std::memcpy(&mreq_source.imr_sourceaddr, src_bytes.data(), src_bytes.size());
-        std::memcpy(&mreq_source.imr_interface, iface_bytes.data(), iface_bytes.size());
-
-        if (setsockopt(_socket.native_handle(), IPPROTO_IP, IP_ADD_SOURCE_MEMBERSHIP,
-                        &mreq_source, sizeof(mreq_source)) != 0) {
-          spdlog::error("Receiver: IP_ADD_SOURCE_MEMBERSHIP for {} from {} failed: {}", address,
-                        source_address, strerror(errno));
-        } else {
-          spdlog::info("Receiver: joined SSM {} from source {} on iface {}", address,
-                       source_address, iface);
-        }
-      }
-    } else if (is_v6) {
-      // Plain (any-source) multicast join, IPv6: join_group(address_v6, interface_index) --
-      // a different overload shape than IPv4's join_group(address_v4, address_v4) below,
-      // since v6 identifies the interface by index (see resolve_iface_index()).
-      _socket.set_option(
-          boost::asio::ip::multicast::join_group(
-            mcast_address.to_v6(), resolve_iface_index(iface)));
-    } else {
-      // Join the multicast group on the specific interface passed in - the
-      // single-address join_group() overload ignores `iface` entirely and
-      // joins via whatever interface the system considers the default route
-      // for the group, which silently breaks reception when the content
-      // actually arrives on a non-default interface (e.g. the modem's own
-      // TUN device rather than a physical NIC).
-      _socket.set_option(
-          boost::asio::ip::multicast::join_group(
-            mcast_address.to_v4(),
-            boost::asio::ip::make_address(iface).to_v4()));
-=======
     _iface = iface;
     _ssm_source = source_address;
     if (set_group_membership(mcast_address, /*join*/ true)) {
       _joined_groups.insert(mcast_address.to_string());
->>>>>>> e3ae5df (receiver: join and leave a session's multicast channels at runtime)
     }
 
     arm_receive();

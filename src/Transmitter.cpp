@@ -904,9 +904,46 @@ auto Transmitter::send_next_packet() -> void
         if (file->meta().toi == 0) {
           channel_index = 0;
         } else {
-          const size_t choices = active.size() + 1;
-          const size_t pick = _webrc_next_channel++ % choices;
-          channel_index = (pick == 0) ? 0 : active[pick - 1] + 1;
+          /* Packets land on the channels in proportion to the rates the schedule dictates, not in
+             equal turns.
+
+             RFC 3450 clause 4.4: "The ALC sender MUST obey the rules for filling in the CCI field
+             in the packet headers and MUST send packets at the appropriate rates to the channels
+             associated with the session as dictated by the multiple rate congestion control
+             building block."
+
+             Each channel accrues credit at its own current rate and spends one credit per packet,
+             so over any run the share each receives converges on its share of the total rate. That
+             reproduces the wave shape of RFC 3738 clause 3.1.2, where a wave starts high and falls
+             by a factor of P per slot to the base channel's rate, without needing a timer per
+             channel. */
+          const double fraction = std::min(
+              1.0, std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                                 _webrc->slot_started).count() /
+                       _webrc->params.time_slot_duration_seconds);
+          const uint32_t T = _webrc->derived.wave_channels;
+
+          const uint8_t base_cn = Webrc::base_channel_number(_webrc->derived);
+          _webrc->credit[base_cn] += Webrc::base_channel_rate(fraction, _webrc->params);
+          for (uint32_t cn : active) {
+            /* The wave on channel cn ends at the slot with that index, so this is how many active
+               slots it still has to run. */
+            const uint32_t remaining = (cn + T - _webrc->ctsi) % T;
+            _webrc->credit[cn] += Webrc::wave_channel_rate(remaining, fraction, _webrc->params);
+          }
+
+          size_t best_index = 0;
+          double best_credit = _webrc->credit[base_cn];
+          for (uint32_t cn : active) {
+            if (_webrc->credit[cn] > best_credit) {
+              best_credit = _webrc->credit[cn];
+              best_index = cn + 1;
+            }
+          }
+          channel_index = best_index;
+          const uint8_t spent = channel_index == 0 ? base_cn
+                                                   : static_cast<uint8_t>(channel_index - 1);
+          _webrc->credit[spent] -= 1.0;
         }
         cci = webrc_cci_for(channel_index);
         if (cci) {
@@ -1070,6 +1107,7 @@ auto Transmitter::enable_webrc(
   state.ctsi = 0;
   /* One sequence number per channel, the base channel taking index T. */
   state.psn.assign(derived.wave_channels + 1, 0);
+  state.credit.assign(derived.wave_channels + 1, 0.0);
   _webrc = std::move(state);
 
   spdlog::info("Transmitter: WEBRC enabled, {} wave channels plus the base channel, {}s time slots",

@@ -797,6 +797,10 @@ namespace LibFlute {
         uint32_t ctsi = 0;
         /** Packet sequence number per channel, indexed by channel number; the base channel is T. */
         std::vector<uint16_t> psn;
+        /** Send credit per channel, indexed as psn is. A channel accrues credit at its own rate
+         *  and spends one on each packet, so packets land on the channels in proportion to the
+         *  rates the schedule dictates. */
+        std::vector<double> credit;
       };
       std::optional<WebrcState> _webrc;
       size_t _webrc_next_channel = 0;
