@@ -556,6 +556,18 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
      endpoint. */
   if (_source_address) {
     _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
+    // bind() only sets the packet's claimed source address; it does not choose which interface a
+    // multicast send actually goes out on. Without IP_MULTICAST_IF (boost's outbound_interface),
+    // the kernel picks the default route's interface for every multicast send regardless of the
+    // bound source (confirmed live: `ip route get <group>` with no source hint resolves to the
+    // machine's default-route interface, not the one implied by _source_address; the same query
+    // with `from <_source_address>` resolves correctly, which is what a bound send does NOT
+    // consult for multicast). code-derived, no spec claim: this is host networking, not FLUTE's
+    // own behaviour, so only applied when the source is IPv4 (the only case this project's own
+    // deployments use).
+    if (_source_address->is_v4()) {
+      _socket.set_option(boost::asio::ip::multicast::outbound_interface(_source_address->to_v4()));
+    }
   }
 
   _fec_oti = FecOti{
@@ -644,6 +656,11 @@ auto Transmitter::source_address(const std::optional<boost::asio::ip::address> &
      endpoint. */
   if (_source_address) {
     _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
+    // See the same bind()'s own comment in start(): bind() alone does not steer a multicast
+    // send onto this address's interface, only IP_MULTICAST_IF does.
+    if (_source_address->is_v4()) {
+      _socket.set_option(boost::asio::ip::multicast::outbound_interface(_source_address->to_v4()));
+    }
   }
   return *this;
 }
@@ -658,6 +675,11 @@ auto Transmitter::source_address(std::optional<boost::asio::ip::address> &&sourc
      endpoint. */
   if (_source_address) {
     _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
+    // See the same bind()'s own comment in start(): bind() alone does not steer a multicast
+    // send onto this address's interface, only IP_MULTICAST_IF does.
+    if (_source_address->is_v4()) {
+      _socket.set_option(boost::asio::ip::multicast::outbound_interface(_source_address->to_v4()));
+    }
   }
   return *this;
 }
