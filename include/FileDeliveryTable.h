@@ -155,9 +155,13 @@ namespace LibFlute {
       bool complete() const { return _complete; };
 
      /**
-      *  Add a file entry
+      *  Add a file entry, or replace the existing entry for the same TOI.
+      *
+      *  @return true if the table changed, false if it already held an identical entry for this
+      *          TOI. A caller that re-publishes the FDT on change can use this to avoid reissuing
+      *          an instance that would be byte-for-byte the same.
       */
-      void add(const FileEntry& entry);
+      bool add(const FileEntry& entry);
 
      /**
       *  Remove a file entry

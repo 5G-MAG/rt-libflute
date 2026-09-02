@@ -676,6 +676,36 @@ namespace LibFlute {
       void register_completion_callback(completion_callback_t cb) { _completion_cb = cb; };
 
      /**
+      *  Stop sending a file and drop its FDT entry.
+      *
+      *  Needed by a sender using retain_transmitted_in_fdt(): with retention on, nothing else ever
+      *  removes an entry, so a caller that stops repeating an object must say so or its description
+      *  would outlive it. Safe to call for a TOI that is not currently described.
+      *
+      *  @param toi TOI of the file to withdraw
+      */
+      void withdraw_file(uint32_t toi);
+
+     /**
+      *  Get whether transmitted files stay described in the FDT.
+      */
+      bool retain_transmitted_in_fdt() const { return _retain_transmitted_in_fdt; };
+
+     /**
+      *  Keep a file's FDT entry after its transmission completes, instead of removing it.
+      *
+      *  For a sender that repeats objects (an object carousel), the same object is re-sent under the
+      *  TOI it already holds, so removing its entry on completion leaves it transmitted but
+      *  undescribed. A receiver cannot recover an object whose TOI no FDT entry describes, and
+      *  receivers join at arbitrary times, so retention is what makes a repeating object acquirable.
+      *
+      *  Leave this off for one-shot delivery, where removal is what bounds the table's growth.
+      *
+      *  @param retain true to keep entries for transmitted files
+      */
+      Transmitter &retain_transmitted_in_fdt(bool retain) { _retain_transmitted_in_fdt = retain; return *this; };
+
+     /**
       * Activate the FLUTE session
       *
       * If the Transmitter is currently deactivated then the state is set to active and the FLUTE stream will start transmitting.
@@ -769,8 +799,17 @@ namespace LibFlute {
       // each File its own copy or ref-counted storage.
       std::string _fdt_string_storage;
 
+      // FDT Instance ID whose serialisation _fdt_string_storage currently holds. A repeat of that
+      // same instance must re-send those bytes unchanged (see send_fdt()); a different instance
+      // re-serialises. UINT32_MAX means "nothing serialised yet".
+      uint32_t _fdt_serialised_instance_id = UINT32_MAX;
+
       bool _session_closing = false;
       std::set<uint32_t> _closing_objects;
+
+      // See retain_transmitted_in_fdt(). Off by default so one-shot senders keep the existing
+      // remove-on-completion behaviour that bounds FDT growth.
+      bool _retain_transmitted_in_fdt = false;
 
       unsigned _fdt_repeat_interval = 5;
       uint16_t _toi = 1;

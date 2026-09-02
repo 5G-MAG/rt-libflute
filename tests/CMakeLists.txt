@@ -51,3 +51,4 @@ add_flute_test_executable(flute_fdt_growth_tests test_fdt_growth.cpp "fdt_growth
 add_flute_test_executable(flute_raptor_codec_tests test_raptor_codec.cpp "raptor_codec:")
 add_flute_test_executable(flute_raptor_tests test_raptor_fec.cpp "raptor:")
 add_flute_test_executable(flute_raptor_e2e_tests test_raptor_e2e.cpp "raptor_e2e:")
+add_flute_test_executable(flute_fdt_carousel_tests test_fdt_carousel.cpp "fdt_carousel:")

@@ -748,11 +748,37 @@ auto Transmitter::seconds_since_epoch() -> uint64_t
 
 auto Transmitter::send_fdt() -> void {
   if (_fdt->file_entries().empty()) return;
-  _fdt->set_expires(seconds_since_epoch() + _fdt_repeat_interval * 2);
-  // Store into the member, not a local - see _fdt_string_storage's own doc
-  // comment: the File below only keeps a raw pointer into this buffer, and
-  // that pointer is read later, asynchronously, by send_next_packet().
-  _fdt_string_storage = _fdt->to_string();
+
+  const uint32_t instance_id = _fdt->instance_id();
+  const bool already_serialised = !_fdt_string_storage.empty() && _fdt_serialised_instance_id == instance_id;
+
+  if (already_serialised) {
+    /* This instance has already been serialised, so re-send those exact bytes rather than
+       building new ones. An FDT Instance is identified by its ID, and a receiver reassembles
+       its symbols under that identity.
+       RFC 3926 clause 3.4.1: "Each FDT Instance is uniquely identified within the file delivery
+       session by its FDT Instance ID."
+       Re-serialising on every repeat gave the same ID a different byte string each time (the
+       FDT-Instance Expires attribute moves with the clock), so a receiver combining symbols it
+       believed belonged to one object was mixing two, and reassembly could never validate.
+       Repeating an instance is expected -- the same clause's own model allows it: "A certain FDT
+       Instance may be repeated several times during a session" -- but a repeat has to be the same
+       instance, not a new document under an old number. */
+    std::lock_guard<std::mutex> guard(_files_mutex);
+    auto in_flight = _files.find(0);
+    if (in_flight != _files.end() && in_flight->second && !in_flight->second->complete()) {
+      /* Still going out. Replacing it here would restart it from its first symbol, and under a
+         rate limit an FDT spanning several symbols would never reach its last one. */
+      return;
+    }
+  } else {
+    _fdt->set_expires(seconds_since_epoch() + _fdt_repeat_interval * 2);
+    // Store into the member, not a local - see _fdt_string_storage's own doc
+    // comment: the File below only keeps a raw pointer into this buffer, and
+    // that pointer is read later, asynchronously, by send_next_packet().
+    _fdt_string_storage = _fdt->to_string();
+    _fdt_serialised_instance_id = instance_id;
+  }
   // The FDT itself always goes out as Compact No-Code, regardless of what
   // FEC scheme protects this Transmitter's content: it's re-sent on its own
   // repeat timer already (real redundancy without needing FEC), and
@@ -825,7 +851,6 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
 
   // Set the TSI and TOI for the FileDescription
   file_description->tsi(_tsi);
-  bool is_resend = (file_description->toi() != 0);
   if (file_description->toi() == 0) {
     if (file_description->previous_toi() != 0) {
       // This FileDescription's content changed since its last send (set_content()/
@@ -854,15 +879,18 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
     // replaces it.
     _files[file_description->toi()] = file;
   }
-  if (is_resend) {
-    // Without this, add() below unconditionally appends another <File> entry for the same
-    // TOI on every single carousel repetition, without ever removing the previous one (the
-    // FDT has no other dedup by TOI) -- the FDT grows without bound the longer the object
-    // stays in the carousel, and eventually becomes too large to serialise/parse correctly.
-    _fdt->remove(file_description->toi());
+  // add() replaces the entry for a TOI it already holds, so a carousel repetition no longer needs
+  // to remove the previous entry first to stop the FDT growing without bound. It also reports
+  // whether the table actually changed: a repetition that describes the object exactly as the
+  // current instance already does leaves the table alone, and reissuing the FDT there would be
+  // harmful rather than merely wasteful. send_fdt() replaces the in-flight FDT object wholesale
+  // (insert_or_assign on TOI 0), restarting its transmission from the first symbol, so a sender
+  // repeating many objects would restart a multi-symbol FDT faster than it can finish sending,
+  // and receivers would never assemble a complete instance. The FDT's own repeat timer
+  // (fdt_send_tick) re-sends it regardless.
+  if (_fdt->add(file->meta())) {
+    send_fdt();
   }
-  _fdt->add(file->meta());
-  send_fdt();
   return file_description->toi();
 }
 
@@ -875,6 +903,17 @@ auto Transmitter::fdt_send_tick(const boost::system::error_code& error) -> void
   }
 }
 
+auto Transmitter::withdraw_file(uint32_t toi) -> void
+{
+  if (toi == 0) return; // TOI 0 is the FDT itself, never a described file
+  {
+    std::lock_guard<std::mutex> guard(_files_mutex);
+    _files.erase(toi);
+  }
+  _fdt->remove(toi);
+  send_fdt();
+}
+
 auto Transmitter::file_transmitted(uint32_t toi) -> void
 {
   {
@@ -882,8 +921,31 @@ auto Transmitter::file_transmitted(uint32_t toi) -> void
     _files.erase(toi);
   }
   if (toi != 0) {
-    _fdt->remove(toi);
-    send_fdt();
+    /* A repeating sender re-sends an object under the TOI it already has (see send(), which treats
+       a non-zero TOI as a resend), so dropping the description here would leave that object
+       transmitted but undescribed for the rest of the session. A receiver cannot recover an object
+       whose TOI no entry describes, however cleanly its symbols arrive, and receivers join at
+       arbitrary times, so the entry is what makes a repeating object acquirable at all. Retain the
+       description while the sender still intends to repeat it; one-shot senders keep removing it,
+       which is what bounds FDT growth for them.
+
+       Note this deliberately does NOT advertise the result as a full snapshot: the MBMS Download
+       Profile prohibits the sender doing so. TS 26.346 V18.2.0 clause L.4.3: "The following
+       parameters, defined at the FDT-Instance level, shall not be used by the FLUTE sender:",
+       whose list carries the mbms2008:FullFDT attribute. Retaining entries needs no such
+       signalling; it only stops the table forgetting objects that are still being sent. */
+    if (!_retain_transmitted_in_fdt) {
+      _fdt->remove(toi);
+      /* The table just changed, so publish the new one. Under retention it did not change: the
+         entry is still there and still correct, and re-publishing would be actively harmful.
+         send_fdt() replaces the in-flight FDT object wholesale (insert_or_assign on TOI 0), which
+         restarts its transmission from the first symbol. A retained table describes every object
+         the sender repeats, so it spans several symbols, and a sender completing one object per
+         few hundred milliseconds would restart it far more often than it can finish, leaving
+         receivers with a permanent stream of first symbols and no complete instance. Leave
+         re-transmission to the FDT's own repeat timer. */
+      send_fdt();
+    }
 
     if (_completion_cb) {
       _completion_cb(toi);

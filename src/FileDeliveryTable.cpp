@@ -546,7 +546,7 @@ auto LibFlute::FileDeliveryTable::advance_instance_id() -> void
                                   _expired_instance_ids);
 }
 
-auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> void
+auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> bool
 {
   /* The MBMS Download Profile permits exactly one content encoding, and forbids every other.
      TS 26.346 V18.2.0 clause L.4.2, second list: "The following FDT attribute, defined at both
@@ -564,8 +564,22 @@ auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> void
         "Content-Encoding must be absent or gzip in the MBMS Download Profile, got: " +
         fe.content_encoding + ". Use Profile::Unprofiled for a non-3GPP session.");
   }
+  /* One entry per TOI: a TOI identifies exactly one transport object within a session, so a second
+     entry for the same TOI would describe the same object twice in one FDT Instance. Re-adding an
+     already-described TOI is a normal event for a repeating sender (a carousel re-sends an object
+     under its existing TOI), so replace in place rather than appending a duplicate, and report
+     whether anything actually changed so a caller need not reissue an identical instance. */
+  for (auto &existing : _file_entries) {
+    if (existing.toi == fe.toi) {
+      if (existing == fe) return false;
+      existing = fe;
+      if (_instance_id == _instance_id_sent) advance_instance_id();
+      return true;
+    }
+  }
   if (_instance_id == _instance_id_sent) advance_instance_id();
   _file_entries.push_back(fe);
+  return true;
 }
 
 auto LibFlute::FileDeliveryTable::remove(uint32_t toi) -> void
