@@ -540,3 +540,75 @@ TEST(SubBlockCeilingTest, NotAppliedOutsideThe3gppProfiles) {
   boost::asio::io_context io;
   EXPECT_NO_THROW(raptor_tx(io, "239.1.5.14", 8192, LibFlute::Profile::Unprofiled));
 }
+
+// --- Objects too small to fill four symbols ---------------------------------------------------
+//
+// RFC 5053 clause 5.7: "The following is the list of the systematic indices for values of K
+// between 4 and 8192 inclusive." A Raptor source block of fewer than 4 symbols therefore has no
+// systematic index and cannot be encoded. RFC 6330 has no such floor: clause 5.3.1 pads a block up
+// to the smallest supported K', so RaptorQ encodes any K at all.
+//
+// The symbol length is the sender's choice rather than a property of the object, and the FDT carries
+// FEC-OTI-Encoding-Symbol-Length per file, so an object too small to reach four symbols at the
+// session's symbol length is partitioned with a shorter symbol instead of being refused.
+
+namespace {
+// Round-trips an object of the given length through encoder and decoder, delivering every symbol.
+// Returns the symbol length the encoder settled on, so a test can assert the object was made to fit
+// rather than only that it survived.
+uint16_t round_trip(FecScheme scheme, size_t data_len, uint16_t session_symbol_length)
+{
+  std::vector<char> data(data_len);
+  std::mt19937 rng(7);
+  for (auto& b : data) b = (char)rng();
+
+  FecOti oti{
+    .encoding_id = scheme,
+    .encoding_symbol_length = session_symbol_length,
+    .max_source_block_length = 200,
+    .max_number_of_encoding_symbols = 400,
+  };
+
+  File encoder(1, oti, "small.bin", "application/octet-stream", 0, data.data(), data_len, true);
+  auto symbols = encoder.get_next_symbols(1024 * 1024);
+  EXPECT_FALSE(symbols.empty()) << "no symbols produced for " << data_len << " bytes";
+
+  File decoder(encoder.meta());
+  for (auto& s : symbols) decoder.put_symbol(s);
+
+  EXPECT_TRUE(decoder.complete()) << "did not complete for " << data_len << " bytes";
+  EXPECT_EQ(decoder.length(), data_len);
+  EXPECT_EQ(0, memcmp(decoder.buffer(), data.data(), data_len));
+  return encoder.fec_oti().encoding_symbol_length;
+}
+} // namespace
+
+TEST(FileRaptorSmallObjectTest, RaptorShortensTheSymbolSoTheBlockReachesFourSymbols) {
+  // 600 bytes at the session's 1024-byte symbol would be a single symbol, which Raptor cannot encode.
+  const uint16_t t = round_trip(FecScheme::Raptor, 600, 1024);
+  EXPECT_LE(t, 150u) << "symbol length was not shortened";
+  EXPECT_GE(600u / t, 4u) << "shortened symbol still does not reach four source symbols";
+}
+
+TEST(FileRaptorSmallObjectTest, RaptorLeavesTheSymbolAloneWhenTheObjectAlreadyReachesFour) {
+  EXPECT_EQ(round_trip(FecScheme::Raptor, 20000, 256), 256u);
+}
+
+TEST(FileRaptorSmallObjectTest, RaptorEncodesAnObjectOfExactlyFourBytes) {
+  EXPECT_GT(round_trip(FecScheme::Raptor, 4, 1024), 0u);
+}
+
+TEST(FileRaptorSmallObjectTest, RaptorRefusesAnObjectTooSmallForFourSymbolsAtAnyLength) {
+  // Below four bytes no symbol length reaches four symbols. Failing here, naming the constraint, is
+  // preferred to proceeding into a failure inside the codec that names nothing.
+  std::vector<char> data(3, 'x');
+  FecOti oti{
+    .encoding_id = FecScheme::Raptor,
+    .encoding_symbol_length = 1024,
+    .max_source_block_length = 200,
+    .max_number_of_encoding_symbols = 400,
+  };
+  EXPECT_THROW(
+      File(1, oti, "tiny.bin", "application/octet-stream", 0, data.data(), data.size(), true),
+      std::runtime_error);
+}

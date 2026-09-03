@@ -385,6 +385,39 @@ auto File::calculate_partitioning_raptor() -> void
   if (k_cap == 0) k_cap = kDefaultK;
   if (k_cap > kSchemeMaxK) k_cap = kSchemeMaxK;
 
+  // Raptor's systematic index table starts at K = 4 -- RFC 5053 clause 5.7: "The following is the
+  // list of the systematic indices for values of K between 4 and 8192 inclusive." -- so a Raptor
+  // source block of fewer than 4 symbols has no systematic index and cannot be encoded.
+  //
+  // RaptorQ has no such floor and needs nothing here: it pads a short block instead of refusing it.
+  // RFC 6330 clause 5.1: "K' denotes the number of source plus padding symbols in an extended
+  // source block."
+  // Clause 5.3.2 gives the selection rule, that K' is the smallest tabulated value not less than K,
+  // so any K encodes. Shortening the symbol for RaptorQ would be a change made for no reason, and
+  // this therefore applies to Raptor alone.
+  //
+  // The symbol length is the sender's choice rather than a property of the object, and the FDT carries
+  // FEC-OTI-Encoding-Symbol-Length per file, so a receiver reads the value used for this object rather
+  // than assuming the session's. An object too small to reach 4 symbols at the session's symbol length
+  // is therefore partitioned with a shorter symbol instead of being refused.
+  static constexpr uint32_t kMinK = 4;
+  if (_meta.fec_oti.encoding_id == FecScheme::Raptor) {
+    if (_meta.fec_oti.transfer_length < kMinK) {
+      // No symbol length reaches 4 symbols here, so there is nothing to choose. Failing with the
+      // constraint named is preferred to proceeding into a failure inside the codec that names
+      // nothing; a caller with objects this small should send them under Compact No-Code, which the
+      // FDT selects per file.
+      throw std::runtime_error(fmt::format(
+          "FLUTE: object of {} bytes is too small for Raptor, which needs at least {} source symbols "
+          "(RFC 5053 clause 5.7); send it under Compact No-Code instead",
+          _meta.fec_oti.transfer_length, kMinK));
+    }
+    if (_meta.fec_oti.transfer_length < (uint64_t)kMinK * _meta.fec_oti.encoding_symbol_length) {
+      _meta.fec_oti.encoding_symbol_length =
+          (uint16_t)(_meta.fec_oti.transfer_length / kMinK); // floor, so ceil(F/T) >= 4
+    }
+  }
+
   uint32_t Kt = (uint32_t)ceil((double)_meta.fec_oti.transfer_length / (double)_meta.fec_oti.encoding_symbol_length);
   if (Kt == 0) Kt = 1;
   uint32_t Z = (uint32_t)ceil((double)Kt / (double)k_cap);
