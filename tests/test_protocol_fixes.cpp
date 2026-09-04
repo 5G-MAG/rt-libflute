@@ -669,7 +669,7 @@ TEST(ProfileTsiWidthTest, WideTsiRefusedUnderTheMbmsDownloadProfile) {
   EXPECT_THROW(
       LibFlute::Transmitter("239.1.3.10", 5000, /*tsi*/ 0x10000, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                             std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false,
-                            std::nullopt, Profile::Ts26517),
+                            std::nullopt, /*content_fec_oti*/ std::nullopt, Profile::Ts26517),
       std::runtime_error);
 }
 
@@ -678,15 +678,15 @@ TEST(ProfileTsiWidthTest, SixteenBitTsiAcceptedUnderTheProfile) {
   EXPECT_NO_THROW(
       LibFlute::Transmitter("239.1.3.11", 5000, /*tsi*/ 0xFFFF, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                             std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false,
-                            std::nullopt, Profile::Ts26517));
+                            std::nullopt, /*content_fec_oti*/ std::nullopt, Profile::Ts26517));
 }
 
-TEST(ProfileTsiWidthTest, WideTsiAcceptedOutsideTheProfile) {
+TEST(ProfileTsiWidthTest, WideTsiAcceptedWhenUnprofiled) {
   boost::asio::io_context io;
   EXPECT_NO_THROW(
       LibFlute::Transmitter("239.1.3.12", 5000, /*tsi*/ 0x10000, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                             std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false,
-                            std::nullopt, Profile::Unprofiled));
+                            std::nullopt, /*content_fec_oti*/ std::nullopt, Profile::Unprofiled));
 }
 
 
@@ -936,3 +936,201 @@ TEST(FdtFecEncodingId, AnUnrecognisedIdentifierIsRefusedAtTheFileLevel) {
   EXPECT_THROW(parse_fdt(fdt_xml_with_encoding_id("99", /*at_file_level*/ true)),
                std::runtime_error);
 }
+
+// ---------------------------------------------------------------------------
+// File::missing_symbol_esis() -- TS 26.517 cl.6.2.4.5's minimal-byte-range
+// algorithm needs a flat, file-wide, sorted list of missing source symbol
+// ESIs as its input; these confirm the accessor added for that (A3.9)
+// actually produces one, both within a single source block (the
+// Compact-No-Code case cl.6.2.4.5 exactly specifies) and across multiple
+// blocks (the Raptor/RaptorQ superset case, per the accessor's own
+// documented non-minimality caveat).
+// ---------------------------------------------------------------------------
+TEST(MissingSymbolEsis, CompleteFileHasNoMissingSymbols) {
+  const size_t data_len = 100;
+  std::vector<char> data(data_len, 'x');
+  FecOti oti{FecScheme::CompactNoCode, 0, 0, /*encoding_symbol_length*/ 10, /*max_source_block_length*/ 64, 0};
+
+  File encoder(1, oti, "test.bin", "application/octet-stream", 0, data.data(), data_len, true);
+  auto symbols = encoder.get_next_symbols(1024 * 1024);
+  ASSERT_EQ(symbols.size(), 10u);  // 100 bytes / 10-byte symbols, single block
+
+  File decoder(encoder.meta());
+  for (const auto& s : symbols) decoder.put_symbol(s);
+
+  ASSERT_TRUE(decoder.complete());
+  EXPECT_TRUE(decoder.missing_symbol_esis().empty());
+}
+
+TEST(MissingSymbolEsis, SingleBlockReturnsFlatSortedListOfMissingSourceSymbols) {
+  const size_t data_len = 100;
+  std::vector<char> data(data_len, 'x');
+  FecOti oti{FecScheme::CompactNoCode, 0, 0, 10, 64, 0};
+
+  File encoder(1, oti, "test.bin", "application/octet-stream", 0, data.data(), data_len, true);
+  auto symbols = encoder.get_next_symbols(1024 * 1024);
+  ASSERT_EQ(symbols.size(), 10u);
+
+  File decoder(encoder.meta());
+  // Deliver every symbol except ESIs 2, 3 (consecutive -- exercises the same
+  // "merge adjacent" case ComputeRepairByteRanges relies on downstream) and 7.
+  for (size_t i = 0; i < symbols.size(); i++) {
+    if (i == 2 || i == 3 || i == 7) continue;
+    decoder.put_symbol(symbols[i]);
+  }
+
+  ASSERT_FALSE(decoder.complete());
+  auto missing = decoder.missing_symbol_esis();
+  ASSERT_EQ(missing.size(), 3u);
+  EXPECT_EQ(missing[0], 2u);
+  EXPECT_EQ(missing[1], 3u);
+  EXPECT_EQ(missing[2], 7u);
+}
+
+TEST(MissingSymbolEsis, MultiBlockEsisAreFlatAcrossBlockBoundariesNotPerBlockLocal) {
+  // Forces 2 source blocks (10 symbols/block cap, 20 total source symbols) so
+  // a missing symbol in the second block must be reported as a *global*
+  // ESI (10 + local index), not the block-local index File's own internal
+  // _source_blocks storage would otherwise suggest -- this is exactly the
+  // distinction missing_symbol_esis()'s contract (File.h) documents.
+  const size_t data_len = 200;  // 20 symbols * 10 bytes
+  std::vector<char> data(data_len, 'x');
+  FecOti oti{FecScheme::CompactNoCode, 0, 0, 10, 10, 0};
+
+  File encoder(1, oti, "test.bin", "application/octet-stream", 0, data.data(), data_len, true);
+  auto symbols = encoder.get_next_symbols(1024 * 1024);
+  ASSERT_EQ(symbols.size(), 20u);
+  // CompactNoCode doesn't write nof_source_blocks back into the meta OTI (only the
+  // Raptor family does -- see calculate_partitioning() vs. _raptor), so confirm the
+  // multi-block split actually happened the direct way: at least one symbol reports
+  // source_block_number() == 1.
+  bool saw_block_1 = false;
+  for (const auto& s : symbols) saw_block_1 |= (s.source_block_number() == 1);
+  ASSERT_TRUE(saw_block_1) << "test setup didn't actually produce a second source block";
+
+  File decoder(encoder.meta());
+  // Withhold global ESI 15 -- block-local ESI 5 within source block 1 -- and
+  // delivering everything else.
+  for (const auto& s : symbols) {
+    if (s.source_block_number() == 1 && s.id() == 5) continue;
+    decoder.put_symbol(s);
+  }
+
+  auto missing = decoder.missing_symbol_esis();
+  ASSERT_EQ(missing.size(), 1u);
+  EXPECT_EQ(missing[0], 15u);  // NOT 5 -- must be the flat, file-wide index
+}
+// ---------------------------------------------------------------------------
+// File::put_recovered_bytes() -- TS 26.517 cl.6.2.4.6 step 2 (MBS-4-UC unicast
+// object repair): injects bytes recovered out-of-band, at the exact flat byte
+// offset missing_symbol_esis()'s own contract promises (esi * T), and must
+// complete the file/MD5-check exactly as if those bytes had arrived over FLUTE.
+// ---------------------------------------------------------------------------
+TEST(PutRecoveredBytes, SingleMissingSymbolCompletesTheFile) {
+  const size_t data_len = 100;
+  std::vector<char> data(data_len);
+  for (size_t i = 0; i < data_len; i++) data[i] = static_cast<char>(i);
+  FecOti oti{FecScheme::CompactNoCode, 0, 0, /*encoding_symbol_length*/ 10, /*max_source_block_length*/ 64, 0};
+
+  File encoder(1, oti, "test.bin", "application/octet-stream", 0, data.data(), data_len, true);
+  auto symbols = encoder.get_next_symbols(1024 * 1024);
+  ASSERT_EQ(symbols.size(), 10u);
+
+  File decoder(encoder.meta());
+  for (size_t i = 0; i < symbols.size(); i++) {
+    if (i == 4) continue;  // withhold ESI 4
+    decoder.put_symbol(symbols[i]);
+  }
+  ASSERT_FALSE(decoder.complete());
+  ASSERT_EQ(decoder.missing_symbol_esis(), (std::vector<uint32_t>{4}));
+
+  // ESI 4's own 10 bytes are data[40..49] -- the exact bytes an MBS AS repair GET
+  // for byte range [40,50) would return.
+  std::vector<uint8_t> recovered(data.begin() + 40, data.begin() + 50);
+  decoder.put_recovered_bytes(40, recovered);
+
+  EXPECT_TRUE(decoder.complete());
+  EXPECT_TRUE(decoder.missing_symbol_esis().empty());
+  ASSERT_EQ(decoder.length(), data_len);
+  EXPECT_EQ(memcmp(decoder.buffer(), data.data(), data_len), 0);
+}
+
+TEST(PutRecoveredBytes, OneRecoveredRangeSpanningMultipleConsecutiveMissingSymbols) {
+  // Mirrors ComputeRepairByteRanges()'s own "merge adjacent missing ESIs into one range"
+  // behaviour: one recovered blob covering two consecutive symbols' worth of bytes in a
+  // single put_recovered_bytes() call, the same shape a real merged repair GET response
+  // would produce.
+  const size_t data_len = 100;
+  std::vector<char> data(data_len);
+  for (size_t i = 0; i < data_len; i++) data[i] = static_cast<char>(i);
+  FecOti oti{FecScheme::CompactNoCode, 0, 0, 10, 64, 0};
+
+  File encoder(1, oti, "test.bin", "application/octet-stream", 0, data.data(), data_len, true);
+  auto symbols = encoder.get_next_symbols(1024 * 1024);
+  ASSERT_EQ(symbols.size(), 10u);
+
+  File decoder(encoder.meta());
+  for (size_t i = 0; i < symbols.size(); i++) {
+    if (i == 2 || i == 3) continue;  // withhold consecutive ESIs 2, 3
+    decoder.put_symbol(symbols[i]);
+  }
+  ASSERT_EQ(decoder.missing_symbol_esis(), (std::vector<uint32_t>{2, 3}));
+
+  std::vector<uint8_t> recovered(data.begin() + 20, data.begin() + 40);  // ESIs 2 and 3, one blob
+  decoder.put_recovered_bytes(20, recovered);
+
+  EXPECT_TRUE(decoder.complete());
+  EXPECT_EQ(memcmp(decoder.buffer(), data.data(), data_len), 0);
+}
+
+TEST(PutRecoveredBytes, AlreadyCompleteSymbolIsNotOverwritten) {
+  // A byte range that (harmlessly) overlaps a symbol already received over FLUTE must
+  // leave that symbol's own bytes untouched -- the same idempotency put_symbol() already
+  // has for a duplicate delivery.
+  const size_t data_len = 100;
+  std::vector<char> data(data_len);
+  for (size_t i = 0; i < data_len; i++) data[i] = static_cast<char>(i);
+  FecOti oti{FecScheme::CompactNoCode, 0, 0, 10, 64, 0};
+
+  File encoder(1, oti, "test.bin", "application/octet-stream", 0, data.data(), data_len, true);
+  auto symbols = encoder.get_next_symbols(1024 * 1024);
+
+  File decoder(encoder.meta());
+  for (const auto& s : symbols) decoder.put_symbol(s);  // deliver everything
+  ASSERT_TRUE(decoder.complete());
+
+  // "Recover" ESI 4 with different (wrong) bytes -- must be ignored, since it's already complete.
+  std::vector<uint8_t> wrong(10, 0xEE);
+  decoder.put_recovered_bytes(40, wrong);
+
+  EXPECT_EQ(memcmp(decoder.buffer(), data.data(), data_len), 0);
+}
+
+TEST(PutRecoveredBytes, MultiBlockOffsetMatchesMissingSymbolEsisOwnFlatNumbering) {
+  // Same 2-source-block setup as MultiBlockEsisAreFlatAcrossBlockBoundariesNotPerBlockLocal
+  // above, confirming put_recovered_bytes()'s byte_offset uses the identical flat
+  // (not block-local) numbering missing_symbol_esis() itself returns -- offset 150 is
+  // global ESI 15 (block 1, block-local ESI 5), not block-local ESI 5's own offset (50).
+  const size_t data_len = 200;
+  std::vector<char> data(data_len);
+  for (size_t i = 0; i < data_len; i++) data[i] = static_cast<char>(i);
+  FecOti oti{FecScheme::CompactNoCode, 0, 0, 10, 10, 0};
+
+  File encoder(1, oti, "test.bin", "application/octet-stream", 0, data.data(), data_len, true);
+  auto symbols = encoder.get_next_symbols(1024 * 1024);
+  ASSERT_EQ(symbols.size(), 20u);
+
+  File decoder(encoder.meta());
+  for (const auto& s : symbols) {
+    if (s.source_block_number() == 1 && s.id() == 5) continue;
+    decoder.put_symbol(s);
+  }
+  ASSERT_EQ(decoder.missing_symbol_esis(), (std::vector<uint32_t>{15}));
+
+  std::vector<uint8_t> recovered(data.begin() + 150, data.begin() + 160);  // global ESI 15 * 10
+  decoder.put_recovered_bytes(150, recovered);
+
+  EXPECT_TRUE(decoder.complete());
+  EXPECT_EQ(memcmp(decoder.buffer(), data.data(), data_len), 0);
+}
+

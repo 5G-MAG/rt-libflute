@@ -407,6 +407,7 @@ namespace
             LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005,
             /*active*/ true,
             /*source_address*/ std::nullopt,
+            /*content_fec_oti*/ std::nullopt,
             options.profile);
 
         auto file_description = std::make_shared<LibFlute::Transmitter::FileDescription>(

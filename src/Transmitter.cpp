@@ -493,7 +493,9 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
                            const std::optional<boost::asio::ip::udp::endpoint> &tunnel_endpoint,
                            Transmitter::FdtNamespace fdt_namespace, bool active,
                            const std::optional<std::string> &source_address,
-                           Profile profile )
+                           const std::optional<FecOti> &content_fec_oti,
+                           Profile profile,
+                           uint32_t fec_redundancy_level )
     : _endpoint(boost::asio::ip::make_address(destination_address), port)
     , _source_address()
     , _socket(io_context, _endpoint.protocol())
@@ -510,6 +512,7 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
     , _tunnel_local_address()
     , _active(active)
     , _profile(profile)
+    , _fec_redundancy_level(fec_redundancy_level)
 {
   /* The 3GPP profiles fix the TSI field at its narrowest width, so a value that would need the
      wider encoding cannot be signalled under either of them. This is a clause 7.2 rule, binding on
@@ -570,10 +573,49 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
     }
   }
 
-  _fec_oti = FecOti{
-    .encoding_id = FecScheme::CompactNoCode,
-    .encoding_symbol_length = _max_payload,
-    .max_source_block_length = max_source_block_length};
+  // Caller-supplied FEC OTI selects the scheme; otherwise Compact No-Code.
+  if (content_fec_oti.has_value() && content_fec_oti->encoding_id != FecScheme::CompactNoCode) {
+    _fec_oti = FecOti{
+      .encoding_id = content_fec_oti->encoding_id,
+      .encoding_symbol_length = _max_payload,
+      .max_source_block_length = content_fec_oti->max_source_block_length,
+      .max_number_of_encoding_symbols = content_fec_oti->max_number_of_encoding_symbols};
+  } else {
+    _fec_oti = FecOti{
+      .encoding_id = FecScheme::CompactNoCode,
+      .encoding_symbol_length = _max_payload,
+      .max_source_block_length = max_source_block_length};
+  }
+  /* A sub-block must stay under 256 KB under either 3GPP profile.
+
+     TS 26.346 V18.2.0 clause 7.2.3: "The values of N, Z, T and A shall be set such that the
+     sub-block size is less than 256 KB."
+
+     N, Z, T and A are the RFC 5053 scheme-specific parameters, so this binds the Raptor path. This
+     implementation fixes N at 1 (see FecOti::nof_sub_blocks), so a sub-block is a source block and
+     the constraint reduces to K * T < 256 KB, where T is the encoding symbol length settled above.
+
+     The obligation is on how the sender chooses the parameters, so the ceiling is applied as the
+     default when the caller named no maximum, rather than refusing a session that asked for nothing
+     wrong. A caller who does name a maximum above the ceiling is refused, since honouring it would
+     breach the clause and silently shrinking it would discard a stated configuration. */
+  if (is_3gpp(profile) && _fec_oti.encoding_id == FecScheme::Raptor) {
+    constexpr uint32_t kMaxSubBlockSize = 256 * 1024;
+    const uint32_t ceiling_k = (kMaxSubBlockSize - 1) / _fec_oti.encoding_symbol_length;
+    if (ceiling_k == 0) {
+      throw std::runtime_error(
+          "encoding symbol length leaves no room for a source block under the 256 KB sub-block "
+          "ceiling TS 26.346 clause 7.2.3 sets");
+    }
+    if (_fec_oti.max_source_block_length == 0) {
+      _fec_oti.max_source_block_length = ceiling_k;
+    } else if (_fec_oti.max_source_block_length > ceiling_k) {
+      throw std::runtime_error(
+          "max_source_block_length would put a sub-block over the 256 KB ceiling TS 26.346 clause "
+          "7.2.3 sets for the 3GPP profiles; lower it, shorten the symbol, or use Profile::Unprofiled");
+    }
+  }
+
   _fdt = std::make_unique<FileDeliveryTable>(1, _fec_oti, fdt_namespace, profile);
 
   if (_active) {
@@ -706,16 +748,57 @@ auto Transmitter::seconds_since_epoch() -> uint64_t
 
 auto Transmitter::send_fdt() -> void {
   if (_fdt->file_entries().empty()) return;
-  _fdt->set_expires(seconds_since_epoch() + _fdt_repeat_interval * 2);
-  auto fdt = _fdt->to_string();
+
+  const uint32_t instance_id = _fdt->instance_id();
+  const bool already_serialised = !_fdt_string_storage.empty() && _fdt_serialised_instance_id == instance_id;
+
+  if (already_serialised) {
+    /* This instance has already been serialised, so re-send those exact bytes rather than
+       building new ones. An FDT Instance is identified by its ID, and a receiver reassembles
+       its symbols under that identity.
+       RFC 3926 clause 3.4.1: "Each FDT Instance is uniquely identified within the file delivery
+       session by its FDT Instance ID."
+       Re-serialising on every repeat gave the same ID a different byte string each time (the
+       FDT-Instance Expires attribute moves with the clock), so a receiver combining symbols it
+       believed belonged to one object was mixing two, and reassembly could never validate.
+       Repeating an instance is expected -- the same clause's own model allows it: "A certain FDT
+       Instance may be repeated several times during a session" -- but a repeat has to be the same
+       instance, not a new document under an old number. */
+    std::lock_guard<std::mutex> guard(_files_mutex);
+    auto in_flight = _files.find(0);
+    if (in_flight != _files.end() && in_flight->second && !in_flight->second->complete()) {
+      /* Still going out. Replacing it here would restart it from its first symbol, and under a
+         rate limit an FDT spanning several symbols would never reach its last one. */
+      return;
+    }
+  } else {
+    _fdt->set_expires(seconds_since_epoch() + _fdt_repeat_interval * 2);
+    // Store into the member, not a local - see _fdt_string_storage's own doc
+    // comment: the File below only keeps a raw pointer into this buffer, and
+    // that pointer is read later, asynchronously, by send_next_packet().
+    _fdt_string_storage = _fdt->to_string();
+    _fdt_serialised_instance_id = instance_id;
+  }
+  // The FDT itself always goes out as Compact No-Code, regardless of what
+  // FEC scheme protects this Transmitter's content: it's re-sent on its own
+  // repeat timer already (real redundancy without needing FEC), and
+  // Raptor has a minimum source-block size (K >= 4) that a small FDT's
+  // single source block can fall below --
+  // caught by testing a real Transmitter -> Receiver transfer, not by any
+  // in-process File/codec test, all of which constructed content Files
+  // directly and never exercised send_fdt()'s own File construction.
+  FecOti fdt_fec_oti{
+    .encoding_id = FecScheme::CompactNoCode,
+    .encoding_symbol_length = _fec_oti.encoding_symbol_length,
+    .max_source_block_length = 64};
   auto file = std::make_shared<File>(
         0,
-        _fec_oti,
+        fdt_fec_oti,
         "",
         "",
         seconds_since_epoch() + _fdt_repeat_interval * 2,
-        (char*)fdt.c_str(),
-        fdt.length(),
+        (char*)_fdt_string_storage.c_str(),
+        _fdt_string_storage.length(),
         true);
   if (file) {
     file->set_fdt_instance_id( _fdt->instance_id() );
@@ -747,6 +830,7 @@ auto Transmitter::send(
         expires,
         data,
         length);
+  file->set_fec_redundancy_level(_fec_redundancy_level);
 
   _fdt->add(file->meta());
   send_fdt();
@@ -767,7 +851,6 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
 
   // Set the TSI and TOI for the FileDescription
   file_description->tsi(_tsi);
-  bool is_resend = (file_description->toi() != 0);
   if (file_description->toi() == 0) {
     if (file_description->previous_toi() != 0) {
       // This FileDescription's content changed since its last send (set_content()/
@@ -787,6 +870,7 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
   file_description->merge_fec_oti(_fec_oti);
 
   auto file = std::make_shared<File>(file_description);
+  file->set_fec_redundancy_level(_fec_redundancy_level);
   {
     std::lock_guard<std::mutex> guard(_files_mutex);
     // A reused (carousel-repeat) FileDescription keeps the same TOI, but map::insert() is a
@@ -795,15 +879,18 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
     // replaces it.
     _files[file_description->toi()] = file;
   }
-  if (is_resend) {
-    // Without this, add() below unconditionally appends another <File> entry for the same
-    // TOI on every single carousel repetition, without ever removing the previous one (the
-    // FDT has no other dedup by TOI) -- the FDT grows without bound the longer the object
-    // stays in the carousel, and eventually becomes too large to serialise/parse correctly.
-    _fdt->remove(file_description->toi());
+  // add() replaces the entry for a TOI it already holds, so a carousel repetition no longer needs
+  // to remove the previous entry first to stop the FDT growing without bound. It also reports
+  // whether the table actually changed: a repetition that describes the object exactly as the
+  // current instance already does leaves the table alone, and reissuing the FDT there would be
+  // harmful rather than merely wasteful. send_fdt() replaces the in-flight FDT object wholesale
+  // (insert_or_assign on TOI 0), restarting its transmission from the first symbol, so a sender
+  // repeating many objects would restart a multi-symbol FDT faster than it can finish sending,
+  // and receivers would never assemble a complete instance. The FDT's own repeat timer
+  // (fdt_send_tick) re-sends it regardless.
+  if (_fdt->add(file->meta())) {
+    send_fdt();
   }
-  _fdt->add(file->meta());
-  send_fdt();
   return file_description->toi();
 }
 
@@ -816,6 +903,17 @@ auto Transmitter::fdt_send_tick(const boost::system::error_code& error) -> void
   }
 }
 
+auto Transmitter::withdraw_file(uint32_t toi) -> void
+{
+  if (toi == 0) return; // TOI 0 is the FDT itself, never a described file
+  {
+    std::lock_guard<std::mutex> guard(_files_mutex);
+    _files.erase(toi);
+  }
+  _fdt->remove(toi);
+  send_fdt();
+}
+
 auto Transmitter::file_transmitted(uint32_t toi) -> void
 {
   {
@@ -823,8 +921,31 @@ auto Transmitter::file_transmitted(uint32_t toi) -> void
     _files.erase(toi);
   }
   if (toi != 0) {
-    _fdt->remove(toi);
-    send_fdt();
+    /* A repeating sender re-sends an object under the TOI it already has (see send(), which treats
+       a non-zero TOI as a resend), so dropping the description here would leave that object
+       transmitted but undescribed for the rest of the session. A receiver cannot recover an object
+       whose TOI no entry describes, however cleanly its symbols arrive, and receivers join at
+       arbitrary times, so the entry is what makes a repeating object acquirable at all. Retain the
+       description while the sender still intends to repeat it; one-shot senders keep removing it,
+       which is what bounds FDT growth for them.
+
+       Note this deliberately does NOT advertise the result as a full snapshot: the MBMS Download
+       Profile prohibits the sender doing so. TS 26.346 V18.2.0 clause L.4.3: "The following
+       parameters, defined at the FDT-Instance level, shall not be used by the FLUTE sender:",
+       whose list carries the mbms2008:FullFDT attribute. Retaining entries needs no such
+       signalling; it only stops the table forgetting objects that are still being sent. */
+    if (!_retain_transmitted_in_fdt) {
+      _fdt->remove(toi);
+      /* The table just changed, so publish the new one. Under retention it did not change: the
+         entry is still there and still correct, and re-publishing would be actively harmful.
+         send_fdt() replaces the in-flight FDT object wholesale (insert_or_assign on TOI 0), which
+         restarts its transmission from the first symbol. A retained table describes every object
+         the sender repeats, so it spans several symbols, and a sender completing one object per
+         few hundred milliseconds would restart it far more often than it can finish, leaving
+         receivers with a permanent stream of first symbols and no complete instance. Leave
+         re-transmission to the FDT's own repeat timer. */
+      send_fdt();
+    }
 
     if (_completion_cb) {
       _completion_cb(toi);
