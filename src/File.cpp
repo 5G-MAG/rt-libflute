@@ -308,6 +308,47 @@ auto File::missing_symbol_esis() const -> std::vector<uint32_t>
   return missing;
 }
 
+auto File::put_recovered_bytes(uint64_t byte_offset, const std::vector<uint8_t>& data) -> void
+{
+  const uint32_t T = _meta.fec_oti.encoding_symbol_length;
+  if (T == 0 || data.empty()) return;
+
+  bool touched_any = false;
+  // Same traversal/global-ESI-numbering as missing_symbol_esis() (block order, then
+  // block-local ESI order) so a byte_offset computed from one of its own returned ESIs
+  // (esi * T) lands on exactly the symbol that ESI names.
+  uint32_t global_base = 0;
+  for (auto& block_entry : _source_blocks) {
+    SourceBlock& block = block_entry.second;
+    bool block_touched = false;
+    for (auto& symbol_entry : block.symbols) {
+      uint64_t symbol_offset = (static_cast<uint64_t>(global_base) + symbol_entry.first) * T;
+      uint64_t symbol_end = symbol_offset + symbol_entry.second.length;
+      // Does this piece of `data` cover this symbol's own byte range?
+      if (symbol_offset >= byte_offset && symbol_end <= byte_offset + data.size()) {
+        uint64_t data_pos = symbol_offset - byte_offset;
+        if (data_pos + symbol_entry.second.length <= data.size()) {
+          SourceBlock::Symbol& target_symbol = symbol_entry.second;
+          if (!target_symbol.complete) {
+            memcpy(target_symbol.data, data.data() + data_pos, target_symbol.length);
+            target_symbol.complete = true;
+            block_touched = true;
+            touched_any = true;
+          }
+        }
+      }
+    }
+    global_base += static_cast<uint32_t>(block.symbols.size());
+    if (block_touched) {
+      check_source_block_completion(block_entry.first, block);
+    }
+  }
+
+  if (touched_any) {
+    check_file_completion();
+  }
+}
+
 auto File::calculate_partitioning() -> void
 {
   if (is_raptor_family()) {

@@ -1020,3 +1020,117 @@ TEST(MissingSymbolEsis, MultiBlockEsisAreFlatAcrossBlockBoundariesNotPerBlockLoc
   ASSERT_EQ(missing.size(), 1u);
   EXPECT_EQ(missing[0], 15u);  // NOT 5 -- must be the flat, file-wide index
 }
+// ---------------------------------------------------------------------------
+// File::put_recovered_bytes() -- TS 26.517 cl.6.2.4.6 step 2 (MBS-4-UC unicast
+// object repair): injects bytes recovered out-of-band, at the exact flat byte
+// offset missing_symbol_esis()'s own contract promises (esi * T), and must
+// complete the file/MD5-check exactly as if those bytes had arrived over FLUTE.
+// ---------------------------------------------------------------------------
+TEST(PutRecoveredBytes, SingleMissingSymbolCompletesTheFile) {
+  const size_t data_len = 100;
+  std::vector<char> data(data_len);
+  for (size_t i = 0; i < data_len; i++) data[i] = static_cast<char>(i);
+  FecOti oti{FecScheme::CompactNoCode, 0, 0, /*encoding_symbol_length*/ 10, /*max_source_block_length*/ 64, 0};
+
+  File encoder(1, oti, "test.bin", "application/octet-stream", 0, data.data(), data_len, true);
+  auto symbols = encoder.get_next_symbols(1024 * 1024);
+  ASSERT_EQ(symbols.size(), 10u);
+
+  File decoder(encoder.meta());
+  for (size_t i = 0; i < symbols.size(); i++) {
+    if (i == 4) continue;  // withhold ESI 4
+    decoder.put_symbol(symbols[i]);
+  }
+  ASSERT_FALSE(decoder.complete());
+  ASSERT_EQ(decoder.missing_symbol_esis(), (std::vector<uint32_t>{4}));
+
+  // ESI 4's own 10 bytes are data[40..49] -- the exact bytes an MBS AS repair GET
+  // for byte range [40,50) would return.
+  std::vector<uint8_t> recovered(data.begin() + 40, data.begin() + 50);
+  decoder.put_recovered_bytes(40, recovered);
+
+  EXPECT_TRUE(decoder.complete());
+  EXPECT_TRUE(decoder.missing_symbol_esis().empty());
+  ASSERT_EQ(decoder.length(), data_len);
+  EXPECT_EQ(memcmp(decoder.buffer(), data.data(), data_len), 0);
+}
+
+TEST(PutRecoveredBytes, OneRecoveredRangeSpanningMultipleConsecutiveMissingSymbols) {
+  // Mirrors ComputeRepairByteRanges()'s own "merge adjacent missing ESIs into one range"
+  // behaviour: one recovered blob covering two consecutive symbols' worth of bytes in a
+  // single put_recovered_bytes() call, the same shape a real merged repair GET response
+  // would produce.
+  const size_t data_len = 100;
+  std::vector<char> data(data_len);
+  for (size_t i = 0; i < data_len; i++) data[i] = static_cast<char>(i);
+  FecOti oti{FecScheme::CompactNoCode, 0, 0, 10, 64, 0};
+
+  File encoder(1, oti, "test.bin", "application/octet-stream", 0, data.data(), data_len, true);
+  auto symbols = encoder.get_next_symbols(1024 * 1024);
+  ASSERT_EQ(symbols.size(), 10u);
+
+  File decoder(encoder.meta());
+  for (size_t i = 0; i < symbols.size(); i++) {
+    if (i == 2 || i == 3) continue;  // withhold consecutive ESIs 2, 3
+    decoder.put_symbol(symbols[i]);
+  }
+  ASSERT_EQ(decoder.missing_symbol_esis(), (std::vector<uint32_t>{2, 3}));
+
+  std::vector<uint8_t> recovered(data.begin() + 20, data.begin() + 40);  // ESIs 2 and 3, one blob
+  decoder.put_recovered_bytes(20, recovered);
+
+  EXPECT_TRUE(decoder.complete());
+  EXPECT_EQ(memcmp(decoder.buffer(), data.data(), data_len), 0);
+}
+
+TEST(PutRecoveredBytes, AlreadyCompleteSymbolIsNotOverwritten) {
+  // A byte range that (harmlessly) overlaps a symbol already received over FLUTE must
+  // leave that symbol's own bytes untouched -- the same idempotency put_symbol() already
+  // has for a duplicate delivery.
+  const size_t data_len = 100;
+  std::vector<char> data(data_len);
+  for (size_t i = 0; i < data_len; i++) data[i] = static_cast<char>(i);
+  FecOti oti{FecScheme::CompactNoCode, 0, 0, 10, 64, 0};
+
+  File encoder(1, oti, "test.bin", "application/octet-stream", 0, data.data(), data_len, true);
+  auto symbols = encoder.get_next_symbols(1024 * 1024);
+
+  File decoder(encoder.meta());
+  for (const auto& s : symbols) decoder.put_symbol(s);  // deliver everything
+  ASSERT_TRUE(decoder.complete());
+
+  // "Recover" ESI 4 with different (wrong) bytes -- must be ignored, since it's already complete.
+  std::vector<uint8_t> wrong(10, 0xEE);
+  decoder.put_recovered_bytes(40, wrong);
+
+  EXPECT_EQ(memcmp(decoder.buffer(), data.data(), data_len), 0);
+}
+
+TEST(PutRecoveredBytes, MultiBlockOffsetMatchesMissingSymbolEsisOwnFlatNumbering) {
+  // Same 2-source-block setup as MultiBlockEsisAreFlatAcrossBlockBoundariesNotPerBlockLocal
+  // above, confirming put_recovered_bytes()'s byte_offset uses the identical flat
+  // (not block-local) numbering missing_symbol_esis() itself returns -- offset 150 is
+  // global ESI 15 (block 1, block-local ESI 5), not block-local ESI 5's own offset (50).
+  const size_t data_len = 200;
+  std::vector<char> data(data_len);
+  for (size_t i = 0; i < data_len; i++) data[i] = static_cast<char>(i);
+  FecOti oti{FecScheme::CompactNoCode, 0, 0, 10, 10, 0};
+
+  File encoder(1, oti, "test.bin", "application/octet-stream", 0, data.data(), data_len, true);
+  auto symbols = encoder.get_next_symbols(1024 * 1024);
+  ASSERT_EQ(symbols.size(), 20u);
+
+  File decoder(encoder.meta());
+  for (const auto& s : symbols) {
+    if (s.source_block_number() == 1 && s.id() == 5) continue;
+    decoder.put_symbol(s);
+  }
+  ASSERT_EQ(decoder.missing_symbol_esis(), (std::vector<uint32_t>{15}));
+
+  std::vector<uint8_t> recovered(data.begin() + 150, data.begin() + 160);  // global ESI 15 * 10
+  decoder.put_recovered_bytes(150, recovered);
+
+  EXPECT_TRUE(decoder.complete());
+  EXPECT_EQ(memcmp(decoder.buffer(), data.data(), data_len), 0);
+}
+

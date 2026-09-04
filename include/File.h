@@ -176,6 +176,32 @@ namespace LibFlute {
       uint16_t fdt_instance_id() { return _fdt_instance_id; };
 
      /**
+      *  Inject bytes recovered out-of-band (TS 26.517 cl.6.2.4.6 step 2: "the MBSTF Client
+      *  shall ... use the recovered data to fill in the missing parts of the object"), e.g. via
+      *  an MBS-4-UC unicast repair GET (cl.6.2.4 -- RequestRepairRanges() and friends), rather
+      *  than a symbol received over FLUTE. `byte_offset` is a plain offset into the file's own
+      *  byte buffer, using the exact same flat numbering missing_symbol_esis()'s own contract
+      *  already promises callers (`esi * fec_oti().encoding_symbol_length`) -- so a recovered
+      *  LibFlute::RecoveredRange (or the caller's own equivalent) can be passed straight through
+      *  with no re-derivation. `data` is chopped into fec_oti().encoding_symbol_length-sized
+      *  pieces (the trailing piece may be shorter, for the file's last, partial symbol, matching
+      *  every other symbol-length handling in this class); each piece must align exactly with
+      *  one source symbol's own byte range -- behaviour is undefined otherwise, the same
+      *  precondition style missing_symbol_esis() already documents for its own callers.
+      *
+      *  Only source symbol slots not already complete are written -- a byte range that overlaps
+      *  or duplicates data already received over FLUTE is left untouched there, the same
+      *  idempotency put_symbol() already has. Runs the identical completion bookkeeping
+      *  put_symbol() does (check_source_block_completion()/check_file_completion()), so a file
+      *  completed entirely (or partly) via recovered bytes reports complete() and passes its own
+      *  MD5 check exactly like one completed entirely over FLUTE.
+      *
+      *  @param byte_offset Offset into the file's own byte buffer where `data` starts.
+      *  @param data The recovered bytes.
+      */
+      void put_recovered_bytes(uint64_t byte_offset, const std::vector<uint8_t>& data);
+
+     /**
       *  Get the sorted list of missing source symbol Encoding Symbol Identifiers (ESIs),
       *  as a flat index across the whole file rather than per-source-block-local -- i.e.
       *  block 0's K0 symbols are ESIs 0..K0-1, block 1's are K0..K0+K1-1, and so on,
