@@ -43,8 +43,32 @@ namespace LibFlute {
       *  @param symbols Vector of encoding symbols
       *  @param max_size Maximum payload size
       *  @param fdt_instance_id FDT instance ID (only relevant for FDT with TOI=0)
+      *  @param close_session_flag Set the LCT Close Session flag (RFC 3451 clause 5.1, 'A' bit) on this packet
+      *  @param close_object_flag Set the LCT Close Object flag (RFC 3451 clause 5.1, 'B' bit) on this packet
       */
-      AlcPacket(uint16_t tsi, uint16_t toi, FecOti fec_oti, const std::vector<EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id);
+     /**
+      *  Tag selecting the data-less Close Session packet constructor below.
+      */
+      struct CloseSession {};
+
+     /**
+      *  Build a packet that carries the Close Session flag and nothing else: no payload, and
+      *  therefore no FEC Payload ID and no TOI.
+      *
+      *  RFC 3450 clause 4.1 provides for such a packet: "In some special cases an ALC sender may
+      *  need to produce ALC packets that do not contain any payload." RFC 3926 clause 3.1 gives it
+      *  this shape in a FLUTE session, requiring that it not carry the TOI.
+      *
+      *  Only expressible for a TSI of 32 bits or fewer. Dropping the TOI means dropping the
+      *  half-word flag the two fields share, which leaves the TSI a whole number of 32-bit words,
+      *  and one word is all this encoding uses. Throws above that.
+      *
+      *  @param tsi The session's Transport Session Identifier.
+      */
+      AlcPacket(uint64_t tsi, CloseSession);
+
+      AlcPacket(uint64_t tsi, uint16_t toi, FecOti fec_oti, const std::vector<EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id,
+                bool close_session_flag = false, bool close_object_flag = false);
 
      /**
       *  Default destructor.
@@ -72,14 +96,39 @@ namespace LibFlute {
       size_t header_length() const  { return _lct_header.lct_header_len * 4; };
 
      /**
-      *  Get the FDT instance ID 
+      *  Get the FDT instance ID
       */
       uint32_t fdt_instance_id() const { return _fdt_instance_id; };
+
+     /**
+      *  Whether the sender set the LCT Close Session flag on this packet, signalling that no
+      *  further objects will be sent in this session (RFC 3451 clause 5.1, 'A' bit).
+      */
+      bool close_session_flag() const { return _lct_header.close_session_flag; };
+
+     /**
+      *  Whether the sender set the LCT Close Object flag on this packet, signalling that this
+      *  is the last packet for this TOI (RFC 3451 clause 5.1, 'B' bit).
+      */
+      bool close_object_flag() const { return _lct_header.close_object_flag; };
 
      /**
       *  Get the FEC scheme
       */
       FecScheme fec_scheme() const { return _fec_oti.encoding_id; };
+
+     /**
+      *  Whether this packet carried its own EXT_FTI header extension.
+      *
+      *  A sender may put EXT_FTI on individual object packets (TOI > 0), not only on the FDT
+      *  (TOI 0), and a receiver is obliged to accept it there, so an object's FEC OTI can be
+      *  bootstrapped straight from the packet stream without waiting for, or ever seeing, that
+      *  object's <File> entry in the FDT.
+      *
+      *  RFC 3926 clause 5: "For the TOI values other than 0 the receiver MUST support both
+      *  methods: the use of EXT_FTI and the use of FDT."
+      */
+      bool has_fec_oti() const { return _has_fti; };
 
      /**
       *  Get the content encoding
@@ -107,11 +156,12 @@ namespace LibFlute {
 
       ContentEncoding _content_encoding = ContentEncoding::NONE;
       FecOti _fec_oti = {};
+      bool _has_fti = false;
 
       char* _buffer = nullptr;
       size_t _len;
 
-      // RFC5651 5.1 - LCT Header Format
+      // RFC 3451 clause 5.1 - LCT Header Format
       struct __attribute__((packed)) lct_header_t {
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
         uint8_t res1:1;
@@ -121,7 +171,8 @@ namespace LibFlute {
 
         uint8_t close_object_flag:1;
         uint8_t close_session_flag:1;
-        uint8_t res:2;
+        uint8_t ert_flag:1;
+        uint8_t sct_flag:1;
         uint8_t half_word_flag:1;
         uint8_t toi_flag:2;
         uint8_t tsi_flag:1;
@@ -134,7 +185,8 @@ namespace LibFlute {
         uint8_t tsi_flag:1;
         uint8_t toi_flag:2;
         uint8_t half_word_flag:1;
-        uint8_t res2:2;
+        uint8_t sct_flag:1;
+        uint8_t ert_flag:1;
         uint8_t close_session_flag:1;
         uint8_t close_object_flag:1;
 #else

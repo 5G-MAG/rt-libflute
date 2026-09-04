@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include "FileDeliveryTable.h"
 #include "tinyxml2.h"
+#include <chrono>
 #include <iostream>
 #include <string>
 #include <map>
@@ -132,12 +133,41 @@ bool LibFlute::FileDeliveryTable::FileEntry::operator==(const LibFlute::FileDeli
          etag == other.etag;
 }
 
-LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, FecOti fec_oti, FdtNamespace fdt_namespace)
+LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, FecOti fec_oti, FdtNamespace fdt_namespace,
+                                               Profile profile)
   : _instance_id( instance_id )
   , _instance_id_sent( instance_id - 1 )
   , _global_fec_oti( fec_oti )
   , _fdt_namespace( fdt_namespace )
+  , _profile( profile )
 {
+  /* Each 3GPP profile fixes the FDT schema, so the namespace is taken from the profile rather than
+     from a separate argument that could disagree with it.
+
+     TS 26.517 V18.6.0 clause 6.2.1, for Ts26517: "The MBSTF shall use the Profiled FDT Schema
+     according to clause L.6 of TS 26.346 [7] to describe the object list currently being
+     transmitted in the MBS Distribution Session."
+
+     TS 26.346 V18.2.0 clause 7.2.9, for Ts26346: "The extended FLUTE FDT instance schema
+     defined in clause 7.2.10.1 (based on the one in RFC 3926 [9]) shall be used."
+
+     General FLUTE keeps whatever the caller asked for, RFC 3926 fixing no namespace. */
+  /* TS 26.346 V18.2.0 clause 7.2.9: "When the FEC Encoding ID indicates the "Compact No-Code FEC
+     scheme", the value of this data element shall not exceed 65535, consistent with the 16-bit
+     constraint on the Encoding Symbol ID". Refused at construction rather than clamped: clamping
+     would silently repartition the object and leave the operator's configuration unexplained. */
+  if (is_3gpp(_profile) && _global_fec_oti.encoding_id == FecScheme::CompactNoCode &&
+      _global_fec_oti.max_source_block_length > 65535) {
+    throw std::runtime_error(
+        "FEC-OTI-Maximum-Source-Block-Length exceeds the 65535 the 3GPP profiles allow for the "
+        "Compact No-Code FEC scheme");
+  }
+
+  switch (_profile) {
+    case Profile::Ts26517:        _fdt_namespace = FDT_NS_3GPP_CONSOLIDATED_V2; break;
+    case Profile::Ts26346: _fdt_namespace = FDT_NS_DRAFT_2005; break;
+    case Profile::Unprofiled: break;
+  }
 }
 
 LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffer, size_t len) 
@@ -182,11 +212,27 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
 
   _expires = std::stoull(root_ns.findAttribute(fdt_instance, "Expires", fdt_ns)->Value());
 
+  auto complete_attr = root_ns.findAttribute(fdt_instance, "Complete", fdt_ns);
+  if (complete_attr != nullptr) {
+    std::string val(complete_attr->Value());
+    _complete = (val == "true" || val == "1");
+  }
+
   spdlog::debug("Received new FDT with instance ID {}: {}", instance_id, buffer);
 
   auto val = root_ns.findAttribute(fdt_instance, "FEC-OTI-FEC-Encoding-ID", fdt_ns);
   if (val != nullptr) {
-    _global_fec_oti.encoding_id = static_cast<FecScheme>(strtoul(val->Value(), nullptr, 0));
+    /* Refuse an identifier naming no scheme this library implements, rather than casting it into
+       the enumeration and discovering it several layers down. A sender under either 3GPP profile
+       may not use one (TS 26.346 V18.2.0 clause L.4.7 names the admissible schemes), and an
+       unprofiled sender using one this library cannot decode is equally undeliverable. */
+    auto scheme = fec_scheme_from_encoding_id(strtoul(val->Value(), nullptr, 0));
+    if (!scheme) {
+      throw std::runtime_error(
+          std::string("FDT-Instance FEC-OTI-FEC-Encoding-ID names no FEC scheme this library "
+                      "implements: ") + val->Value());
+    }
+    _global_fec_oti.encoding_id = *scheme;
   }
 
   val = root_ns.findAttribute(fdt_instance, "FEC-OTI-FEC-Instance-ID", fdt_ns);
@@ -262,7 +308,14 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     auto encoding_id = _global_fec_oti.encoding_id;
     val = file_ns.findAttribute(file, "FEC-OTI-FEC-Encoding-ID", fdt_ns);
     if (val != nullptr) {
-      encoding_id = static_cast<FecScheme>(strtoul(val->Value(), nullptr, 0));
+      // Same check as at the FDT-Instance level above; the File level may override it.
+      auto scheme = fec_scheme_from_encoding_id(strtoul(val->Value(), nullptr, 0));
+      if (!scheme) {
+        throw std::runtime_error(
+            std::string("File FEC-OTI-FEC-Encoding-ID names no FEC scheme this library "
+                        "implements: ") + val->Value());
+      }
+      encoding_id = *scheme;
     }
 
     auto fec_instance_id = _global_fec_oti.instance_id;
@@ -299,6 +352,18 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
 
     bool no_cache = false;
     //bool max_stale = false;
+    /* The File element's own Expires attribute, read into its own member. Previously this was
+       left at whatever the cache directive said, which made the two indistinguishable on a round
+       trip and hid the emit-side defect. */
+    uint64_t file_expires = 0;
+    auto file_expires_attr = file_ns.findAttribute(file, "Expires", fdt_ns);
+    if (file_expires_attr != nullptr) {
+      /* TS 26.346 V18.2.0 annex L: "When the optional File@Expires attribute is provided, its value
+         shall take precedence over that of the FDT@Expires attribute." Recorded on the entry; the
+         effective expiry accessor below applies the precedence so every caller gets it. */
+      file_expires = strtoull(file_expires_attr->Value(), nullptr, 0);
+    }
+
     std::optional<uint64_t> cache_expires = std::nullopt;
     auto cc = file_ns.findChildElement(file, "Cache-Control", mbms2007_ns);
     if (cc) {
@@ -337,7 +402,7 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
       content_length,
       content_md5,
       content_type,
-      (cache_expires)?(cache_expires.value()):0,
+      file_expires,
       fec_oti,
       {
         no_cache,
@@ -350,9 +415,82 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
   }
 }
 
+namespace {
+  auto ntp_seconds_since_epoch() -> uint64_t
+  {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count() +
+        2'208'988'800; /* Unix epoch -> NTP epoch offset, matching Transmitter::seconds_since_epoch() */
+  }
+}
+
+void LibFlute::FileDeliveryTable::set_expires(uint64_t exp)
+{
+  /* RFC 3926 clause 3.3: "A sender MUST use an expiry time in the future upon creation of an FDT
+     Instance relative to its Sender Current Time (SCT)." An instance created already expired can
+     never be used to interpret anything, and a receiver following clause 7.2.9 discards it on
+     arrival, so this is refused rather than sent. */
+  const auto now = ntp_seconds_since_epoch();
+  if (exp <= now) {
+    throw std::runtime_error(
+        "FDT Instance expiry must be in the future. A receiver discards an instance that has "
+        "already expired, so such a session delivers nothing. See the citation at this check.");
+  }
+  _expires = exp;
+}
+
+uint32_t LibFlute::FileDeliveryTable::next_instance_id(uint32_t current, uint64_t current_expires,
+                                                        uint64_t now,
+                                                        std::map<uint32_t, uint64_t>& expired_instance_ids)
+{
+  /* RFC 3926 clause 3.4.1: "After reaching the maximum value (2^20-1), the numbering starts again
+     from '0'."
+
+     That is the whole sequence, and it has no failure case. The same clause recommends, but does
+     not require, that a sender wait for the previous instance carrying a wraparound ID to expire,
+     so a reuse that is still live is warned about rather than replaced with a different ID or
+     turned into an error. RFC 6726 clause 3.4.1 does make that a prohibition, but this library
+     implements RFC 3926, which TS 26.346 clause L.4.1 references as its FLUTE specification. */
+  expired_instance_ids[current] = current_expires;
+
+  if (current < kMaxFdtInstanceId) {
+    return current + 1;
+  }
+
+  const auto previous = expired_instance_ids.find(0);
+  if (previous != expired_instance_ids.cend() && previous->second >= now) {
+    spdlog::warn("FDT Instance ID wrapping to 0 while the previous instance using it has not yet "
+                 "expired (Expires {}, now {})", previous->second, now);
+  }
+  expired_instance_ids.erase(0);
+  return 0;
+}
+
+auto LibFlute::FileDeliveryTable::advance_instance_id() -> void
+{
+  _instance_id = next_instance_id(_instance_id, _expires, ntp_seconds_since_epoch(),
+                                  _expired_instance_ids);
+}
+
 auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> void
 {
-  if (_instance_id == _instance_id_sent) _instance_id++;
+  /* The MBMS Download Profile permits exactly one content encoding, and forbids every other.
+     TS 26.346 V18.2.0 clause L.4.2, second list: "The following FDT attribute, defined at both
+     the FDT-Instance and File levels, may be carried in the FDT sent by the FLUTE sender, under
+     either the File-Instance or File element, and shall be supported by the FLUTE receiver:"
+     the single item there is Content-Encoding set to 'gzip'. The third list of the same clause
+     then prohibits the attribute "set to a value other than 'gzip'".
+
+     Refused here rather than silently dropped from the emitted FDT. Dropping the attribute would
+     leave the payload encoded and the receiver with nothing saying so, which is undecodable
+     content rather than a conformant session; RULES.md rule 12 prefers failing loudly over
+     quietly adjusting away a caller's misconfiguration. Absent is fine: the attribute is a may. */
+  if (is_3gpp(_profile) && !fe.content_encoding.empty() && fe.content_encoding != "gzip") {
+    throw std::invalid_argument(
+        "Content-Encoding must be absent or gzip in the MBMS Download Profile, got: " +
+        fe.content_encoding + ". Use Profile::Unprofiled for a non-3GPP session.");
+  }
+  if (_instance_id == _instance_id_sent) advance_instance_id();
   _file_entries.push_back(fe);
 }
 
@@ -365,7 +503,7 @@ auto LibFlute::FileDeliveryTable::remove(uint32_t toi) -> void
       ++it;
     }
   }
-  if (_instance_id == _instance_id_sent) _instance_id++;
+  if (_instance_id == _instance_id_sent) advance_instance_id();
 }
 
 auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
@@ -393,8 +531,52 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
       break;
   }
   root->SetAttribute("Expires", std::to_string(_expires).c_str());
+  /* The Complete attribute is permitted by RFC 3926 clause 3.4.2, which makes it optional on the
+     FDT-Instance element, but the MBMS Download Profile forbids a sender using it.
+     TS 26.346 V18.2.0 clause L.4.3: "The following parameters, defined at the FDT-Instance level,
+     shall not be used by the FLUTE sender:"
+     Complete is the first item of that list.
+
+     Sender-only. The parser above is deliberately untouched, because the same clause's NOTE makes
+     receiver support for this one mandatory: "With the exception of Complete, which is mandatory,
+     these parameters are optional to support by the FLUTE receiver." Reading the prohibition as
+     binding both directions would break reception from a conformant peer. */
+  if (_complete && !is_3gpp(_profile)) root->SetAttribute("Complete", "true");
   root->SetAttribute("FEC-OTI-FEC-Encoding-ID", (unsigned)_global_fec_oti.encoding_id);
-  if (_global_fec_oti.instance_id) root->SetAttribute("FEC-OTI-FEC-Instance-ID", (unsigned)_global_fec_oti.instance_id);
+  /* The existing guard is on the value, not on the profile: it withholds the attribute only when
+     the instance ID happens to be 0. The MBMS Download Profile forbids it outright, at both
+     levels, whatever the value.
+     TS 26.346 V18.2.0 clause L.4.2, third list: "The following FDT parameters, defined at both
+     the FDT-Instance and File levels, shall not be used by the FLUTE sender, in either the
+     File-Instance or File element:"
+     FEC-OTI-FEC-Instance-ID is the second item, annotated there as not applicable to the
+     Release 9 FEC schemes. Sender-only: that clause's NOTE 2 leaves these "optional to support
+     by the FLUTE receiver", so both parsers stay. */
+  /* Stricter than the profile: the FEC building block forbids this element outright for the
+     schemes this library implements, so it is withheld in both profiles rather than only under
+     the 3GPP one.
+     RFC 5052 clause 6.2.4: "The FEC Instance ID MUST be used by all Under-Specified FEC schemes
+     and MUST NOT be used by Fully-Specified FEC Schemes."
+
+     Both schemes here are Fully-Specified, stated by their own defining documents.
+     RFC 3695: "This document also describes the Fully-Specified FEC scheme corresponding to FEC
+     Encoding ID 0."
+     RFC 5053: "The Raptor FEC Scheme is a Fully-Specified FEC Scheme corresponding to FEC
+     Encoding ID 1."
+
+     The 3GPP profile forbids it too, so this satisfies that as well.
+     TS 26.346 V18.2.0 clause L.4.2, third list: "The following FDT parameters, defined at both
+     the FDT-Instance and File levels, shall not be used by the FLUTE sender, in either the
+     File-Instance or File element:"
+     FEC-OTI-FEC-Instance-ID is the second item, annotated there as not applicable to the
+     Release 9 FEC schemes.
+
+     Sender-only, so both parsers stay. The member is kept rather than removed because an
+     Under-Specified scheme would need it, and removing it would erase the reason it exists
+     (rule 14).
+     TS 26.346 V18.2.0 clause L.4.2, NOTE 2: "These parameters are optional to support by the
+     FLUTE receiver." */
+  (void)_global_fec_oti.instance_id;  // never emitted: see above
   root->SetAttribute("FEC-OTI-Maximum-Source-Block-Length", (unsigned)_global_fec_oti.max_source_block_length);
   root->SetAttribute("FEC-OTI-Encoding-Symbol-Length", (unsigned)_global_fec_oti.encoding_symbol_length);
   root->SetAttribute("xmlns:mbms2007", "urn:3GPP:metadata:2007:MBMS:FLUTE:FDT"); // 3GPP TS 26.346 Clause 7.2.10.2
@@ -406,14 +588,28 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
     f->SetAttribute("TOI", file.toi);
     f->SetAttribute("Content-Location", file.content_location.c_str());
     f->SetAttribute("Content-Length", file.content_length);
-    if (file.fec_oti.transfer_length) f->SetAttribute("Transfer-Length", file.fec_oti.transfer_length);
+    /* TS 26.346 V18.2.0 clause L.4.4, on the File-level attributes, fourth list:
+       "The following attributes shall not be carried in the FDT sent by the FLUTE sender:"
+       Transfer-Length is the first item of that list.
+
+       The prohibition binds a sender operating the MBMS Download Profile, which is what
+       Profile::Ts26517 selects. Under Profile::Unprofiled the session is plain RFC 3926, where
+       the attribute is permitted, so it is kept. Keyed on the profile rather than on the FDT
+       namespace because the namespace says which schema is emitted, not which obligations apply.
+
+       The parser below is deliberately unchanged, because the same clause's NOTE keeps this one
+       mandatory for receivers: "With the exception of Transfer-Length, which is mandatory, these
+       parameters are optional to support by the FLUTE receiver." Nothing is lost on the wire either:
+       the receive path falls back to Content-Length when the attribute is absent. */
+    if (!is_3gpp(_profile) && file.fec_oti.transfer_length)
+      f->SetAttribute("Transfer-Length", file.fec_oti.transfer_length);
     if (!file.content_md5.empty()) f->SetAttribute("Content-MD5", file.content_md5.c_str());
     if (!file.content_encoding.empty()) f->SetAttribute("Content-Encoding", file.content_encoding.c_str());
     if (!file.content_type.empty()) f->SetAttribute("Content-Type", file.content_type.c_str());
     if (file.fec_oti.encoding_id != _global_fec_oti.encoding_id)
       f->SetAttribute("FEC-OTI-FEC-Encoding-ID", (unsigned)file.fec_oti.encoding_id);
-    if (file.fec_oti.instance_id != 0 && file.fec_oti.instance_id != _global_fec_oti.instance_id)
-      f->SetAttribute("FEC-OTI-FEC-Instance-ID", (unsigned)file.fec_oti.instance_id);
+    // Same RFC 5052 clause 6.2.4 prohibition as at the FDT-Instance level above, and the same
+    // clause L.4.2 one, applied at the File level. Never emitted for a Fully-Specified scheme.
     if (file.fec_oti.max_source_block_length != 0 &&
         file.fec_oti.max_source_block_length != _global_fec_oti.max_source_block_length)
       f->SetAttribute("FEC-OTI-Maximum-Source-Block-Length", (unsigned)file.fec_oti.max_source_block_length);
@@ -421,6 +617,11 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
         file.fec_oti.encoding_symbol_length != _global_fec_oti.encoding_symbol_length)
       f->SetAttribute("FEC-OTI-Encoding-Symbol-Length", (unsigned)file.fec_oti.encoding_symbol_length);
     if (!file.etag.empty()) f->SetAttribute("mbms2012:File-ETag", file.etag.c_str());
+    /* FileType's own Expires attribute, use="optional" in the annex L.6.1 profiled schema, so it
+       is emitted only when the caller set one and omitted otherwise. It was never emitted before,
+       which meant a File-level expiry could be set through the API and silently not reach the
+       wire. Distinct from the cache directive below. */
+    if (file.expires) f->SetAttribute("Expires", std::to_string(file.expires).c_str());
     if (file.cache_control.no_cache || file.cache_control.cache_expires) {
       auto cc = doc.NewElement("mbms2007:Cache-Control");
       if (file.cache_control.no_cache) {
@@ -428,8 +629,13 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
         noc->SetText("true");
         cc->InsertEndChild(noc);
       } else {
+        /* From the cache-control member, not from the File element's own Expires. The two are
+           different things: CacheControlType in the annex L.6.1 profiled schema is an xs:choice
+           of no-cache, max-stale and Expires, and its Expires is a caching directive, while
+           FileType's Expires attribute says when the file itself stops being valid. Taking this
+           from file.expires made the emitted directive whatever the file expiry happened to be. */
         auto exp = doc.NewElement("mbms2007:Expires");
-        exp->SetText(std::to_string(file.expires).c_str());
+        exp->SetText(std::to_string(file.cache_control.cache_expires.value()).c_str());
         cc->InsertEndChild(exp);
       }
       f->InsertEndChild(cc);
@@ -437,6 +643,27 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
     root->InsertEndChild(f);
   }
 
+
+  /* Both 3GPP schemas make schemaVersion a mandatory child element of FDT-Instance, placed after
+     the File elements, and each fixes its own value. Omitting it, or emitting the other schema's
+     value, produces a document that does not validate against the schema it declares.
+
+     Keyed on the FDT namespace, because this belongs to the schema being emitted and is meaningless
+     in a document that declares neither.
+
+     TS 26.346 V18.2.0 clause L.6.3, for the annex L.6.1 profiled schema: "The BM-SC shall set the
+     schemaVersion element to 2 in all instance documents"
+
+     TS 26.346 V18.2.0 clause 7.2.10.1, for the extended schema of that clause: "In this version of
+     the present document the network shall set the content of the schemaVersion element, defined as
+     a child of the FDT-Instance element, to the value 4."
+
+     The delimiter element is deliberately not emitted: neither schema's sequence contains one. */
+  if (_fdt_namespace == FDT_NS_3GPP_CONSOLIDATED_V2 || _fdt_namespace == FDT_NS_DRAFT_2005) {
+    auto sv = doc.NewElement("schemaVersion");
+    sv->SetText(_fdt_namespace == FDT_NS_3GPP_CONSOLIDATED_V2 ? 2 : 4);
+    root->InsertEndChild(sv);
+  }
 
   tinyxml2::XMLPrinter printer;
   doc.Print(&printer);
