@@ -18,11 +18,13 @@
 #include <boost/bind/bind.hpp>
 #include <atomic>
 #include <memory>
+#include <set>
 #include <string>
 #include <map>
 #include <mutex>
 #include "File.h"
 #include "FileDeliveryTable.h"
+#include "Webrc.h"
 
 namespace LibFlute {
   /**
@@ -62,7 +64,9 @@ namespace LibFlute {
       Receiver( const std::string& iface, const std::string& address,
           short port, uint64_t tsi,
           boost::asio::io_context& io_context,
-          const std::string& source_address = "");
+          const std::string& source_address = "",
+          Profile profile = Profile::Ts26517,
+          const std::optional<Webrc::SessionChannels>& webrc = std::nullopt);
 
      /**
       *  Destructor. Marks the receiver as no longer alive so that any async_receive_from
@@ -115,6 +119,37 @@ namespace LibFlute {
       void register_close_notification_callback(close_notification_callback_t cb) { _close_cb = cb; };
 
       void stop() { _running = false; }
+
+     /**
+      *  Join an additional multicast channel of this session, or leave one.
+      *
+      *  A multiple rate congestion control building block adjusts a receiver's rate by changing
+      *  which of a session's channels it is joined to. RFC 5775 clause 2.1: "An ALC session
+      *  comprises multiple channels originating at a single sender". Nothing in the library calls
+      *  these yet: they are the capability such a building block needs, and are usable on their own
+      *  for a session announced on more than one address.
+      *
+      *  The interface, and the source where the session is source-specific, are those the Receiver
+      *  was constructed with. Joining a group already joined, or leaving one not joined, does
+      *  nothing and reports false.
+      *
+      *  @param group Multicast group to join or leave, of the same family as the session.
+      *  @return True if the membership actually changed.
+      */
+      bool join_channel(const std::string& group);
+      bool leave_channel(const std::string& group);
+
+     /** Groups currently joined, including the one given at construction. */
+      std::set<std::string> joined_channels() const { return _joined_groups; };
+
+     /**
+      *  Packets whose Congestion Control Information has reached the congestion control loop.
+      *
+      *  Diagnostic only. RFC 3450 clause 4.5 orders the receiver's steps, and step 3 acts on the
+      *  CCI only for a packet step 2 has already matched to this session; this counter makes that
+      *  ordering observable. Stays zero on a session with no congestion control.
+      */
+      uint64_t webrc_packets_noted() const { return _webrc_packets_noted; };
     private:
 
       void handle_receive_from(const boost::system::error_code& error,
@@ -148,8 +183,32 @@ namespace LibFlute {
        *  the per-packet check costs no parsing. Empty for an any-source session. */
       std::optional<boost::asio::ip::address> _expected_source;
 
+      Profile _profile = Profile::Ts26517;
+      /** The building block, present only where the session runs one. */
+      std::unique_ptr<Webrc::ReceiverController> _webrc;
+      Webrc::SessionChannels _webrc_channels;
+      Webrc::Derived _webrc_derived{};
+      /** Last packet sequence number seen per channel number, for detecting loss. */
+      std::vector<std::optional<uint16_t>> _webrc_last_psn;
+      std::unique_ptr<boost::asio::steady_timer> _webrc_epoch_timer;
+      void start_webrc_epoch_timer();
+      void on_webrc_epoch();
+      void note_webrc_packet(const AlcPacket& alc);
+
+      /** Join or leave one multicast group, source-specific or not, on the session's interface. */
+      bool set_group_membership(const boost::asio::ip::address& group, bool join);
+
       std::string _mcast_address;
       unsigned short _mcast_port;
+      /** Retained so a channel joined after construction uses the same interface and, where the
+       *  session is source-specific, the same source. */
+      std::string _iface;
+      std::string _ssm_source;
+      /** Groups currently joined, the constructor's own among them. */
+      std::set<std::string> _joined_groups;
+      uint64_t _webrc_packets_noted = 0;
+      /** Set on joining a wave channel, cleared by that wave's first arriving packet. */
+      bool _webrc_wave_awaiting_first_packet = false;
 
       completion_callback_t _completion_cb = nullptr;
       close_notification_callback_t _close_cb = nullptr;

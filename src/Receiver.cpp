@@ -69,12 +69,48 @@ namespace {
 LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& address,
     short port, uint64_t tsi,
     boost::asio::io_context& io_context,
-    const std::string& source_address)
+    const std::string& source_address,
+    Profile profile,
+    const std::optional<Webrc::SessionChannels>& webrc)
     : _socket(io_context)
     , _tsi(tsi)
     , _mcast_address(address)
     , _mcast_port(static_cast<unsigned short>(port))
+    , _profile(profile)
 {
+    /* A receiver that cannot run the session's congestion control must not be in the session at
+       all, so this is refused at construction rather than joined and then handled badly.
+
+       RFC 3450 clause 4.5: "If a receiver is not able to implement the multiple rate congestion
+       control building block it MUST NOT join the session."
+
+       RFC 3451 clause 6.2 obliges the same at the LCT layer:
+       "If a receiver is not able to implement the congestion control protocol used in the session,
+       it MUST NOT join the session."
+
+       Neither applies to the 3GPP profiles, which run no congestion control at all.
+       TS 26.346 V18.2.0 clause 7.2.4:
+       "a single FLUTE channel with single rate transport"
+       so joining one of those without a building block is correct. */
+    if (!is_3gpp(profile)) {
+      if (!webrc) {
+        throw std::runtime_error(
+            "a session outside the 3GPP profiles must run a congestion control building block, so "
+            "this receiver will not join one without WEBRC configured; supply the session's "
+            "channels, or use a 3GPP profile where congestion control is excluded");
+      }
+      _webrc_channels = *webrc;
+      _webrc_derived = Webrc::derive(webrc->params);
+      if (_webrc_channels.wave_channels.size() != _webrc_derived.wave_channels) {
+        throw std::runtime_error(
+            "WEBRC needs one address per wave channel, T of them, and T is derived from the "
+            "parameters");
+      }
+      _webrc = std::make_unique<Webrc::ReceiverController>(webrc->params, _webrc_derived);
+      _webrc_last_psn.assign(_webrc_derived.wave_channels + 1, std::nullopt);
+      _webrc_epoch_timer = std::make_unique<boost::asio::steady_timer>(io_context);
+    }
+
     // Restored alongside the ANY-bind/specific-interface-join fixes below:
     // an earlier version of those fixes made this whole constructor IPv4
     // only, where the original code let Boost pick v4 vs v6 based on the
@@ -107,78 +143,14 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
       _expected_source = boost::asio::ip::make_address(source_address);
     }
 
-    if (!source_address.empty()) {
-      // Source-specific multicast (SSM, RFC 4607): admits only packets from source_address,
-      // as indicated by an SDP a=source-filter line (RFC 4570; TS 26.517 cl.6.2.2.3's own
-      // examples use this for FLUTE sessions). boost::asio has no portable SSM join, so this
-      // goes straight to the socket options Linux (and most other stacks) actually define --
-      // IPv4's ip_mreq_source/IP_ADD_SOURCE_MEMBERSHIP identifies the interface by address;
-      // IPv6's group_source_req/MCAST_JOIN_SOURCE_GROUP identifies it by index instead
-      // (see resolve_iface_index() above), which is why the two branches build genuinely
-      // different structures rather than sharing one.
-      if (is_v6) {
-        struct group_source_req gsr{};
-        gsr.gsr_interface = resolve_iface_index(iface);
-
-        struct sockaddr_in6 grp{};
-        grp.sin6_family = AF_INET6;
-        auto mcast_bytes = mcast_address.to_v6().to_bytes();
-        std::memcpy(&grp.sin6_addr, mcast_bytes.data(), mcast_bytes.size());
-        std::memcpy(&gsr.gsr_group, &grp, sizeof(grp));
-
-        struct sockaddr_in6 src{};
-        src.sin6_family = AF_INET6;
-        auto src_bytes = boost::asio::ip::make_address(source_address).to_v6().to_bytes();
-        std::memcpy(&src.sin6_addr, src_bytes.data(), src_bytes.size());
-        std::memcpy(&gsr.gsr_source, &src, sizeof(src));
-
-        if (setsockopt(_socket.native_handle(), IPPROTO_IPV6, MCAST_JOIN_SOURCE_GROUP,
-                        &gsr, sizeof(gsr)) != 0) {
-          spdlog::error("Receiver: MCAST_JOIN_SOURCE_GROUP for {} from {} failed: {}", address,
-                        source_address, strerror(errno));
-        } else {
-          spdlog::info("Receiver: joined SSM {} from source {} on iface {}", address,
-                       source_address, iface);
-        }
-      } else {
-        struct ip_mreq_source mreq_source{};
-        auto mcast_bytes = mcast_address.to_v4().to_bytes();
-        auto src_bytes = boost::asio::ip::make_address(source_address).to_v4().to_bytes();
-        auto iface_bytes = boost::asio::ip::make_address(iface).to_v4().to_bytes();
-        std::memcpy(&mreq_source.imr_multiaddr, mcast_bytes.data(), mcast_bytes.size());
-        std::memcpy(&mreq_source.imr_sourceaddr, src_bytes.data(), src_bytes.size());
-        std::memcpy(&mreq_source.imr_interface, iface_bytes.data(), iface_bytes.size());
-
-        if (setsockopt(_socket.native_handle(), IPPROTO_IP, IP_ADD_SOURCE_MEMBERSHIP,
-                        &mreq_source, sizeof(mreq_source)) != 0) {
-          spdlog::error("Receiver: IP_ADD_SOURCE_MEMBERSHIP for {} from {} failed: {}", address,
-                        source_address, strerror(errno));
-        } else {
-          spdlog::info("Receiver: joined SSM {} from source {} on iface {}", address,
-                       source_address, iface);
-        }
-      }
-    } else if (is_v6) {
-      // Plain (any-source) multicast join, IPv6: join_group(address_v6, interface_index) --
-      // a different overload shape than IPv4's join_group(address_v4, address_v4) below,
-      // since v6 identifies the interface by index (see resolve_iface_index()).
-      _socket.set_option(
-          boost::asio::ip::multicast::join_group(
-            mcast_address.to_v6(), resolve_iface_index(iface)));
-    } else {
-      // Join the multicast group on the specific interface passed in - the
-      // single-address join_group() overload ignores `iface` entirely and
-      // joins via whatever interface the system considers the default route
-      // for the group, which silently breaks reception when the content
-      // actually arrives on a non-default interface (e.g. the modem's own
-      // TUN device rather than a physical NIC).
-      _socket.set_option(
-          boost::asio::ip::multicast::join_group(
-            mcast_address.to_v4(),
-            boost::asio::ip::make_address(iface).to_v4()));
+    _iface = iface;
+    _ssm_source = source_address;
+    if (set_group_membership(mcast_address, /*join*/ true)) {
+      _joined_groups.insert(mcast_address.to_string());
     }
 
     arm_receive();
+    start_webrc_epoch_timer();
 }
 
 LibFlute::Receiver::~Receiver()
@@ -204,6 +176,177 @@ namespace {
     return std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count() + 2'208'988'800;
   }
+}
+
+
+auto LibFlute::Receiver::set_group_membership(const boost::asio::ip::address& group, bool join) -> bool
+{
+  const bool is_v6 = group.is_v6();
+  const char* verb = join ? "join" : "leave";
+
+  if (!_ssm_source.empty()) {
+    /* Source-specific multicast (RFC 4607). boost::asio has no portable SSM call, so this uses the
+       socket options the stacks define: IPv4's ip_mreq_source identifies the interface by address,
+       IPv6's group_source_req by index, which is why the two build different structures. */
+    if (is_v6) {
+      struct group_source_req gsr{};
+      gsr.gsr_interface = resolve_iface_index(_iface);
+
+      struct sockaddr_in6 grp{};
+      grp.sin6_family = AF_INET6;
+      auto mcast_bytes = group.to_v6().to_bytes();
+      std::memcpy(&grp.sin6_addr, mcast_bytes.data(), mcast_bytes.size());
+      std::memcpy(&gsr.gsr_group, &grp, sizeof(grp));
+
+      struct sockaddr_in6 src{};
+      src.sin6_family = AF_INET6;
+      auto src_bytes = boost::asio::ip::make_address(_ssm_source).to_v6().to_bytes();
+      std::memcpy(&src.sin6_addr, src_bytes.data(), src_bytes.size());
+      std::memcpy(&gsr.gsr_source, &src, sizeof(src));
+
+      const int opt = join ? MCAST_JOIN_SOURCE_GROUP : MCAST_LEAVE_SOURCE_GROUP;
+      if (setsockopt(_socket.native_handle(), IPPROTO_IPV6, opt, &gsr, sizeof(gsr)) != 0) {
+        spdlog::error("Receiver: failed to {} SSM {} from {}: {}", verb, group.to_string(),
+                      _ssm_source, strerror(errno));
+        return false;
+      }
+    } else {
+      struct ip_mreq_source mreq_source{};
+      auto mcast_bytes = group.to_v4().to_bytes();
+      auto src_bytes = boost::asio::ip::make_address(_ssm_source).to_v4().to_bytes();
+      auto iface_bytes = boost::asio::ip::make_address(_iface).to_v4().to_bytes();
+      std::memcpy(&mreq_source.imr_multiaddr, mcast_bytes.data(), mcast_bytes.size());
+      std::memcpy(&mreq_source.imr_sourceaddr, src_bytes.data(), src_bytes.size());
+      std::memcpy(&mreq_source.imr_interface, iface_bytes.data(), iface_bytes.size());
+
+      const int opt = join ? IP_ADD_SOURCE_MEMBERSHIP : IP_DROP_SOURCE_MEMBERSHIP;
+      if (setsockopt(_socket.native_handle(), IPPROTO_IP, opt, &mreq_source,
+                     sizeof(mreq_source)) != 0) {
+        spdlog::error("Receiver: failed to {} SSM {} from {}: {}", verb, group.to_string(),
+                      _ssm_source, strerror(errno));
+        return false;
+      }
+    }
+    spdlog::info("Receiver: {}ed SSM {} from source {} on iface {}", verb, group.to_string(),
+                 _ssm_source, _iface);
+    return true;
+  }
+
+  /* Any-source multicast. The interface is named explicitly in both families: the single-argument
+     join_group() overload ignores it and uses whatever the system considers the default route for
+     the group, which silently breaks reception when the traffic arrives elsewhere. IPv6 names the
+     interface by index, IPv4 by address. */
+  try {
+    if (is_v6) {
+      const auto idx = resolve_iface_index(_iface);
+      if (join) _socket.set_option(boost::asio::ip::multicast::join_group(group.to_v6(), idx));
+      else      _socket.set_option(boost::asio::ip::multicast::leave_group(group.to_v6(), idx));
+    } else {
+      const auto iface_v4 = boost::asio::ip::make_address(_iface).to_v4();
+      if (join) _socket.set_option(boost::asio::ip::multicast::join_group(group.to_v4(), iface_v4));
+      else      _socket.set_option(boost::asio::ip::multicast::leave_group(group.to_v4(), iface_v4));
+    }
+  } catch (const std::exception& e) {
+    spdlog::error("Receiver: failed to {} group {}: {}", verb, group.to_string(), e.what());
+    return false;
+  }
+  spdlog::info("Receiver: {}ed group {} on iface {}", verb, group.to_string(), _iface);
+  return true;
+}
+
+auto LibFlute::Receiver::join_channel(const std::string& group) -> bool
+{
+  if (_joined_groups.count(group)) return false;
+  if (!set_group_membership(boost::asio::ip::make_address(group), /*join*/ true)) return false;
+  _joined_groups.insert(group);
+  return true;
+}
+
+auto LibFlute::Receiver::leave_channel(const std::string& group) -> bool
+{
+  if (!_joined_groups.count(group)) return false;
+  if (!set_group_membership(boost::asio::ip::make_address(group), /*join*/ false)) return false;
+  _joined_groups.erase(group);
+  return true;
+}
+
+auto LibFlute::Receiver::note_webrc_packet(const AlcPacket& alc) -> void
+{
+  if (!_webrc) return;
+  _webrc_packets_noted++;
+
+  /* Clause 3.2.2.6 counts the wait from "the first packet of a wave", so the newest wave's first
+     arrival is what starts the epoch the next join has to wait for. */
+  if (_webrc_wave_awaiting_first_packet) {
+    _webrc_wave_awaiting_first_packet = false;
+    _webrc->on_wave_first_packet();
+  }
+  const auto cci = alc.congestion_control_info();
+  if (!cci) return;
+  if (cci->channel_number >= _webrc_last_psn.size()) return;
+
+  _webrc->on_packet_event();
+
+  /* Loss is inferred from the per-channel sequence numbers, which is where the clause says to look.
+     RFC 3738 clause 3.2.3.4:
+     "Each time the receiver detects a lost packet (based on the sequence numbers in the packets
+     scoped by the channel number), the receiver records the start of a new loss event"
+
+     Only a forward gap counts. RFC 3738 clause 3.2.3.4, on why:
+     "It is RECOMMENDED that the receiver account for simple misordering of packets without
+     inferring a loss."
+     So a sequence number at or behind the last one seen is taken as reordering and passed over. */
+  auto& last = _webrc_last_psn[cci->channel_number];
+  if (last) {
+    const uint16_t expected = static_cast<uint16_t>(*last + 1);
+    const uint16_t gap = static_cast<uint16_t>(cci->packet_sequence_number - expected);
+    /* A gap of half the sequence space or more reads as reordering rather than a vast loss. */
+    if (gap > 0 && gap < 0x8000) {
+      _webrc->on_loss_event_begin();
+    }
+  }
+  last = cci->packet_sequence_number;
+}
+
+auto LibFlute::Receiver::start_webrc_epoch_timer() -> void
+{
+  if (!_webrc || !_webrc_epoch_timer) return;
+  auto alive = _alive;
+  _webrc_epoch_timer->expires_after(
+      std::chrono::milliseconds(static_cast<int>(Webrc::Tuning().epoch_seconds * 1000)));
+  _webrc_epoch_timer->async_wait([this, alive](const boost::system::error_code& ec) {
+    if (!*alive || ec) return;
+    on_webrc_epoch();
+  });
+}
+
+auto LibFlute::Receiver::on_webrc_epoch() -> void
+{
+  if (!_running || !_webrc) return;
+
+  /* The end-of-epoch filter, then the decision. RFC 3450 clause 4.5: "The receiver MUST process and
+     act on the CCI field in accordance with the multiple rate congestion control building block."
+     Acting is what this does: the controller's answer turns into a real join or leave. */
+  _webrc->on_epoch_end();
+  _webrc->on_loss_event_end();
+  /* Clause 3.2.2.6's fourth exit: a wave that had a full epoch and did not raise the true reception
+     rate ends the climb, which has to happen outside the const join decision. */
+  _webrc->note_start_up_progress();
+
+  const uint32_t joined = _webrc->wave_channels_joined();
+  if (_webrc->may_join_next_layer() && joined < _webrc_channels.wave_channels.size()) {
+    const auto& [address, port] = _webrc_channels.wave_channels[joined];
+    (void)port;  // the session listens on one port; the channel is the group
+    _webrc->set_joining(true);
+    if (join_channel(address)) {
+      _webrc->set_wave_channels_joined(joined + 1);
+      _webrc_wave_awaiting_first_packet = true;
+      spdlog::info("WEBRC: joined wave channel {} ({})", joined, address);
+    }
+    _webrc->set_joining(false);
+  }
+
+  start_webrc_epoch_timer();
 }
 
 auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key, const std::string& auth_key) -> void
@@ -243,6 +386,17 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
       auto alc = LibFlute::AlcPacket(_data, bytes_recvd);
 
       if (alc.tsi() == _tsi) {
+
+        /* The congestion control step comes after the session has been identified, not before.
+           RFC 3450 clause 4.5 numbers the receiver's steps, and step 2 disposes of a packet that
+           does not match: "If there is not a match then the packet MUST be discarded without
+           further processing." Handing its CCI to the controller is further processing, so a
+           packet on this group carrying another session's TSI must not move this session's rate.
+
+           Step 3 is what this is.
+           RFC 3450 clause 4.5: "The receiver MUST process and act on the CCI field in accordance
+           with the multiple rate congestion control building block." */
+        note_webrc_packet(alc);
 
         if (_close_cb && (alc.close_session_flag() || alc.close_object_flag())) {
           _close_cb(alc.close_session_flag(), alc.close_object_flag(), alc.toi());

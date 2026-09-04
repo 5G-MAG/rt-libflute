@@ -16,11 +16,31 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include <optional>
 #include <vector>
 #include "flute_types.h"
 #include "EncodingSymbol.h"
 
 namespace LibFlute {
+
+ /**
+  *  Short-format Congestion Control Information, RFC 3738 clause 5.1.
+  *
+  *  Thirty-two bits, which is the width the LCT header's C=0 selects, so carrying it costs nothing
+  *  the header did not already spend. Absent, the field is sent as zeros, which is what a session
+  *  with no congestion control building block sends and what TS 26.346 clause 7.2.7 requires of a
+  *  3GPP session: "The length of the CCI (Congestion Control Identifier) field shall be 32 bits and
+  *  it is assigned a value of zero (C=0)."
+  */
+  struct CongestionControlInfo {
+    /** CTSI. "CTSI indicates the index of the current time slot." */
+    uint8_t current_time_slot_index = 0;
+    /** CN. "CN for the base channel is T, and the CNs for the wave channels are 0 through T-1." */
+    uint8_t channel_number = 0;
+    /** PSN. "The PSN of each packet is scoped by its CN value." */
+    uint16_t packet_sequence_number = 0;
+  };
+
   /**
    *  A class for parsing and creating ALC packets
    */
@@ -68,7 +88,8 @@ namespace LibFlute {
       AlcPacket(uint64_t tsi, CloseSession);
 
       AlcPacket(uint64_t tsi, uint16_t toi, FecOti fec_oti, const std::vector<EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id,
-                bool close_session_flag = false, bool close_object_flag = false);
+                bool close_session_flag = false, bool close_object_flag = false,
+                const std::optional<CongestionControlInfo>& cci = std::nullopt);
 
      /**
       *  Default destructor.
@@ -94,6 +115,16 @@ namespace LibFlute {
       *  Get the LCT header length
       */
       size_t header_length() const  { return _lct_header.lct_header_len * 4; };
+
+     /**
+      *  Congestion Control Information carried by a received packet, if the field held one.
+      *
+      *  A session running no building block sends the field as zeros, which reads back as a
+      *  well-formed value naming channel 0 with sequence number 0. Only a receiver that knows the
+      *  session runs WEBRC should interpret it, which is why this is a plain accessor rather than
+      *  something the parser acts on. Absent for a packet this object built for sending.
+      */
+      std::optional<CongestionControlInfo> congestion_control_info() const { return _cci; };
 
      /**
       *  Get the FDT instance ID
@@ -157,6 +188,7 @@ namespace LibFlute {
       ContentEncoding _content_encoding = ContentEncoding::NONE;
       FecOti _fec_oti = {};
       bool _has_fti = false;
+      std::optional<CongestionControlInfo> _cci;
 
       char* _buffer = nullptr;
       size_t _len;

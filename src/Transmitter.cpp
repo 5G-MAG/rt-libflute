@@ -872,8 +872,89 @@ auto Transmitter::send_next_packet() -> void
       for(const auto& symbol : symbols) {
         spdlog::debug("sending TOI {} SBN {} ID {}", file->meta().toi, symbol.source_block_number(), symbol.id() );
       }
+      /* With WEBRC running, each packet goes to one of the session's channels rather than always to
+         the announced destination, and carries the Congestion Control Information naming that
+         channel. Channels are taken in turn among those active in the current time slot, the base
+         channel included, which spreads an object over the waves a receiver may or may not have
+         joined. The per-slot rates of RFC 3738 clause 3.1.2 are not yet used to weight that choice;
+         see the note in enable_webrc's documentation. */
+      advance_webrc_slot_if_due();
+      size_t channel_index = 0;
+      std::optional<CongestionControlInfo> cci;
+      if (_webrc) {
+        const auto active = Webrc::active_wave_channels(_webrc->ctsi, _webrc->params,
+                                                        _webrc->derived);
+        /* An FDT Instance goes to the base channel and nowhere else. Every receiver is joined to
+           the base channel, and none can interpret a single content packet until it holds the FDT
+           describing that object, so spreading the FDT over wave channels would deny the whole
+           session to any receiver that has not climbed to those layers.
+
+           RFC 3926 clause 4, recommendation 1: "The layers to which packets for FDT Instances are
+           sent SHOULD NOT be biased towards those layers to which lower rate receivers are not
+           joined."
+
+           The same recommendation names putting every FDT packet in the lowest layer as an
+           acceptable way to satisfy it, which is what this does. Its recommendation 2 is thereby
+           moot: it applies only where FDT packets do go to layers a
+           lower rate receiver does not receive, and asks for an FEC scheme other than Encoding ID 0
+           in that case. This sender always carries the FDT as Compact No-Code, so keeping the FDT
+           on the base channel is what makes that safe.
+
+           Content objects are spread over the base channel and the waves active in this slot. */
+        if (file->meta().toi == 0) {
+          channel_index = 0;
+        } else {
+          /* Packets land on the channels in proportion to the rates the schedule dictates, not in
+             equal turns.
+
+             RFC 3450 clause 4.4: "The ALC sender MUST obey the rules for filling in the CCI field
+             in the packet headers and MUST send packets at the appropriate rates to the channels
+             associated with the session as dictated by the multiple rate congestion control
+             building block."
+
+             Each channel accrues credit at its own current rate and spends one credit per packet,
+             so over any run the share each receives converges on its share of the total rate. That
+             reproduces the wave shape of RFC 3738 clause 3.1.2, where a wave starts high and falls
+             by a factor of P per slot to the base channel's rate, without needing a timer per
+             channel. */
+          const double fraction = std::min(
+              1.0, std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                                 _webrc->slot_started).count() /
+                       _webrc->params.time_slot_duration_seconds);
+          const uint32_t T = _webrc->derived.wave_channels;
+
+          const uint8_t base_cn = Webrc::base_channel_number(_webrc->derived);
+          _webrc->credit[base_cn] += Webrc::base_channel_rate(fraction, _webrc->params);
+          for (uint32_t cn : active) {
+            /* The wave on channel cn ends at the slot with that index, so this is how many active
+               slots it still has to run. */
+            const uint32_t remaining = (cn + T - _webrc->ctsi) % T;
+            _webrc->credit[cn] += Webrc::wave_channel_rate(remaining, fraction, _webrc->params);
+          }
+
+          size_t best_index = 0;
+          double best_credit = _webrc->credit[base_cn];
+          for (uint32_t cn : active) {
+            if (_webrc->credit[cn] > best_credit) {
+              best_credit = _webrc->credit[cn];
+              best_index = cn + 1;
+            }
+          }
+          channel_index = best_index;
+          const uint8_t spent = channel_index == 0 ? base_cn
+                                                   : static_cast<uint8_t>(channel_index - 1);
+          _webrc->credit[spent] -= 1.0;
+        }
+        cci = webrc_cci_for(channel_index);
+        if (cci) {
+          auto& psn = _webrc->psn[cci->channel_number];
+          psn = static_cast<uint16_t>(psn + 1);  // consecutive modulo 2^16, clause 5.1
+        }
+      }
+
       auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id(),
-                                                 _session_closing, _closing_objects.count(file->meta().toi) > 0);
+                                                 _session_closing, _closing_objects.count(file->meta().toi) > 0,
+                                                 cci);
       bytes_queued += packet->size();
 
       /* A tunnel is an additional path, not a replacement for the announced one. Sending only the
@@ -917,8 +998,10 @@ auto Transmitter::send_next_packet() -> void
               }
             });
       } else {
-        _socket.async_send_to(
-            boost::asio::buffer(packet->data(), packet->size()), _endpoint,
+        /* The chosen channel, which is the session's own destination unless WEBRC is spreading the
+           object over its wave channels. */
+        channel_socket(channel_index).async_send_to(
+            boost::asio::buffer(packet->data(), packet->size()), channel_endpoint(channel_index),
             [file, symbols, packet, this](
                 const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
             {
@@ -951,6 +1034,116 @@ auto Transmitter::send_next_packet() -> void
       }
     }
   }
+}
+
+auto Transmitter::add_channel(const std::string& address, unsigned short port) -> size_t
+{
+  /* Same options and binding as the channel built in the constructor, so every channel of the
+     session leaves from the announced source and behaves alike. Loopback is enabled for the same
+     reason it is there: a receiver on the same host must see the traffic. */
+  try {
+    boost::asio::ip::udp::endpoint endpoint(boost::asio::ip::make_address(address), port);
+    auto socket = std::make_unique<boost::asio::ip::udp::socket>(_io_context, endpoint.protocol());
+    socket->set_option(boost::asio::ip::multicast::enable_loopback(true));
+    socket->set_option(boost::asio::ip::udp::socket::reuse_address(true));
+    if (_source_address) {
+      socket->bind(boost::asio::ip::udp::endpoint(_source_address.value(), 0));
+    }
+    _extra_channels.push_back(Channel{endpoint, std::move(socket)});
+    spdlog::info("Transmitter: added channel {} to {}:{}", _extra_channels.size(), address, port);
+    return _extra_channels.size();
+  } catch (const std::exception& e) {
+    spdlog::error("Transmitter: could not add channel to {}:{}: {}", address, port, e.what());
+    return 0;
+  }
+}
+
+auto Transmitter::remove_channel(size_t index) -> bool
+{
+  /* Channel 0 is the session's own destination, given at construction and announced in the session
+     description, so it is not removable: a session with no channels is not a session. */
+  if (index == 0 || index > _extra_channels.size()) return false;
+  _extra_channels.erase(_extra_channels.begin() + static_cast<long>(index - 1));
+  return true;
+}
+
+auto Transmitter::enable_webrc(
+    const Webrc::Parameters& params,
+    const std::vector<std::pair<std::string, unsigned short>>& wave_channel_addresses) -> void
+{
+  /* Not available to a 3GPP session.
+
+     TS 26.346 V18.2.0 clause 7.2.4: "For simplicity of congestion
+     control, FLUTE channelization shall be provided by a single FLUTE channel with single rate
+     transport." Clause 7.2.7 fixes the CCI at a 32-bit zero besides. */
+  if (is_3gpp(_profile)) {
+    throw std::runtime_error(
+        "congestion control is not used under the 3GPP profiles, which require a single channel at "
+        "a single rate; use Profile::Unprofiled");
+  }
+
+  auto derived = Webrc::derive(params);  // throws on inputs that cannot produce a schedule
+
+  /* One address per wave channel. The session's own destination is the base channel, so it is not
+     among them. Refused rather than padded or truncated: a session sending waves to the wrong
+     number of channels is not the session its description announces. */
+  if (wave_channel_addresses.size() != derived.wave_channels) {
+    throw std::runtime_error(
+        "WEBRC needs exactly one address per wave channel, T of them, and T is derived from the "
+        "parameters; " + std::to_string(derived.wave_channels) + " expected, " +
+        std::to_string(wave_channel_addresses.size()) + " given");
+  }
+
+  for (const auto& [address, port] : wave_channel_addresses) {
+    if (add_channel(address, port) == 0) {
+      throw std::runtime_error("WEBRC: could not open wave channel to " + address);
+    }
+  }
+
+  WebrcState state;
+  state.params = params;
+  state.derived = derived;
+  state.slot_started = std::chrono::steady_clock::now();
+  state.ctsi = 0;
+  /* One sequence number per channel, the base channel taking index T. */
+  state.psn.assign(derived.wave_channels + 1, 0);
+  state.credit.assign(derived.wave_channels + 1, 0.0);
+  _webrc = std::move(state);
+
+  spdlog::info("Transmitter: WEBRC enabled, {} wave channels plus the base channel, {}s time slots",
+               derived.wave_channels, params.time_slot_duration_seconds);
+}
+
+auto Transmitter::advance_webrc_slot_if_due() -> void
+{
+  if (!_webrc) return;
+  /* RFC 3738 clause 5.1: "The Current Time Slot Index increases by one modulo T each TSD seconds at
+     the sender". */
+  const auto now = std::chrono::steady_clock::now();
+  const double elapsed = std::chrono::duration<double>(now - _webrc->slot_started).count();
+  if (elapsed < _webrc->params.time_slot_duration_seconds) return;
+
+  const auto slots = static_cast<uint32_t>(elapsed / _webrc->params.time_slot_duration_seconds);
+  _webrc->ctsi = (_webrc->ctsi + slots) % _webrc->derived.wave_channels;
+  _webrc->slot_started += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double>(slots * _webrc->params.time_slot_duration_seconds));
+}
+
+auto Transmitter::webrc_cci_for(size_t channel_index) const -> std::optional<CongestionControlInfo>
+{
+  if (!_webrc) return std::nullopt;
+  /* Channel 0 is the session's own destination, which is WEBRC's base channel and takes CN = T.
+     Added channel i is wave channel i-1. */
+  const uint8_t cn = channel_index == 0
+      ? Webrc::base_channel_number(_webrc->derived)
+      : static_cast<uint8_t>(channel_index - 1);
+  if (cn >= _webrc->psn.size()) return std::nullopt;
+
+  CongestionControlInfo cci;
+  cci.current_time_slot_index = static_cast<uint8_t>(_webrc->ctsi);
+  cci.channel_number = cn;
+  cci.packet_sequence_number = _webrc->psn[cn];
+  return cci;
 }
 
 auto Transmitter::activate() -> void
