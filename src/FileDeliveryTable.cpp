@@ -279,24 +279,42 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
       content_length = strtoull(val->Value(), nullptr, 0);
     }
 
+    /* Parsed before the transfer length below, which depends on whether an encoding is applied. */
+    auto content_encoding = std::string();
+    val = file_ns.findAttribute(file, "Content-Encoding", fdt_ns);
+    if (val != nullptr) {
+      content_encoding = val->Value();
+    }
+
     uint32_t transfer_length = 0;
+    /* Content-Length is the transfer length only when the object is NOT content encoded. With an
+       encoding applied the two are different quantities, and using one for the other feeds the
+       decompressor a wrong input size.
+
+       RFC 3926 clause 3.4.2: "If the file is not content encoded before transport (and thus the
+       "Content-Encoding" attribute is not used) then the transfer length is the length of the
+       original file, and in this case the "Content-Length" is also the transfer length."
+
+       So the fallback is applied only in that case. When an encoding IS applied and no
+       Transfer-Length was carried, the transfer length is genuinely unknown from this FDT and is
+       left at 0 rather than guessed; the decode path then fails with a message naming the cause
+       instead of silently truncating its input. See the register entry on the profile conflict
+       this exposes. */
     val = file_ns.findAttribute(file, "Transfer-Length", fdt_ns);
     if (val != nullptr) {
       transfer_length = strtoull(val->Value(), nullptr, 0);
-    } else {
+    } else if (content_encoding.empty()) {
       transfer_length = content_length;
+    } else {
+      transfer_length = 0;
+      spdlog::warn("File TOI {} is content encoded ({}) but carries no Transfer-Length; its "
+                   "transfer length is not derivable from this FDT", toi, content_encoding);
     }
 
     auto content_md5 = std::string();
     val = file_ns.findAttribute(file, "Content-MD5", fdt_ns);
     if (val != nullptr) {
       content_md5 = val->Value();
-    }
-
-    auto content_encoding = std::string();
-    val = file_ns.findAttribute(file, "Content-Encoding", fdt_ns);
-    if (val != nullptr) {
-      content_encoding = val->Value();
     }
 
     auto content_type = std::string();
@@ -599,8 +617,10 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
 
        The parser below is deliberately unchanged, because the same clause's NOTE keeps this one
        mandatory for receivers: "With the exception of Transfer-Length, which is mandatory, these
-       parameters are optional to support by the FLUTE receiver." Nothing is lost on the wire either:
-       the receive path falls back to Content-Length when the attribute is absent. */
+       parameters are optional to support by the FLUTE receiver." Nothing is lost on the wire:
+       RFC 3926 clause 3.4.2 lets Content-Length stand in for an object carried without a content
+       encoding, and this sender does not content encode under a 3GPP profile at all, because the
+       profile provides no carrier for the resulting length. See Transmitter::send(). */
     if (!is_3gpp(_profile) && file.fec_oti.transfer_length)
       f->SetAttribute("Transfer-Length", file.fec_oti.transfer_length);
     if (!file.content_md5.empty()) f->SetAttribute("Content-MD5", file.content_md5.c_str());
