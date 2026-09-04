@@ -19,7 +19,7 @@
 #include <arpa/inet.h>
 #include "AlcPacket.h"
 
-LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
+LibFlute::AlcPacket::AlcPacket(char* data, size_t len, uint8_t expected_flute_version)
 {
   if (len < 4) {
     throw std::runtime_error("Packet too short");
@@ -52,13 +52,21 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
      to zero, and the UE should ignore them." Ignoring a field still means stepping over it, so
      this is needed in both profiles: robustness against a non-conformant sender under the 3GPP
      profile, plain correctness under general FLUTE. */
+  /* Version 2 sits on RFC 5651, which deleted both fields and reassigned their flag bits.
+     RFC 5651 clause 11: "Removal of the Sender Current Time and Expected Residual Time LCT
+     header fields." RFC 6726 clause 11.1 on what that means for the two bits: "In [RFC5651],
+     these fields MUST be set to zero and MUST be ignored by receivers (instead, the EXT_TIME
+     Header Extensions can convey this information if needed)." So under version 2 they contribute
+     no words to the header and nothing is stepped over; under version 1 the RFC 3451 reading
+     above still applies, unchanged. */
+  const bool lct_carries_sct_ert = (expected_flute_version == 1);
+
   const size_t standard_header_words = 2 +
     _lct_header.congestion_control_flag +
     _lct_header.half_word_flag +
     _lct_header.tsi_flag +
     _lct_header.toi_flag +
-    _lct_header.sct_flag +
-    _lct_header.ert_flag;
+    (lct_carries_sct_ert ? (_lct_header.sct_flag + _lct_header.ert_flag) : 0);
 
   if (_lct_header.lct_header_len < standard_header_words) {
     throw std::runtime_error("LCT header length is shorter than its own flags require");
@@ -119,8 +127,10 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
 
   // Step over the SCT and ERT words when present, so the extension walk below starts where the
   // extensions actually begin. RFC 3451 clause 5.1 field order is CCI, TSI, TOI, SCT, ERT.
-  if (_lct_header.sct_flag) hdr_ptr += 4;
-  if (_lct_header.ert_flag) hdr_ptr += 4;
+  if (lct_carries_sct_ert) {
+    if (_lct_header.sct_flag) hdr_ptr += 4;
+    if (_lct_header.ert_flag) hdr_ptr += 4;
+  }
 
   if (_lct_header.codepoint == 0) {
     _fec_oti.encoding_id = FecScheme::CompactNoCode;
@@ -185,28 +195,32 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                     }
       case EXT_FDT: {
                       uint8_t flute_version = (*ext_ptr & 0xF0) >> 4;
-                      /* This branch implements FLUTE version 1, and the version field is not
-                         advisory: it identifies which protocol the packet belongs to.
+                      /* The version field identifies which protocol the packet belongs to, and
+                         the two are not interchangeable, so a packet is accepted only if it
+                         carries the version this session was configured for. The default is 1,
+                         which is what TS 26.346 selects, so a 3GPP session behaves exactly as it
+                         does on the version 1 branch.
 
                          RFC 3926 clause 3.4.1: "This document specifies FLUTE version 1. Hence
                          in any ALC packet that carries FDT Instance and that belongs to the file
                          delivery session as specified in this specification MUST set this field
                          to '1'."
 
-                         Accepting 2 was accepting a packet from a protocol this build does not
-                         implement, and the two are not interchangeable underneath.
                          RFC 6726 clause 11.1: "Therefore, an implementation that relies on
                          [RFC3926] and RFC 3451 will not be backwards compatible with FLUTE as
                          specified in this document."
 
-                         General FLUTE, not a 3GPP restriction: it holds in both profiles. What
-                         TS 26.346 adds is only that version 1 is the one it selects, so a 3GPP
-                         session could never legitimately carry 2 either. */
-                      if (flute_version != 1) {
-                        throw std::runtime_error("Unsupported FLUTE version " +
-                                                 std::to_string(flute_version) +
-                                                 "; this implementation is FLUTE version 1");
+                         RFC 6726 clause 3.1 requires the receiver to tell sessions apart by
+                         version: "If multiple FLUTE sessions are sent to a channel, then
+                         receivers MUST determine the FLUTE protocol version, based on version
+                         fields and the (source IP address, TSI) pair carried in the ALC/LCT
+                         header of the packet." */
+                      if (flute_version != expected_flute_version) {
+                        throw std::runtime_error("FLUTE version " + std::to_string(flute_version) +
+                                                 " in EXT_FDT, but this session is configured for "
+                                                 "version " + std::to_string(expected_flute_version));
                       }
+                      _flute_version = flute_version;
                       _fdt_instance_id =  (*ext_ptr & 0x0F) << 16;
                       ext_ptr++;
                       _fdt_instance_id |= ntohs(*(uint16_t*)ext_ptr);
@@ -240,8 +254,9 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
 }
 
 LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_oti, const std::vector<LibFlute::EncodingSymbol>& symbols, size_t max_encoding_symbol_size, uint32_t fdt_instance_id,
-                                bool close_session_flag, bool close_object_flag)
-  : _fec_oti(fec_oti)
+                                bool close_session_flag, bool close_object_flag,
+                                uint8_t flute_version)
+  : _fec_oti(fec_oti), _flute_version(flute_version)
 {
   // TSI width: this wire scheme always carries a 16-bit half-word component (half_word_flag=1,
   // shared with TOI's own 16-bit half-word below) plus, when tsi_flag=1, an extra 32-bit word
@@ -298,7 +313,19 @@ LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_
   if (toi == 0) { // Add extensions for FDT
     *((uint8_t*)hdr_ptr) = EXT_FDT;
     hdr_ptr += 1;
-    *((uint8_t*)hdr_ptr) = 1 << 4 | (fdt_instance_id & 0x000F0000) >> 16;
+    /* FLUTE version nibble, from the version this session was configured for.
+
+       RFC 3926 clause 3.4.1: "This document specifies FLUTE version 1. Hence in any ALC packet
+       that carries FDT Instance and that belongs to the file delivery session as specified in
+       this specification MUST set this field to '1'."
+
+       RFC 6726 clause 3.4.1: "This document specifies FLUTE version 2. Hence, in any ALC packet
+       that carries an FDT Instance and that belongs to the file delivery session as specified in
+       this specification MUST set this field to '2'."
+
+       The default is 1, which is what TS 26.346 V18.2.0 clause L.2 selects by referencing RFC
+       3926. Version 2 is opt-in and is not for 3GPP MBMS use. */
+    *((uint8_t*)hdr_ptr) = (flute_version & 0x0F) << 4 | (fdt_instance_id & 0x000F0000) >> 16;
     hdr_ptr += 1;
     *((uint16_t*)hdr_ptr) = htons(fdt_instance_id & 0x0000FFFF);
     hdr_ptr += 2;

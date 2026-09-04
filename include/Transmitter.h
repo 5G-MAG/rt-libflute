@@ -46,6 +46,25 @@ namespace LibFlute {
       */
       using FdtNamespace = FileDeliveryTable::FdtNamespace;
 
+     /**
+      *  Select the FLUTE protocol version for this session.
+      *
+      *  RFC 3926 clause 3.4.1 requires the EXT_FDT version field to be 1 in a version 1 session,
+      *  and RFC 6726 clause 3.4.1 requires 2 in a version 2 session. They are separate protocols:
+      *  RFC 6726 clause 11.1 records that version 1 uses RFC 3451 and version 2 uses RFC 5651,
+      *  "Therefore, an implementation that relies on [RFC3926] and RFC 3451 will not be backwards
+      *  compatible with FLUTE as specified in this document."
+      *
+      *  The default is 1. TS 26.346 V18.2.0 clause L.2 selects RFC 3926, so a 3GPP MBMS download
+      *  session must leave this at 1.
+      *
+      *  Version 2 is incompletely implemented here: see the note in this branch's README on the
+      *  RFC 6726 obligations that are not met.
+      */
+      void set_flute_version(uint8_t version);
+      uint8_t flute_version() const { return _flute_version; };
+
+
 
      /**
       * File Description object
@@ -725,6 +744,7 @@ namespace LibFlute {
       boost::asio::steady_timer _fdt_timer;
 
       uint64_t _tsi;
+      uint8_t _flute_version = 1;
       uint16_t _mtu;
 
       std::unique_ptr<FileDeliveryTable> _fdt;
