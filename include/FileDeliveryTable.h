@@ -215,7 +215,12 @@ namespace LibFlute {
       std::vector<FileEntry> _file_entries;
       FecOti _global_fec_oti;
 
-      uint64_t _expires;
+      /* Zero means "no Expires set yet", which is how expired() reads it. Without an
+         initialiser the sender-side constructor leaves this indeterminate: expired() and
+         advance_instance_id() then read an indeterminate value, and to_string() would write one
+         into the FDT-Instance Expires attribute for any caller that reaches it before
+         set_expires(). code-derived, no spec claim. */
+      uint64_t _expires = 0;
       bool _complete = false;
 
       FdtNamespace _fdt_namespace;

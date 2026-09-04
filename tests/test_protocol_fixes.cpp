@@ -880,3 +880,16 @@ TEST(DataLessClosePacket, DoesNotDisturbALiveReceiver) {
   io.stop();
   io_thread.join();
 }
+
+/* ------------------------------------------------------------------------------------------- */
+/* The FDT-Instance Expires attribute, on a sender-side FDT that has not set one yet.            */
+
+/* A freshly constructed sender-side FDT has no Expires yet. expired() reads _expires directly,
+   so an uninitialised member made this answer indeterminate: the same binary could report a
+   never-expiring instance as expired depending only on what happened to be on the stack. */
+TEST(FdtExpiryTest, AFreshlyConstructedInstanceReportsNoExpiry) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26517);
+  EXPECT_EQ(fdt.expires(), 0u);
+  EXPECT_FALSE(fdt.expired(0xFFFFFFFFULL));
+}
