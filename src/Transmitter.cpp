@@ -514,6 +514,31 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
     , _profile(profile)
     , _fec_redundancy_level(fec_redundancy_level)
 {
+  /* The 3GPP profiles name the FEC schemes they admit, and the set is closed.
+
+     TS 26.346 V18.2.0 clause L.4.7: "the two FEC schemes referenced in this specification, the
+     Compact No-Code FEC scheme as specified in RFC 3695 [13], and the Raptor FEC scheme as
+     specified in RFC 5053 [91] are optional to implement by the BM-SC and mandatory to support by
+     the UE."
+
+     TS 26.517 does not widen it: clause 6.2.4.5 gives the repair byte-range determination for FEC
+     Encoding ID 0 and FEC Encoding ID 1 and for no other value.
+
+     RaptorQ is RFC 6330, which neither document references, so a receiver operating either profile
+     has no obligation to decode it and in general will not. Refused here rather than sent: a
+     session no receiver can decode is worse than a refusal at setup. Available under
+     Profile::Unprofiled, which is what this branch adds it for.
+
+     Tested against the admissible set rather than against RaptorQ by name, so that a scheme added
+     later is refused under a profile until someone decides otherwise, rather than admitted by
+     default. */
+  if (is_3gpp(profile) && content_fec_oti.has_value() &&
+      !is_3gpp_admissible_fec_scheme(content_fec_oti->encoding_id)) {
+    throw std::runtime_error(
+        "the 3GPP profiles admit only the Compact No-Code and Raptor FEC schemes; use one of those "
+        "or Profile::Unprofiled");
+  }
+
   /* The 3GPP profiles fix the TSI field at its narrowest width, so a value that would need the
      wider encoding cannot be signalled under either of them. This is a clause 7.2 rule, binding on
      MBMS download generally, not one of annex L.4's profile restrictions.
@@ -782,8 +807,8 @@ auto Transmitter::send_fdt() -> void {
   // The FDT itself always goes out as Compact No-Code, regardless of what
   // FEC scheme protects this Transmitter's content: it's re-sent on its own
   // repeat timer already (real redundancy without needing FEC), and
-  // Raptor has a minimum source-block size (K >= 4) that a small FDT's
-  // single source block can fall below --
+  // Raptor/RaptorQ both have a minimum source-block size (K >= 4 for
+  // Raptor) that a small FDT's single source block can fall below --
   // caught by testing a real Transmitter -> Receiver transfer, not by any
   // in-process File/codec test, all of which constructed content Files
   // directly and never exercised send_fdt()'s own File construction.

@@ -116,7 +116,7 @@ TEST(GeneralFluteTest, TransferLengthStillCarriedOutsideTheProfile) {
 /* The delimitation itself. A session is bound by the general FLUTE documents always, and by
    TS 26.346 annex L.4 only under the 3GPP profile, which is the default. */
 
-TEST(ProfileDefaultTest, DefaultIsTheMbms3gppProfile) {
+TEST(ProfileDefaultTest, DefaultIsMbs5g) {
   auto oti = make_fec_oti();
   FileDeliveryTable fdt(1, oti);
   EXPECT_EQ(fdt.profile(), Profile::Ts26517);
