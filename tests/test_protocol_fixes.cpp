@@ -893,3 +893,46 @@ TEST(FdtExpiryTest, AFreshlyConstructedInstanceReportsNoExpiry) {
   EXPECT_EQ(fdt.expires(), 0u);
   EXPECT_FALSE(fdt.expired(0xFFFFFFFFULL));
 }
+
+/* ------------------------------------------------------------------------------------------- */
+/* FEC-OTI-FEC-Encoding-ID arriving from the network.                                            */
+
+namespace {
+/* Minimal FDT Instance in the clause 7.2.10.1 namespace, with the FEC Encoding ID left to the
+   caller so each case below can supply a recognised or an unrecognised one. */
+std::string fdt_xml_with_encoding_id(const std::string& id, bool at_file_level) {
+  const std::string instance_attr = at_file_level ? "" : (" FEC-OTI-FEC-Encoding-ID=\"" + id + "\"");
+  const std::string file_attr = at_file_level ? (" FEC-OTI-FEC-Encoding-ID=\"" + id + "\"") : "";
+  return
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+    "<FDT-Instance xmlns=\"urn:IETF:metadata:2005:FLUTE:FDT\" Expires=\"4000000000\""
+    + instance_attr +
+    " FEC-OTI-Encoding-Symbol-Length=\"1400\" FEC-OTI-Maximum-Source-Block-Length=\"64\">"
+    "<File Content-Location=\"a.bin\" TOI=\"1\" Content-Length=\"10\"" + file_attr + "/>"
+    "</FDT-Instance>";
+}
+
+FileDeliveryTable parse_fdt(const std::string& xml) {
+  std::vector<char> buf(xml.begin(), xml.end());
+  buf.push_back('\0');
+  return FileDeliveryTable(1, buf.data(), buf.size());
+}
+} // namespace
+
+TEST(FdtFecEncodingId, ARecognisedIdentifierIsAccepted) {
+  EXPECT_NO_THROW(parse_fdt(fdt_xml_with_encoding_id("0", /*at_file_level*/ false)));
+}
+
+/* An arbitrary integer used to be cast straight into FecScheme, producing an enumerator no branch
+   handles, so the failure surfaced later as a generic "Unsupported FEC scheme" from packet
+   assembly rather than at the FDT that declared it. */
+TEST(FdtFecEncodingId, AnUnrecognisedIdentifierIsRefusedAtTheInstanceLevel) {
+  EXPECT_THROW(parse_fdt(fdt_xml_with_encoding_id("99", /*at_file_level*/ false)),
+               std::runtime_error);
+}
+
+/* The File level may override the FDT-Instance level, so it needs the same check. */
+TEST(FdtFecEncodingId, AnUnrecognisedIdentifierIsRefusedAtTheFileLevel) {
+  EXPECT_THROW(parse_fdt(fdt_xml_with_encoding_id("99", /*at_file_level*/ true)),
+               std::runtime_error);
+}

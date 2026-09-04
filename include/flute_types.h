@@ -15,6 +15,9 @@
 //
 #pragma once
 
+#include <cstdint>
+#include <optional>
+
 /** \mainpage LibFlute - ALC/FLUTE library
  *
  * The library contains two simple **example applications** as a starting point:
@@ -44,6 +47,22 @@ namespace LibFlute {
   enum class FecScheme {
     CompactNoCode
   };
+
+  /**
+   *  Map an FEC Encoding ID as it appears on the wire onto a scheme this library implements.
+   *
+   *  Returns no value for an identifier naming no scheme here. The FDT carries this as an
+   *  arbitrary integer, so casting it straight to FecScheme would manufacture an enumerator that
+   *  no branch handles and defer the failure to whichever switch reaches it first. Extend this
+   *  alongside the enumeration, never separately. `code-derived, no spec claim`.
+   */
+  constexpr auto fec_scheme_from_encoding_id(unsigned long id) -> std::optional<FecScheme>
+  {
+    switch (id) {
+      case 0: return FecScheme::CompactNoCode;
+      default: return std::nullopt;
+    }
+  }
 
   /**
    *  Which set of obligations this session is held to, named by the document that imposes them.

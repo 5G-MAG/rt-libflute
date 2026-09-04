@@ -222,7 +222,17 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
 
   auto val = root_ns.findAttribute(fdt_instance, "FEC-OTI-FEC-Encoding-ID", fdt_ns);
   if (val != nullptr) {
-    _global_fec_oti.encoding_id = static_cast<FecScheme>(strtoul(val->Value(), nullptr, 0));
+    /* Refuse an identifier naming no scheme this library implements, rather than casting it into
+       the enumeration and discovering it several layers down. A sender under either 3GPP profile
+       may not use one (TS 26.346 V18.2.0 clause L.4.7 names the admissible schemes), and an
+       unprofiled sender using one this library cannot decode is equally undeliverable. */
+    auto scheme = fec_scheme_from_encoding_id(strtoul(val->Value(), nullptr, 0));
+    if (!scheme) {
+      throw std::runtime_error(
+          std::string("FDT-Instance FEC-OTI-FEC-Encoding-ID names no FEC scheme this library "
+                      "implements: ") + val->Value());
+    }
+    _global_fec_oti.encoding_id = *scheme;
   }
 
   val = root_ns.findAttribute(fdt_instance, "FEC-OTI-FEC-Instance-ID", fdt_ns);
@@ -298,7 +308,14 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     auto encoding_id = _global_fec_oti.encoding_id;
     val = file_ns.findAttribute(file, "FEC-OTI-FEC-Encoding-ID", fdt_ns);
     if (val != nullptr) {
-      encoding_id = static_cast<FecScheme>(strtoul(val->Value(), nullptr, 0));
+      // Same check as at the FDT-Instance level above; the File level may override it.
+      auto scheme = fec_scheme_from_encoding_id(strtoul(val->Value(), nullptr, 0));
+      if (!scheme) {
+        throw std::runtime_error(
+            std::string("File FEC-OTI-FEC-Encoding-ID names no FEC scheme this library "
+                        "implements: ") + val->Value());
+      }
+      encoding_id = *scheme;
     }
 
     auto fec_instance_id = _global_fec_oti.instance_id;
