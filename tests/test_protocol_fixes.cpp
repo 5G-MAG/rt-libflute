@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <zlib.h>
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -935,4 +937,62 @@ TEST(FdtFecEncodingId, AnUnrecognisedIdentifierIsRefusedAtTheInstanceLevel) {
 TEST(FdtFecEncodingId, AnUnrecognisedIdentifierIsRefusedAtTheFileLevel) {
   EXPECT_THROW(parse_fdt(fdt_xml_with_encoding_id("99", /*at_file_level*/ true)),
                std::runtime_error);
+}
+
+
+/* An object bootstrapped from a content packet's own EXT_FTI learns its Content-Encoding only from
+   the FDT, nothing in EXT_FTI carrying it. Before adopt_fdt_metadata() took the field, such an
+   object was treated as unencoded: decode() is guarded on content_encoding and skipped the
+   decompression, so the caller received the on-wire bytes. With a Content-MD5 also present the
+   failure is worse than a wrong result, check_file_completion() comparing the FDT's digest, taken
+   over the decoded file, against the still-encoded buffer, then resetting every symbol, so the
+   transfer never completes. Reachable from an unprofiled RFC 3926 sender; TS 26.346 V18.2.0 clause
+   7.2.8 bars EXT_FTI on a content packet under the 3GPP profiles. See 5G-MAG/rt-libflute#74. */
+namespace {
+
+std::vector<char> gzip_bytes(const std::vector<char>& in) {
+  std::vector<char> out(in.size() + 1024);
+  z_stream zs{};
+  zs.next_in = reinterpret_cast<unsigned char*>(const_cast<char*>(in.data()));
+  zs.avail_in = static_cast<uint32_t>(in.size());
+  zs.next_out = reinterpret_cast<unsigned char*>(out.data());
+  zs.avail_out = static_cast<uint32_t>(out.size());
+  EXPECT_EQ(deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 | 16, 8, Z_DEFAULT_STRATEGY), Z_OK);
+  EXPECT_EQ(deflate(&zs, Z_FINISH), Z_STREAM_END);
+  out.resize(zs.total_out);
+  deflateEnd(&zs);
+  return out;
+}
+
+}  // namespace
+
+TEST(ExtFtiBootstrapTest, AdoptedFdtMetadataCarriesTheContentEncoding) {
+  const std::vector<char> original(4096, 'x');
+  auto encoded = gzip_bytes(original);
+  ASSERT_LT(encoded.size(), original.size()) << "fixture must actually compress";
+
+  /* The shape Receiver builds from a packet's own EXT_FTI: no content location, no encoding, and
+     content_length standing in as the transfer length because nothing else is known yet. */
+  FecOti oti{FecScheme::CompactNoCode, 0, encoded.size(), static_cast<uint32_t>(encoded.size()), 64, 0};
+  FileDeliveryTable::FileEntry bootstrapped{
+      /*toi*/ 7, /*content_location*/ "", static_cast<uint32_t>(encoded.size()),
+      /*content_md5*/ "", /*content_type*/ "", /*expires*/ 0, oti};
+  LibFlute::File file(bootstrapped);
+
+  FileDeliveryTable::FileEntry from_fdt = bootstrapped;
+  from_fdt.content_location = "bootstrapped-gzip.bin";
+  from_fdt.content_type = "application/octet-stream";
+  from_fdt.content_length = static_cast<uint32_t>(original.size());
+  from_fdt.content_encoding = "gzip";
+  file.adopt_fdt_metadata(from_fdt);
+
+  EXPECT_EQ(file.meta().content_encoding, "gzip");
+  EXPECT_EQ(file.meta().content_length, original.size());
+
+  file.put_symbol(EncodingSymbol(0, 0, encoded.data(), encoded.size(), FecScheme::CompactNoCode));
+  ASSERT_TRUE(file.complete());
+
+  file.decode();
+  ASSERT_EQ(file.length(), original.size());
+  EXPECT_EQ(memcmp(file.buffer(), original.data(), original.size()), 0);
 }
