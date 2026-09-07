@@ -876,22 +876,17 @@ auto Transmitter::send_next_packet() -> void
                                                  _session_closing, _closing_objects.count(file->meta().toi) > 0);
       bytes_queued += packet->size();
 
-      /* A tunnel is an additional path, not a replacement for the announced one. Sending only the
-         encapsulated copy leaves a receiver that joins the announced destination directly, rather
-         than sitting behind the tunnel's decapsulation, with no packets at all. Both copies go out
-         when a tunnel is configured, and completion is tracked from the tunnelled send, which is
-         the primary path in that configuration; the plain copy is fire-and-forget. Without a
-         tunnel the plain send is the only one, and it carries the completion. */
-      if (_tunnel_endpoint) {
-        _socket.async_send_to(
-            boost::asio::buffer(packet->data(), packet->size()), _endpoint,
-            [packet](const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
-            {
-              if (error) {
-                spdlog::debug("sent_to (plain) error: {}", error.message());
-              }
-            });
+      /* A tunnel is a choice of carriage, not an additional path: configuring one selects the
+         encapsulated carriage and the announced destination is then reached by decapsulation at
+         the far end, so the plain copy is not also sent.
 
+         TS 23.247 V18.8.0 clause 7.3.1 step 13: "The AF starts transmitting the DL media stream to
+         MB-UPF using the N6mb Tunnel, or optionally un-tunnelled i.e. as an IP multicast stream
+         using the HL MC address."
+
+         A receiver that joins the announced destination directly is served by not configuring a
+         tunnel. Completion is tracked from whichever single send is issued. */
+      if (_tunnel_endpoint) {
         /* The completion handler owns the encapsulated buffer through this shared_ptr, so it
            outlives the asynchronous send. A raw new[] freed straight after issuing the send would
            be read after free. */
@@ -1026,15 +1021,7 @@ auto Transmitter::send_close_session_packet() -> void
     return;
   }
 
-  _socket.async_send_to(
-      boost::asio::buffer(packet->data(), packet->size()), _endpoint,
-      [packet](const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
-      {
-        if (error) {
-          spdlog::debug("close session send error: {}", error.message());
-        }
-      });
-
+  /* One carriage or the other, as in send_next_packet(); the clause is quoted there. */
   if (_tunnel_endpoint) {
     const size_t ip_hdr_len = ip_header_length(_endpoint.address().is_v6());
     const size_t data_size = packet->size() + ip_hdr_len + 8 /* UDP header */;
@@ -1051,6 +1038,15 @@ auto Transmitter::send_close_session_packet() -> void
         {
           if (error) {
             spdlog::debug("close session tunnel send error: {}", error.message());
+          }
+        });
+  } else {
+    _socket.async_send_to(
+        boost::asio::buffer(packet->data(), packet->size()), _endpoint,
+        [packet](const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
+        {
+          if (error) {
+            spdlog::debug("close session send error: {}", error.message());
           }
         });
   }

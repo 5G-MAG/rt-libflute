@@ -233,3 +233,71 @@ TEST(TransmitterLifecycleTest, DeferredDeactivationDrainsQueuedFilesAndStopsFutu
   io.stop();
   io_thread.join();
 }
+
+
+/* Configuring a tunnel selects the encapsulated carriage; the announced destination is then
+   reached by decapsulation at the far end, so nothing is also sent to it directly. Both send
+   sites used to issue a plain copy alongside the encapsulated one, doubling egress with a copy
+   nothing downstream consumes.
+
+   TS 23.247 V18.8.0 clause 7.3.1 step 13: "The AF starts transmitting the DL media stream to
+   MB-UPF using the N6mb Tunnel, or optionally un-tunnelled i.e. as an IP multicast stream using
+   the HL MC address."
+
+   Two real sockets stand in for the tunnel peer and for the announced destination, so this counts
+   what actually leaves the Transmitter rather than inspecting its intent. */
+TEST(TransmitterTunnelCarriageTest, ConfiguredTunnelSuppressesTheDirectCopy) {
+  using namespace std::chrono_literals;
+
+  boost::asio::io_context io;
+  auto work_guard = boost::asio::make_work_guard(io);
+
+  boost::asio::ip::udp::socket tunnel_peer(
+      io, boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v4(), 0));
+  boost::asio::ip::udp::socket destination_peer(
+      io, boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v4(), 0));
+  const auto tunnel_port = tunnel_peer.local_endpoint().port();
+  const auto destination_port = destination_peer.local_endpoint().port();
+  boost::asio::ip::udp::endpoint tunnel_endpoint(boost::asio::ip::make_address("127.0.0.1"),
+                                                 tunnel_port);
+
+  Transmitter tx("127.0.0.1", destination_port, /*tsi*/ 1234, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                 tunnel_endpoint);
+
+  std::vector<uint8_t> tunnel_buf(2048), direct_buf(2048);
+  boost::asio::ip::udp::endpoint from;
+  std::promise<size_t> tunnel_promise, direct_promise;
+  auto tunnel_future = tunnel_promise.get_future();
+  auto direct_future = direct_promise.get_future();
+
+  tunnel_peer.async_receive_from(boost::asio::buffer(tunnel_buf), from,
+      [&](const boost::system::error_code& ec, size_t bytes) {
+        if (!ec) tunnel_promise.set_value(bytes);
+      });
+  destination_peer.async_receive_from(boost::asio::buffer(direct_buf), from,
+      [&](const boost::system::error_code& ec, size_t bytes) {
+        if (!ec) direct_promise.set_value(bytes);
+      });
+
+  const std::vector<char> payload{'t', 'u', 'n', 'n', 'e', 'l', '-', 'o', 'n', 'l', 'y'};
+  auto file = std::make_shared<Transmitter::FileDescription>("test/tunnel-only.bin", payload);
+  tx.send(file);
+
+  std::thread io_thread([&io]() { io.run(); });
+
+  /* The encapsulated carriage must be in use, so a suppressed direct copy is not read as a
+     Transmitter that sent nothing at all. */
+  ASSERT_EQ(tunnel_future.wait_for(2s), std::future_status::ready)
+      << "no encapsulated datagram reached the tunnel peer";
+
+  /* In the previous behaviour the direct copy was issued before the encapsulated one, so by the
+     time the tunnelled datagram has been received on loopback any duplicate would already be
+     queued. This grace is generous for that. */
+  EXPECT_EQ(direct_future.wait_for(300ms), std::future_status::timeout)
+      << "a datagram was also sent straight to the announced destination";
+
+  tx.deactivate();
+  work_guard.reset();
+  io.stop();
+  io_thread.join();
+}
