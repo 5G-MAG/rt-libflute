@@ -549,11 +549,11 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
   _socket.set_option(boost::asio::ip::multicast::enable_loopback(true));
   _socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
 
-  /* A tunnelled session still sends an untunnelled copy to the real multicast destination, and
-     that copy has to originate from the configured source address too, or a receiver filtering
-     on the announced source (an SDP a=source-filter, say) never matches it. Binding was skipped
-     whenever a tunnel was configured, on the assumption the socket only ever reached the tunnel
-     endpoint. */
+  /* The un-tunnelled carriage sends straight to the announced destination, usually a multicast
+     group, and that send has to originate from the configured source address or a receiver
+     filtering on the announced source (an SDP a=source-filter, say) never matches it. Bound
+     unconditionally rather than only when no tunnel is configured, because the source address also
+     becomes the outer datagram's source in tunnelled mode. */
   if (_source_address) {
     _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
     // bind() only sets the packet's claimed source address; it does not choose which interface a
@@ -649,11 +649,11 @@ auto Transmitter::endpoint(boost::asio::ip::udp::endpoint &&destination) -> Tran
 auto Transmitter::source_address(const std::optional<boost::asio::ip::address> &source_address) -> Transmitter&
 {
   _source_address = source_address;
-  /* A tunnelled session still sends an untunnelled copy to the real multicast destination, and
-     that copy has to originate from the configured source address too, or a receiver filtering
-     on the announced source (an SDP a=source-filter, say) never matches it. Binding was skipped
-     whenever a tunnel was configured, on the assumption the socket only ever reached the tunnel
-     endpoint. */
+  /* The un-tunnelled carriage sends straight to the announced destination, usually a multicast
+     group, and that send has to originate from the configured source address or a receiver
+     filtering on the announced source (an SDP a=source-filter, say) never matches it. Bound
+     unconditionally rather than only when no tunnel is configured, because the source address also
+     becomes the outer datagram's source in tunnelled mode. */
   if (_source_address) {
     _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
     // See the same bind()'s own comment in start(): bind() alone does not steer a multicast
@@ -668,11 +668,11 @@ auto Transmitter::source_address(const std::optional<boost::asio::ip::address> &
 auto Transmitter::source_address(std::optional<boost::asio::ip::address> &&source_address) -> Transmitter&
 {
   _source_address = std::move(source_address);
-  /* A tunnelled session still sends an untunnelled copy to the real multicast destination, and
-     that copy has to originate from the configured source address too, or a receiver filtering
-     on the announced source (an SDP a=source-filter, say) never matches it. Binding was skipped
-     whenever a tunnel was configured, on the assumption the socket only ever reached the tunnel
-     endpoint. */
+  /* The un-tunnelled carriage sends straight to the announced destination, usually a multicast
+     group, and that send has to originate from the configured source address or a receiver
+     filtering on the announced source (an SDP a=source-filter, say) never matches it. Bound
+     unconditionally rather than only when no tunnel is configured, because the source address also
+     becomes the outer datagram's source in tunnelled mode. */
   if (_source_address) {
     _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
     // See the same bind()'s own comment in start(): bind() alone does not steer a multicast
