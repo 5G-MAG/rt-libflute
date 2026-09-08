@@ -759,6 +759,36 @@ auto Transmitter::send(
 
 auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file_description) -> uint16_t
 {
+  /* The 3GPP profiles permit an object to be content encoded but provide no carrier for the
+     resulting transfer length, so this sender declines to encode under them rather than emit an
+     object no conformant receiver can size.
+
+     Both carriers are closed. TS 26.346 V18.2.0 clause L.4.4 forbids the FDT attribute, listing
+     Transfer-Length first under "The following attributes shall not be carried in the FDT sent by
+     the FLUTE sender:", and the in-band route is closed by
+
+     TS 26.346 V18.2.0 clause 7.2.8: "FLUTE packets carrying symbols of files (not FDT Instances)
+     shall not include an EXT_FTI."
+
+     Content-Length cannot substitute, being equal to the transfer length only for an object carried
+     without an encoding (RFC 3926 clause 3.4.2). Declining is conformant because the profile leaves
+     the encoding to the sender:
+
+     TS 26.346 V18.2.0 clause L.4.2: "The following FDT attribute, defined at both the FDT-Instance
+     and File levels, may be carried in the FDT sent by the FLUTE sender, under either the
+     File-Instance or File element, and shall be supported by the FLUTE receiver:"
+
+     Refusing rather than silently sending the object uncompressed, because a caller that asked for
+     compression and got none without being told has been misled. The contradiction itself is 3GPP's
+     to resolve and is raised as 5G-MAG/Standards#212. Receiving a content-encoded object is
+     unaffected: the same clause obliges a receiver to support gzip and this library does. */
+  if (is_3gpp(_profile) && !file_description->file_entry().content_encoding.empty()) {
+    throw std::runtime_error(
+        "Content encoding is not used by this sender under the 3GPP profiles, which provide no way "
+        "to carry the resulting transfer length. See 5G-MAG/Standards#212, and the citations at this "
+        "check. Use Profile::Unprofiled, or send the object uncompressed.");
+  }
+
   if (file_description->has_tsi() && file_description->tsi() != _tsi) {
     // Reset TOI if the file_description is being used on a new TSI
     file_description->toi(0);

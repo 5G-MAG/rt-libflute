@@ -301,3 +301,47 @@ TEST(TransmitterTunnelCarriageTest, ConfiguredTunnelSuppressesTheDirectCopy) {
   io.stop();
   io_thread.join();
 }
+
+
+/* The 3GPP profiles permit content encoding but provide no carrier for the resulting transfer
+   length, so this sender declines it there rather than emit an object no conformant receiver can
+   size. The clauses are quoted at the check in Transmitter::send(); the contradiction is raised as
+   5G-MAG/Standards#212. Declining is conformant because the profile leaves the encoding to the
+   sender, TS 26.346 V18.2.0 clause L.4.2 making it a "may". Outside the profiles RFC 3926 permits
+   Transfer-Length, so the encoding stays available. */
+TEST(ProfileContentEncodingTest, RefusedUnderThe3gppProfiles) {
+  boost::asio::io_context io;
+  const std::vector<char> payload(4096, 'x');
+
+  for (auto profile : {LibFlute::Profile::Ts26517, LibFlute::Profile::Ts26346}) {
+    Transmitter tx("127.0.0.1", 5000, /*tsi*/ 1234, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                   /*tunnel*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ true,
+                   /*source_address*/ std::nullopt, profile);
+    auto fd = std::make_shared<Transmitter::FileDescription>("test/compressible.bin", payload);
+    fd->set_compression(Transmitter::FileDescription::COMPRESSION_GZIP);
+    EXPECT_THROW(tx.send(fd), std::runtime_error);
+  }
+}
+
+TEST(ProfileContentEncodingTest, AllowedOutsideTheProfiles) {
+  boost::asio::io_context io;
+  const std::vector<char> payload(4096, 'x');
+  Transmitter tx("127.0.0.1", 5000, /*tsi*/ 1234, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                 /*tunnel*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ true,
+                 /*source_address*/ std::nullopt, LibFlute::Profile::Unprofiled);
+  auto fd = std::make_shared<Transmitter::FileDescription>("test/compressible.bin", payload);
+  fd->set_compression(Transmitter::FileDescription::COMPRESSION_GZIP);
+  EXPECT_NO_THROW(tx.send(fd));
+  tx.deactivate();
+}
+
+TEST(ProfileContentEncodingTest, AnUnencodedObjectIsUnaffectedUnderTheProfile) {
+  boost::asio::io_context io;
+  const std::vector<char> payload(4096, 'x');
+  Transmitter tx("127.0.0.1", 5000, /*tsi*/ 1234, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                 /*tunnel*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ true,
+                 /*source_address*/ std::nullopt, LibFlute::Profile::Ts26517);
+  auto fd = std::make_shared<Transmitter::FileDescription>("test/plain.bin", payload);
+  EXPECT_NO_THROW(tx.send(fd));
+  tx.deactivate();
+}
