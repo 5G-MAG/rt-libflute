@@ -345,3 +345,24 @@ TEST(ProfileContentEncodingTest, AnUnencodedObjectIsUnaffectedUnderTheProfile) {
   EXPECT_NO_THROW(tx.send(fd));
   tx.deactivate();
 }
+
+
+/* Under a tunnel the configured source address is the inner header's source, not the socket's own.
+   It need not name a local interface: the encapsulated source may belong to the application
+   provider while the sender sits on another network. Binding the socket to it then fails outright,
+   so the bind is skipped whenever a tunnel endpoint is configured. Uses a TEST-NET-1 address
+   (RFC 5737), which is guaranteed not to be a local interface. */
+TEST(TransmitterTunnelBindTest, SourceAddressNotOnThisHostIsAcceptedUnderATunnel) {
+  boost::asio::io_context io;
+  boost::asio::ip::udp::socket tunnel_peer(
+      io, boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v4(), 0));
+  boost::asio::ip::udp::endpoint tunnel_endpoint(boost::asio::ip::make_address("127.0.0.1"),
+                                                 tunnel_peer.local_endpoint().port());
+
+  EXPECT_NO_THROW({
+    Transmitter tx("239.255.9.42", 19342, /*tsi*/ 1234, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                   tunnel_endpoint, FileDeliveryTable::FDT_NS_NONE, /*active*/ true,
+                   /*source_address*/ std::string("192.0.2.1"));
+    tx.deactivate();
+  });
+}
