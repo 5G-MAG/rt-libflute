@@ -117,6 +117,31 @@ namespace LibFlute {
       const LibFlute::FileDeliveryTable::FileEntry& meta() const { return _meta; };
 
      /**
+      *  Fill in the FDT-derived fields (content_location, content_type, ...) once the FDT
+      *  entry for this TOI becomes available. Used when reception started from a packet's own
+      *  EXT_FTI before the describing FDT arrived, so the in-progress reception isn't discarded
+      *  and restarted once it does. fec_oti is left as-is, since it already came from the
+      *  packet's own EXT_FTI and is what the in-flight reassembly is keyed on.
+      *
+      *  content_encoding has to come from here: nothing in EXT_FTI carries it, so a bootstrapped
+      *  object would otherwise be treated as unencoded. decode() would skip decompression, and
+      *  check_file_completion() would compare the FDT's Content-MD5, taken over the decoded file,
+      *  against the still-encoded buffer, fail, reset every symbol and never complete.
+      *
+      *  content_length comes with it, because for an encoded object it is the decoded length while
+      *  the bootstrapped value was the transfer length. decode() reports a mismatch against it
+      *  otherwise.
+      */
+      void adopt_fdt_metadata(const LibFlute::FileDeliveryTable::FileEntry& fdt_entry) {
+        _meta.content_location = fdt_entry.content_location;
+        _meta.content_type = fdt_entry.content_type;
+        _meta.content_md5 = fdt_entry.content_md5;
+        _meta.expires = fdt_entry.expires;
+        _meta.content_encoding = fdt_entry.content_encoding;
+        _meta.content_length = fdt_entry.content_length;
+      };
+
+     /**
       *  Timestamp of file reception
       */
       unsigned long received_at() const { return _received_at; };

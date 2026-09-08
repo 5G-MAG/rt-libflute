@@ -22,6 +22,7 @@
 #include <queue>
 #include <string>
 #include <map>
+#include <set>
 #include <mutex>
 #include <optional>
 //#include "File.h"
@@ -286,12 +287,31 @@ namespace LibFlute {
         FileDescription &set_content_type(const std::string &content_type);
 
        /**
-        * Change the file expiry time
+        * Change the file expiry time.
+        *
+        * This is the File element's own Expires attribute, an optional attribute of FileType in
+        * the TS 26.346 annex L.6.1 profiled schema. It says when the file itself stops being
+        * valid, and it is NOT the cache directive: see set_cache_expiry_time() for that. The two
+        * were previously set together and could not be given different values.
         *
         * @param expiry_time The expiry time of the file in the FLUTE session.
         * @return this file description
         */
         FileDescription &set_expiry_time(const date_time_type &expiry_time);
+
+       /**
+        * Change the cache expiry time carried in the mbms2007:Cache-Control element.
+        *
+        * A separate value from set_expiry_time(): CacheControlType in the annex L.6.1 profiled
+        * schema is an xs:choice of no-cache, max-stale and Expires, so at most one of those
+        * appears, and the Expires it carries is a caching directive to intermediates rather than
+        * a statement about the file's own validity. Leave it unset to emit no Cache-Control
+        * element at all, which the schema permits since the element is minOccurs="0".
+        *
+        * @param expiry_time The cache expiry time.
+        * @return this file description
+        */
+        FileDescription &set_cache_expiry_time(const date_time_type &expiry_time);
 
        /**
         *  Get the currently set expiry time
@@ -420,7 +440,8 @@ namespace LibFlute {
           const std::optional<boost::asio::ip::udp::endpoint>& tunnel_endpoint = std::nullopt,
           FdtNamespace fdt_namespace = FileDeliveryTable::FDT_NS_NONE,
           bool active = true,
-          const std::optional<std::string>& source_address = std::nullopt);
+          const std::optional<std::string>& source_address = std::nullopt,
+          Profile profile = Profile::Ts26517);
 
      /**
       *  Default destructor.
@@ -490,6 +511,12 @@ namespace LibFlute {
       *
       * @return The maximum bit rate.
       */
+     /**
+      *  Read-only access to the session's current FDT, for tests that need to
+      *  observe what the sender is advertising. Not part of the sending API.
+      */
+      const FileDeliveryTable& fdt() const { return *_fdt; }
+
       uint32_t rate_limit() const { return _rate_limit; };
 
      /**
@@ -573,7 +600,7 @@ namespace LibFlute {
       *  @param spi Security Parameter Index value to use
       *  @param aes_key AES key as a hex string (without leading 0x). Must be an even number of characters long.
       */
-      void enable_ipsec( uint32_t spi, const std::string& aes_key);
+      void enable_ipsec( uint32_t spi, const std::string& aes_key, const std::string& auth_key = "");
 
      /**
       *  Transmit a file (deprecated).
@@ -658,9 +685,26 @@ namespace LibFlute {
       */
       size_t number_of_files() { std::lock_guard<std::mutex> guard(_files_mutex); return _files.size(); };
 
+     /**
+      * Signal that this session is ending: no further files will ever be added. Marks the FDT
+      * as Complete (RFC 3926 clause 3.4.2, so receivers know the file set is final) and sets the LCT Close
+      * Session flag (RFC 3451 clause 5.1, 'A' bit) on every packet sent from this point on, including for
+      * files already in flight.
+      */
+      void close_session();
+
+     /**
+      * Signal that no further data will be sent for a specific TOI. Sets the LCT Close Object
+      * flag (RFC 3451 clause 5.1, 'B' bit) on subsequent packets carrying that TOI.
+      *
+      * @param toi The TOI to close.
+      */
+      void close_object(uint32_t toi);
+
     private:
       void send_fdt();
       void send_next_packet();
+      void send_close_session_packet();
       void fdt_send_tick(const boost::system::error_code& error);
       void start_fdt_repeat_timer();
 
@@ -671,6 +715,10 @@ namespace LibFlute {
       void handle_send_to(const boost::system::error_code& error);
       boost::asio::ip::udp::endpoint _endpoint;
       std::optional<boost::asio::ip::address> _source_address;
+
+      /** Which obligation set this session is held to. Fixed at construction; the profile decides
+       *  what may be signalled, so it cannot change once a session is running. */
+      Profile _profile;
       boost::asio::ip::udp::socket _socket;
       boost::asio::io_context& _io_context;
       boost::asio::steady_timer _send_timer;
@@ -682,6 +730,9 @@ namespace LibFlute {
       std::unique_ptr<FileDeliveryTable> _fdt;
       std::map<uint32_t, std::shared_ptr<File>> _files;
       std::mutex _files_mutex;
+
+      bool _session_closing = false;
+      std::set<uint32_t> _closing_objects;
 
       unsigned _fdt_repeat_interval = 5;
       uint16_t _toi = 1;
