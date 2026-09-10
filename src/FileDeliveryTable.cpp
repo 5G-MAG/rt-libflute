@@ -133,13 +133,23 @@ bool LibFlute::FileDeliveryTable::FileEntry::operator==(const LibFlute::FileDeli
          etag == other.etag;
 }
 
+namespace {
+  auto ntp_seconds_since_epoch() -> uint64_t
+  {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count() +
+        2'208'988'800; /* Unix epoch -> NTP epoch offset, matching Transmitter::seconds_since_epoch() */
+  }
+}
+
 LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, FecOti fec_oti, FdtNamespace fdt_namespace,
-                                               Profile profile)
+                                               Profile profile, uint8_t flute_version)
   : _instance_id( instance_id )
   , _instance_id_sent( instance_id - 1 )
   , _global_fec_oti( fec_oti )
   , _fdt_namespace( fdt_namespace )
   , _profile( profile )
+  , _flute_version( flute_version )
 {
   /* Each 3GPP profile fixes the FDT schema, so the namespace is taken from the profile rather than
      from a separate argument that could disagree with it.
@@ -170,10 +180,12 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, FecOti fec_
   }
 }
 
-LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffer, size_t len) 
+LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffer, size_t len,
+                                               uint8_t flute_version)
   : _instance_id( instance_id )
   , _instance_id_sent( instance_id - 1 )
   , _global_fec_oti()
+  , _flute_version( flute_version )
 {
   static const std::string mbms2007_ns("urn:3GPP:metadata:2007:MBMS:FLUTE:FDT"); // 3GPP TS 26.346 Clause 7.2.10.2
   static const std::string mbms2012_ns("urn:3GPP:metadata:2012:MBMS:FLUTE:FDT"); // 3GPP TS 26.346 Clause 7.2.10.2
@@ -202,8 +214,8 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     _fdt_namespace = FDT_NS_RFC3926;
   } else if (fdt_ns == "urn:IETF:metadata:2005:FLUTE:FDT") { // 3GPP TS 26.346 Clause 7.2.10.1
     _fdt_namespace = FDT_NS_DRAFT_2005;
-//  } else if (fdt_ns == "urn:ietf:params:xml:ns:fdt") { // RFC 6726 - FLUTEv2 - needs more work
-//    _fdt_namespace = FDT_NS_RFC6726;
+  } else if (fdt_ns == "urn:ietf:params:xml:ns:fdt") { // RFC 6726 clause 3.4.2, FLUTE version 2
+    _fdt_namespace = FDT_NS_RFC6726;
   } else if (fdt_ns == "urn:3GPP:metadata:2022:FLUTE:FDT") { // 3GPP TS 26.346 Clause L.6.1
     _fdt_namespace = FDT_NS_3GPP_CONSOLIDATED_V2;
   } else {
@@ -211,6 +223,9 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
   }
 
   _expires = std::stoull(root_ns.findAttribute(fdt_instance, "Expires", fdt_ns)->Value());
+  if (_flute_version >= 2) {
+    _expires = expiry_in_nearest_era(_expires, ntp_seconds_since_epoch());
+  }
 
   auto complete_attr = root_ns.findAttribute(fdt_instance, "Complete", fdt_ns);
   if (complete_attr != nullptr) {
@@ -415,13 +430,44 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
   }
 }
 
-namespace {
-  auto ntp_seconds_since_epoch() -> uint64_t
-  {
-    return std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count() +
-        2'208'988'800; /* Unix epoch -> NTP epoch offset, matching Transmitter::seconds_since_epoch() */
+void LibFlute::FileDeliveryTable::set_flute_version(uint8_t version)
+{
+  /* Neither 3GPP profile admits version 2: both are built on RFC 3926, which is version 1.
+     TS 26.346 V18.2.0 clause 7.2.0: "MBMS Clients and servers supporting MBMS download shall
+     implement the FLUTE specification (RFC 3926 [9]), as well as ALC (RFC 3450 [10]) and LCT
+     (RFC 3451 [11]) features that FLUTE inherits."
+
+     RFC 6726 clause 11.1 records that the two generations are not interchangeable: "Therefore, an
+     implementation that relies on [RFC3926] and RFC 3451 will not be backwards compatible with
+     FLUTE as specified in this document." So a version 2 session cannot be a 3GPP one, and asking
+     for it here is refused rather than quietly honoured. */
+  if (version != 1 && is_3gpp(_profile)) {
+    throw std::runtime_error(
+        "FLUTE version 2 is not available under the 3GPP profiles, which are defined on RFC 3926; "
+        "use Profile::Unprofiled for a version 2 session");
   }
+  _flute_version = version;
+}
+
+uint64_t LibFlute::FileDeliveryTable::expiry_in_nearest_era(uint64_t wire_value, uint64_t now)
+{
+  /* RFC 6726 clause 3.3: "both a sender and a receiver easily determine to which (136-year) epoch
+     the FDT Instance expiration time value pertains by choosing the epoch for which the expiration
+     time is closest in time to the current time."
+
+     The wire field is 32 bits, so the candidates are that value placed in the era below the
+     current time and in the one above it. Whichever lands nearer to now is the one meant. */
+  static constexpr uint64_t era = 1ULL << 32;
+  const uint64_t offset = wire_value % era;
+  const uint64_t base = (now / era) * era;
+
+  uint64_t best = base + offset;
+  auto distance = [now](uint64_t v) { return v > now ? v - now : now - v; };
+  for (uint64_t candidate : { base + offset + era,
+                              base >= era ? base + offset - era : base + offset }) {
+    if (distance(candidate) < distance(best)) best = candidate;
+  }
+  return best;
 }
 
 void LibFlute::FileDeliveryTable::set_expires(uint64_t exp)
@@ -441,8 +487,38 @@ void LibFlute::FileDeliveryTable::set_expires(uint64_t exp)
 
 uint32_t LibFlute::FileDeliveryTable::next_instance_id(uint32_t current, uint64_t current_expires,
                                                         uint64_t now,
-                                                        std::map<uint32_t, uint64_t>& expired_instance_ids)
+                                                        std::map<uint32_t, uint64_t>& expired_instance_ids,
+                                                        uint8_t flute_version)
 {
+  if (flute_version >= 2) {
+    /* RFC 6726 clause 3.4.1 replaced the version 1 sequence: "After reaching the maximum value
+       (2^20-1), the numbering starts from the smallest FDT Instance ID value assigned to an expired
+       FDT Instance", and made reuse of a live identifier a prohibition rather than advice:
+       "Senders MUST NOT reuse an FDT Instance ID value that is already in use for a non-expired FDT
+       Instance." The same clause leaves the exhausted case to the implementation: "Sender behavior
+       when all the FDT Instance IDs are used by non-expired FEC Instances is outside the scope of
+       this specification and left to individual implementations of FLUTE." Refusing is the only
+       option that does not break the prohibition above. */
+    expired_instance_ids[current] = current_expires;
+
+    if (current < kMaxFdtInstanceId) {
+      return current + 1;
+    }
+
+    auto chosen = expired_instance_ids.cend();
+    for (auto it = expired_instance_ids.cbegin(); it != expired_instance_ids.cend(); ++it) {
+      if (it->second < now) { chosen = it; break; }  // std::map iterates in ascending key order
+    }
+    if (chosen == expired_instance_ids.cend()) {
+      throw std::runtime_error("FDT Instance ID space exhausted: no previously used ID has expired, "
+                               "and RFC 6726 clause 3.4.1 forbids reusing one that is still live");
+    }
+    const uint32_t reused = chosen->first;
+    expired_instance_ids.erase(chosen);
+    return reused;
+  }
+
+
   /* RFC 3926 clause 3.4.1: "After reaching the maximum value (2^20-1), the numbering starts again
      from '0'."
 
@@ -469,7 +545,7 @@ uint32_t LibFlute::FileDeliveryTable::next_instance_id(uint32_t current, uint64_
 auto LibFlute::FileDeliveryTable::advance_instance_id() -> void
 {
   _instance_id = next_instance_id(_instance_id, _expires, ntp_seconds_since_epoch(),
-                                  _expired_instance_ids);
+                                  _expired_instance_ids, _flute_version);
 }
 
 auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> void
@@ -519,10 +595,10 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
       // 3GPP TS 26.346 Clause 7.2.10.1
       root->SetAttribute("xmlns", "urn:IETF:metadata:2005:FLUTE:FDT");
       break;
-//    case FDT_NS_RFC6726:  // FLUTE v2 - Will need other things implementing to use this
-//      // RFC 6726
-//      root->SetAttribute("xmlns", "urn:ietf:params:xml:ns:fdt");
-//      break;
+    case FDT_NS_RFC6726:
+      // RFC 6726 clause 3.4.2: targetNamespace="urn:ietf:params:xml:ns:fdt"
+      root->SetAttribute("xmlns", "urn:ietf:params:xml:ns:fdt");
+      break;
     case FDT_NS_3GPP_CONSOLIDATED_V2:
       // 3GPP TS 26.346 Clause L.6.1
       root->SetAttribute("xmlns", "urn:3GPP:metadata:2022:FLUTE:FDT");

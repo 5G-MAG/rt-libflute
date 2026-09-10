@@ -31,6 +31,24 @@ namespace LibFlute {
   class Receiver {
     public:
      /**
+      *  Select the FLUTE protocol version for this session.
+      *
+      *  RFC 3926 clause 3.4.1 requires the EXT_FDT version field to be 1 in a version 1 session,
+      *  and RFC 6726 clause 3.4.1 requires 2 in a version 2 session. They are separate protocols:
+      *  RFC 6726 clause 11.1 records that version 1 uses RFC 3451 and version 2 uses RFC 5651,
+      *  "Therefore, an implementation that relies on [RFC3926] and RFC 3451 will not be backwards
+      *  compatible with FLUTE as specified in this document."
+      *
+      *  The default is 1. TS 26.346 V18.2.0 clause L.2 selects RFC 3926, so a 3GPP MBMS download
+      *  session must leave this at 1.
+      *
+      *  Version 2 is incompletely implemented here: see the note in this branch's README on the
+      *  RFC 6726 obligations that are not met.
+      */
+      void set_flute_version(uint8_t version) { _flute_version = version; };
+      uint8_t flute_version() const { return _flute_version; };
+
+     /**
       *  Definition of a file reception completion callback function that can be
       *  registered through ::register_completion_callback.
       *
@@ -137,6 +155,7 @@ namespace LibFlute {
       enum { max_length = 65536 };
       char _data[max_length];
       uint64_t _tsi;
+      uint8_t _flute_version = 1;
       std::unique_ptr<LibFlute::FileDeliveryTable> _fdt;
       // FDT instance currently being reassembled at TOI 0 (0xFFFFFFFF = none).
       // Used to discard a partial FDT object when a newer instance starts

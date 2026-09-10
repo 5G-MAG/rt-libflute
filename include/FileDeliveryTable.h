@@ -36,7 +36,7 @@ namespace LibFlute {
           FDT_NS_NONE = 0,
           FDT_NS_RFC3926,
           FDT_NS_DRAFT_2005,
-//          FDT_NS_RFC6726, // FLUTE v2 - will need other things implementing to use this correctly
+          FDT_NS_RFC6726,   //< RFC 6726 FLUTE v2 namespace. Not for 3GPP MBMS use.
           FDT_NS_3GPP_CONSOLIDATED_V2
       };
 
@@ -48,7 +48,7 @@ namespace LibFlute {
       *  @param fdt_namespace The XML namespace to use for FDT
       */
       FileDeliveryTable(uint32_t instance_id, FecOti fec_oti, FdtNamespace fdt_namespace = FDT_NS_NONE,
-                        Profile profile = Profile::Ts26517);
+                        Profile profile = Profile::Ts26517, uint8_t flute_version = 1);
 
      /**
       *  Parse an XML string and create a FDT class from it
@@ -57,7 +57,7 @@ namespace LibFlute {
       *  @param buffer String containing the FDT XML
       *  @param len Length of the buffer
       */
-      FileDeliveryTable(uint32_t instance_id, char* buffer, size_t len);
+      FileDeliveryTable(uint32_t instance_id, char* buffer, size_t len, uint8_t flute_version = 1);
 
      /**
       *  Default destructor.
@@ -82,6 +82,14 @@ namespace LibFlute {
      /** The FDT-Instance Expires attribute, in NTP-epoch seconds. */
       uint64_t expires() const { return _expires; }
 
+     /**
+      *  Select the FLUTE version whose rules this table follows. Version 1 (RFC 3926) is the
+      *  default; version 2 (RFC 6726) changes the FDT Instance ID sequence and how the Expires
+      *  field is read. Set before the first instance is sent.
+      */
+      void set_flute_version(uint8_t version);
+      uint8_t flute_version() const { return _flute_version; };
+
      /** 20-bit field width (RFC 3926 clause 3.4.1, "FDT Instance ID, 20 bits"). */
       static constexpr uint32_t kMaxFdtInstanceId = 0xFFFFF;
 
@@ -90,7 +98,18 @@ namespace LibFlute {
       *  function so the wraparound is testable without a live session.
       */
       static uint32_t next_instance_id(uint32_t current, uint64_t current_expires, uint64_t now,
-                                       std::map<uint32_t, uint64_t>& expired_instance_ids);
+                                       std::map<uint32_t, uint64_t>& expired_instance_ids,
+                                       uint8_t flute_version = 1);
+
+     /**
+      *  Interpret a 32-bit NTP expiry against the era it belongs to.
+      *
+      *  RFC 6726 clause 3.3 describes how a version 2 peer reads the field: "both a sender and a
+      *  receiver easily determine to which (136-year) epoch the FDT Instance expiration time value
+      *  pertains by choosing the epoch for which the expiration time is closest in time to the
+      *  current time." Version 1 states no such rule, so this is applied only for version 2.
+      */
+      static uint64_t expiry_in_nearest_era(uint64_t wire_value, uint64_t now);
 
      /**
       *  Which obligation set this FDT is emitted under. See Profile.
@@ -221,6 +240,7 @@ namespace LibFlute {
          into the FDT-Instance Expires attribute for any caller that reaches it before
          set_expires(). code-derived, no spec claim. */
       uint64_t _expires = 0;
+      uint8_t _flute_version = 1;
       bool _complete = false;
 
       FdtNamespace _fdt_namespace;
