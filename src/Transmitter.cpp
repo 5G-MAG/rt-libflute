@@ -1060,8 +1060,25 @@ auto Transmitter::send_next_packet() -> void
       for(const auto& symbol : symbols) {
         spdlog::debug("sending TOI {} SBN {} ID {}", file->meta().toi, symbol.source_block_number(), symbol.id() );
       }
+      /* EXT_FTI is never attached to a content packet under a 3GPP profile.
+
+         TS 26.346 V18.2.0 clause 7.2.8: "FLUTE packets carrying symbols of files (not FDT
+         Instances) shall not include an EXT_FTI."
+
+         This closes the second of the two carriers a content-encoded object's transfer length could
+         use, the first being the FDT's Transfer-Length attribute, which clause L.4.4 forbids. The
+         profile nonetheless permits gzip, so it allows a case it provides no way to signal. Raised
+         as 5G-MAG/Standards#212. Until that is answered the sender does not content encode under
+         these profiles at all, see Transmitter::send(), so the case does not arise; outside them
+         both the encoding and this extension remain available. */
+      const bool fti_on_content_packet = file->meta().toi != 0 &&
+                                         !is_3gpp(_profile) &&
+                                         !file->meta().content_encoding.empty();
+
       auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id(),
-                                                 _session_closing, _closing_objects.count(file->meta().toi) > 0);
+                                                 _session_closing, _closing_objects.count(file->meta().toi) > 0,
+                                                 fti_on_content_packet);
+
       bytes_queued += packet->size();
 
       /* A tunnel is a choice of carriage, not an additional path: configuring one selects the
