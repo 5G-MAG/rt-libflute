@@ -94,7 +94,8 @@ TEST(ProfileContentEncodingTest, RefusedUnderThe3gppProfiles) {
   boost::asio::io_context io;
   Transmitter tx("239.1.2.30", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                  /*tunnel_endpoint*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE,
-                 /*active*/ false, /*source_address*/ std::nullopt, Profile::Ts26517);
+                 /*active*/ false, /*source_address*/ std::nullopt,
+                 /*content_fec_oti*/ std::nullopt, Profile::Ts26517);
   EXPECT_THROW(tx.send(gzipped_file()), std::runtime_error)
       << "a gzip-encoded object was accepted under a profile that cannot carry its transfer length";
 }
@@ -103,7 +104,8 @@ TEST(ProfileContentEncodingTest, AllowedOutsideTheProfile) {
   boost::asio::io_context io;
   Transmitter tx("239.1.2.31", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                  /*tunnel_endpoint*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE,
-                 /*active*/ false, /*source_address*/ std::nullopt, Profile::Unprofiled);
+                 /*active*/ false, /*source_address*/ std::nullopt,
+                 /*content_fec_oti*/ std::nullopt, Profile::Unprofiled);
   EXPECT_NO_THROW(tx.send(gzipped_file()))
       << "plain RFC 3926 permits Content-Encoding, and Transfer-Length with it";
 }
@@ -112,7 +114,8 @@ TEST(ProfileContentEncodingTest, AnUnencodedObjectIsUnaffected) {
   boost::asio::io_context io;
   Transmitter tx("239.1.2.32", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                  /*tunnel_endpoint*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE,
-                 /*active*/ false, /*source_address*/ std::nullopt, Profile::Ts26517);
+                 /*active*/ false, /*source_address*/ std::nullopt,
+                 /*content_fec_oti*/ std::nullopt, Profile::Ts26517);
   const std::vector<char> payload(4096, 'y');
   auto fd = std::make_shared<Transmitter::FileDescription>("test/plain.bin", payload);
   EXPECT_NO_THROW(tx.send(fd));
