@@ -118,10 +118,13 @@ TEST(GeneralFluteTest, TransferLengthStillCarriedOutsideTheProfile) {
 /* The delimitation itself. A session is bound by the general FLUTE documents always, and by
    TS 26.346 annex L.4 only under the 3GPP profile, which is the default. */
 
-TEST(ProfileDefaultTest, DefaultIsTheMbms3gppProfile) {
+/* A caller who selects no profile gets plain FLUTE, not a 3GPP one. The 3GPP profiles refuse a
+   session outright in several cases (TSI width, FEC scheme, content encoding), so imposing one on a
+   caller who did not ask would change behaviour on a library upgrade. A 3GPP sender asks. */
+TEST(ProfileDefaultTest, DefaultIsUnprofiled) {
   auto oti = make_fec_oti();
   FileDeliveryTable fdt(1, oti);
-  EXPECT_EQ(fdt.profile(), Profile::Ts26517);
+  EXPECT_EQ(fdt.profile(), Profile::Unprofiled);
 }
 
 TEST(ProfileDefaultTest, ProfileNotFdtNamespaceDecidesTheRestriction) {
@@ -147,7 +150,7 @@ TEST(MbmsDownloadProfileTest, ContentLengthIsCarriedInEveryMode) {
 
 TEST(MbmsDownloadProfileTest, CompleteNotCarriedUnderThe3gppProfile) {
   auto oti = make_fec_oti();
-  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2, Profile::Ts26517);
   fdt.add(make_entry(oti));
   fdt.set_complete(true);
   EXPECT_EQ(fdt.to_string().find("Complete"), std::string::npos);
@@ -202,7 +205,7 @@ TEST(MbmsDownloadProfileTest, GzipContentEncodingIsAccepted) {
 
 TEST(MbmsDownloadProfileTest, NonGzipContentEncodingIsRefused) {
   auto oti = make_fec_oti();
-  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2, Profile::Ts26517);
   auto e = make_entry(oti);
   e.content_encoding = "deflate";
   EXPECT_THROW(fdt.add(e), std::invalid_argument);
