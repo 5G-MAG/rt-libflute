@@ -79,7 +79,8 @@ namespace LibFlute {
    */
   enum class Profile {
     /**
-     *  TS 26.517 clause 6.2, layered on TS 26.346 clause 7.2 and annex L.4. The default.
+     *  TS 26.517 clause 6.2, layered on TS 26.346 clause 7.2 and annex L.4. Selected explicitly:
+     *  an MBS sender must ask for it, since the default is Unprofiled.
      *
      *  TS 26.517 V18.6.0 clause 6.2.1: "If FLUTE [12] is used to realise the Object Distribution
      *  Method, the MBS Distribution Session shall conform to the MBMS Download Profile as defined
@@ -100,7 +101,9 @@ namespace LibFlute {
 
     /**
      *  No 3GPP profile: the session is bound only by the FLUTE specification in force and the ALC
-     *  and LCT documents beneath it.
+     *  and LCT documents beneath it. The default, so that a caller who selects no profile keeps
+     *  plain FLUTE behaviour and none of the 3GPP restrictions, several of which refuse a session
+     *  outright. A 3GPP sender selects its profile explicitly.
      *
      *  Deliberately not named after a document, unlike the two above. Which FLUTE specification
      *  applies here is decided separately, by the protocol version: RFC 3926 for version 1 and

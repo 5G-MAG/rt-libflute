@@ -206,7 +206,19 @@ auto File::check_file_completion() -> void
 
 auto File::calculate_partitioning() -> void
 {
-  // Calculate source block partitioning (RFC5052 9.1) 
+  /* Both divisors come from the FEC OTI and both are used as denominators below. A
+     default-constructed FecOti leaves them 0, which makes the first division produce inf, the
+     block count inf, and the block-creation loop below effectively unbounded: the object hangs
+     rather than reporting anything. Reachable through the public File constructors, which accept
+     a FecOti without inspecting it. Refused loudly instead, per RULES.md rule 12.
+     `code-derived, no spec claim`. */
+  if (_meta.fec_oti.encoding_symbol_length == 0 || _meta.fec_oti.max_source_block_length == 0) {
+    throw std::runtime_error(
+        "FEC OTI is unusable for partitioning: encoding_symbol_length and "
+        "max_source_block_length must both be non-zero");
+  }
+
+  // Calculate source block partitioning (RFC5052 9.1)
   _nof_source_symbols = ceil((double)_meta.fec_oti.transfer_length / (double)_meta.fec_oti.encoding_symbol_length);
   _nof_source_blocks = ceil((double)_nof_source_symbols / (double)_meta.fec_oti.max_source_block_length);
   _large_source_block_length = ceil((double)_nof_source_symbols / (double)_nof_source_blocks);
@@ -297,7 +309,19 @@ auto File::encode() -> void
       };
       spdlog::debug("Compressing contents with {}", _meta.content_encoding);
 
-      if (deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 | 16, 8, Z_DEFAULT_STRATEGY) == Z_OK) {
+      /* Select the framing from the encoding, matching inflateInit2 below. windowBits 15 is the
+         zlib wrapper, and adding 16 selects gzip instead. Hardcoding gzip here meant a file
+         declared as "deflate" was written with gzip framing, so this library could not read back
+         what it had just written, and the framing did not match what the declared encoding means.
+
+         RFC 9110 clause 8.4.1.2: "The "deflate" coding is a "zlib" data format [RFC1950]
+         containing a "deflate" compressed data stream [RFC1951] that uses a combination of the
+         Lempel-Ziv (LZ77) compression algorithm and Huffman coding."
+
+         General FLUTE only in practice: the MBMS Download Profile permits no encoding other than
+         gzip, so a 3GPP session never takes the deflate branch. */
+      const int window_bits = 15 | ((_meta.content_encoding == "gzip") ? 16 : 0);
+      if (deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, window_bits, 8, Z_DEFAULT_STRATEGY) == Z_OK) {
         _buffer = nullptr;
         auto zstate = deflate(&zs, Z_FINISH);
         size_t last_out = 0;
@@ -320,8 +344,14 @@ auto File::encode() -> void
           }
           _meta.fec_oti.transfer_length = zs.total_out;
         } else {
-          spdlog::error("Error compressing file {}: {}", _meta.toi, zs.msg);
-          throw zs.msg;
+          /* zs.msg is NULL for Z_STREAM_ERROR, so the previous form formatted a null char* through
+             spdlog and then threw it. Throwing a raw char* also meant only catch(const char*)
+             could handle it, and dereferencing the caught null would crash the handler. */
+          const char *zmsg = zs.msg ? zs.msg : "no zlib message";
+          spdlog::error("Error compressing file {}: {} (zlib status {})", _meta.toi, zmsg, zstate);
+          deflateEnd(&zs);
+          if (own_decomp) free(decomp_buffer);
+          throw std::runtime_error(std::string("Failed to compress file: ") + zmsg);
         }
         deflateEnd(&zs);
 
@@ -354,7 +384,15 @@ auto File::decode() -> void
 
       inflateInit2(&zs, 15 | ((_meta.content_encoding == "gzip")?16:0));
       _buffer = nullptr;
-      auto zstate = inflate(&zs, Z_FINISH);
+      /* Z_NO_FLUSH, not Z_FINISH. Z_FINISH promises inflate that the output buffer can hold the
+         whole result; with the 16384-byte staging buffer below that is only true for small
+         objects, and for anything larger inflate returns Z_BUF_ERROR with zs.msg left NULL. The
+         loop below continues on Z_OK, so it ran zero times and control fell straight into the
+         error branch, which then formatted that NULL pointer. Reproduced standalone: a 100,000
+         byte object returned Z_BUF_ERROR immediately with total_out stuck at 16384, and the same
+         input with Z_NO_FLUSH reached Z_STREAM_END in six iterations with all 100,000 bytes.
+         `code-derived, no spec claim`. */
+      auto zstate = inflate(&zs, Z_NO_FLUSH);
       size_t last_out = 0;
       while (zstate == Z_OK) {
         spdlog::debug("Part decompressed: {} bytes", 16384-zs.avail_out);
@@ -364,7 +402,7 @@ auto File::decode() -> void
         _own_buffer = true;
 	zs.avail_out = 16384;
         zs.next_out = decomp_buffer.get();
-	zstate = inflate(&zs, Z_FINISH);
+	zstate = inflate(&zs, Z_NO_FLUSH);
       }
       if (zstate==Z_STREAM_END) {
 	if (last_out != zs.total_out) {
@@ -379,8 +417,13 @@ auto File::decode() -> void
           spdlog::error("Decompressed length does not match expected Content-Length ({} != {})", _meta.content_length, zs.total_out);
         }
       } else {
-        spdlog::error("Error decompressing file {}: {}", _meta.toi, zs.msg);
-	throw zs.msg;
+        /* zs.msg is NULL for several zlib statuses, so the previous form formatted a null
+           char* through spdlog and then threw it, which only catch(const char*) could take. */
+        const char *zmsg = zs.msg ? zs.msg : "no zlib message";
+        spdlog::error("Error decompressing file {}: {} (zlib status {})", _meta.toi, zmsg, zstate);
+        inflateEnd(&zs);
+        if (own_comp) free(comp_buffer);
+        throw std::runtime_error(std::string("Failed to decompress file: ") + zmsg);
       }
 
       if (own_comp) free(comp_buffer);

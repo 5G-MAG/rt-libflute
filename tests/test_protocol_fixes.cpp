@@ -45,6 +45,8 @@ FileDeliveryTable::FileEntry make_entry(const FecOti &oti) {
   e.toi = 1;
   e.content_location = "http://example.invalid/seg1.m4s";
   e.content_length = 4096;
+  // Required of the sender under either 3GPP profile: TS 26.346 clause L.4.2, first list.
+  e.content_type = "video/mp4";
   e.expires = 0;
   e.fec_oti = oti;
   e.cache_control.no_cache = false;
@@ -118,10 +120,13 @@ TEST(GeneralFluteTest, TransferLengthStillCarriedOutsideTheProfile) {
 /* The delimitation itself. A session is bound by the general FLUTE documents always, and by
    TS 26.346 annex L.4 only under the 3GPP profile, which is the default. */
 
-TEST(ProfileDefaultTest, DefaultIsTheMbms3gppProfile) {
+/* A caller who selects no profile gets plain FLUTE, not a 3GPP one. The 3GPP profiles refuse a
+   session outright in several cases (TSI width, FEC scheme, content encoding), so imposing one on a
+   caller who did not ask would change behaviour on a library upgrade. A 3GPP sender asks. */
+TEST(ProfileDefaultTest, DefaultIsUnprofiled) {
   auto oti = make_fec_oti();
   FileDeliveryTable fdt(1, oti);
-  EXPECT_EQ(fdt.profile(), Profile::Ts26517);
+  EXPECT_EQ(fdt.profile(), Profile::Unprofiled);
 }
 
 TEST(ProfileDefaultTest, ProfileNotFdtNamespaceDecidesTheRestriction) {
@@ -147,7 +152,7 @@ TEST(MbmsDownloadProfileTest, ContentLengthIsCarriedInEveryMode) {
 
 TEST(MbmsDownloadProfileTest, CompleteNotCarriedUnderThe3gppProfile) {
   auto oti = make_fec_oti();
-  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2, Profile::Ts26517);
   fdt.add(make_entry(oti));
   fdt.set_complete(true);
   EXPECT_EQ(fdt.to_string().find("Complete"), std::string::npos);
@@ -202,7 +207,7 @@ TEST(MbmsDownloadProfileTest, GzipContentEncodingIsAccepted) {
 
 TEST(MbmsDownloadProfileTest, NonGzipContentEncodingIsRefused) {
   auto oti = make_fec_oti();
-  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2, Profile::Ts26517);
   auto e = make_entry(oti);
   e.content_encoding = "deflate";
   EXPECT_THROW(fdt.add(e), std::invalid_argument);
@@ -939,6 +944,50 @@ TEST(FdtFecEncodingId, AnUnrecognisedIdentifierIsRefusedAtTheFileLevel) {
                std::runtime_error);
 }
 
+// Whether Content-Length may stand in for a missing Transfer-Length depends on
+// whether the object was content encoded, and on nothing else.
+// RFC 3926 clause 3.4.2: "If the file is not content encoded before transport
+// (and thus the "Content-Encoding" attribute is not used) then the transfer
+// length is the length of the original file, and in this case the
+// "Content-Length" is also the transfer length."
+namespace {
+std::string fdt_with(const std::string& file_attrs) {
+  return std::string("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+    "<FDT-Instance xmlns=\"urn:IETF:metadata:2005:FLUTE:FDT\" Expires=\"4000000000\""
+    " FEC-OTI-FEC-Encoding-ID=\"0\" FEC-OTI-Maximum-Source-Block-Length=\"64\""
+    " FEC-OTI-Encoding-Symbol-Length=\"1400\">"
+    "<File TOI=\"1\" Content-Location=\"obj.bin\" ") + file_attrs + "/></FDT-Instance>";
+}
+
+uint64_t parsed_transfer_length(const std::string& file_attrs) {
+  auto xml = fdt_with(file_attrs);
+  std::vector<char> buf(xml.begin(), xml.end());
+  LibFlute::FileDeliveryTable fdt(1, buf.data(), buf.size());
+  for (const auto& e : fdt.file_entries()) {
+    if (e.toi == 1) return e.fec_oti.transfer_length;
+  }
+  throw std::runtime_error("no entry parsed");
+}
+} // namespace
+
+TEST(EncodedObjectTransferLengthTest, ContentLengthStandsInOnlyWithoutAnEncoding) {
+  // No encoding: the clause authorises the substitution.
+  EXPECT_EQ(parsed_transfer_length("Content-Length=\"5000\""), 5000u);
+}
+
+TEST(EncodedObjectTransferLengthTest, AnEncodedObjectDoesNotBorrowContentLength) {
+  // With an encoding the two lengths differ, so borrowing Content-Length would
+  // hand the decoder a length wrong by however much the encoding changed. The
+  // length is left unknown for the object's own EXT_FTI to supply.
+  EXPECT_EQ(parsed_transfer_length("Content-Length=\"5000\" Content-Encoding=\"gzip\""), 0u)
+      << "an encoded object's transfer length is not its Content-Length";
+}
+
+TEST(EncodedObjectTransferLengthTest, AnExplicitTransferLengthAlwaysWins) {
+  EXPECT_EQ(parsed_transfer_length("Content-Length=\"5000\" Transfer-Length=\"4096\""), 4096u);
+  EXPECT_EQ(parsed_transfer_length(
+      "Content-Length=\"5000\" Transfer-Length=\"4096\" Content-Encoding=\"gzip\""), 4096u);
+}
 
 /* An object bootstrapped from a content packet's own EXT_FTI learns its Content-Encoding only from
    the FDT, nothing in EXT_FTI carrying it. Before adopt_fdt_metadata() took the field, such an
@@ -995,4 +1044,43 @@ TEST(ExtFtiBootstrapTest, AdoptedFdtMetadataCarriesTheContentEncoding) {
   file.decode();
   ASSERT_EQ(file.length(), original.size());
   EXPECT_EQ(memcmp(file.buffer(), original.data(), original.size()), 0);
+}
+
+/* TS 26.346 V18.2.0 clause L.4.2 lists Content-Type first among the attributes that "shall be
+   carried in the FDT sent by the FLUTE sender". An entry with none cannot be described
+   conformantly, so it is refused under either 3GPP profile rather than emitted without it. */
+TEST(ProfileContentTypeTest, AnEntryWithNoContentTypeIsRefusedUnderTs26517) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26517);
+  auto e = make_entry(oti);
+  e.content_type.clear();
+  EXPECT_THROW(fdt.add(e), std::invalid_argument);
+}
+
+TEST(ProfileContentTypeTest, AnEntryWithNoContentTypeIsRefusedUnderTs26346) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26346);
+  auto e = make_entry(oti);
+  e.content_type.clear();
+  EXPECT_THROW(fdt.add(e), std::invalid_argument);
+}
+
+/* RFC 3926 clause 3.4.2 requires only TOI and Content-Location, so a plain FLUTE session keeps
+   today's behaviour and the attribute is simply absent. */
+TEST(ProfileContentTypeTest, AnEntryWithNoContentTypeIsAcceptedUnprofiled) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Unprofiled);
+  auto e = make_entry(oti);
+  e.content_type.clear();
+  EXPECT_NO_THROW(fdt.add(e));
+  EXPECT_EQ(fdt.to_string().find("Content-Type"), std::string::npos);
+}
+
+TEST(ProfileContentTypeTest, AContentTypeIsCarriedIntoTheEmittedFdt) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26517);
+  auto e = make_entry(oti);
+  e.content_type = "video/mp4";
+  ASSERT_NO_THROW(fdt.add(e));
+  EXPECT_NE(fdt.to_string().find("Content-Type=\"video/mp4\""), std::string::npos);
 }

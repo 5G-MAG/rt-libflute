@@ -240,7 +240,8 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
 }
 
 LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_oti, const std::vector<LibFlute::EncodingSymbol>& symbols, size_t max_encoding_symbol_size, uint32_t fdt_instance_id,
-                                bool close_session_flag, bool close_object_flag)
+                                bool close_session_flag, bool close_object_flag,
+                                bool include_fti)
   : _fec_oti(fec_oti)
 {
   // TSI width: this wire scheme always carries a 16-bit half-word component (half_word_flag=1,
@@ -258,8 +259,10 @@ LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_
   if (wide_tsi) {
     lct_header_len += 1;
   }
-  if (toi == 0) { // Add extensions for FDT
+  if (toi == 0) { // EXT_FDT (one word) plus EXT_FTI (four words)
     lct_header_len += 5;
+  } else if (include_fti) { // EXT_FTI only, four words
+    lct_header_len += 4;
   }
 
   auto max_packet_length = max_encoding_symbol_size +
@@ -295,14 +298,27 @@ LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_
   *((uint16_t*)hdr_ptr) = htons(toi);
   hdr_ptr += 2;
 
-  if (toi == 0) { // Add extensions for FDT
+  if (toi == 0) { // EXT_FDT describes the FDT instance and belongs only on the FDT itself
     *((uint8_t*)hdr_ptr) = EXT_FDT;
     hdr_ptr += 1;
     *((uint8_t*)hdr_ptr) = 1 << 4 | (fdt_instance_id & 0x000F0000) >> 16;
     hdr_ptr += 1;
     *((uint16_t*)hdr_ptr) = htons(fdt_instance_id & 0x0000FFFF);
     hdr_ptr += 2;
+  }
 
+  /* EXT_FTI goes on the FDT always, and on a content object when asked for. The caller asks when
+     the FDT cannot carry the object's transfer length, which under the MBMS Download Profile is any
+     content-encoded object: TS 26.346 V18.2.0 clause L.4.4 forbids Transfer-Length in the FDT and
+     RFC 3926 clause 3.4.2 only lets Content-Length stand in for an unencoded object, so in band is
+     the only route left and RFC 3926 clause 5 obliges every receiver to support it.
+
+     This is a deliberate departure from a "should", taken because the alternative departs from a
+     "shall not". TS 26.346 V18.2.0 clause L.4.7: "FEC Object Transmission Information in FLUTE
+     packets which carry symbols of content files should be conveyed by the FEC-OTI parameters in
+     the FDT". The FDT still carries every FEC-OTI parameter the profile permits; what it cannot
+     carry, and what travels here instead, is the transfer length alone. */
+  if (toi == 0 || include_fti) {
     *((uint8_t*)hdr_ptr) = EXT_FTI;
     hdr_ptr += 1;
     *((uint8_t*)hdr_ptr) = 4; // HEL

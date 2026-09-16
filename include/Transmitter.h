@@ -441,7 +441,7 @@ namespace LibFlute {
           FdtNamespace fdt_namespace = FileDeliveryTable::FDT_NS_NONE,
           bool active = true,
           const std::optional<std::string>& source_address = std::nullopt,
-          Profile profile = Profile::Ts26517);
+          Profile profile = Profile::Unprofiled);
 
      /**
       *  Default destructor.

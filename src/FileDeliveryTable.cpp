@@ -279,24 +279,42 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
       content_length = strtoull(val->Value(), nullptr, 0);
     }
 
+    /* Parsed before the transfer length below, which depends on whether an encoding is applied. */
+    auto content_encoding = std::string();
+    val = file_ns.findAttribute(file, "Content-Encoding", fdt_ns);
+    if (val != nullptr) {
+      content_encoding = val->Value();
+    }
+
     uint32_t transfer_length = 0;
+    /* Content-Length is the transfer length only when the object is NOT content encoded. With an
+       encoding applied the two are different quantities, and using one for the other feeds the
+       decompressor a wrong input size.
+
+       RFC 3926 clause 3.4.2: "If the file is not content encoded before transport (and thus the
+       "Content-Encoding" attribute is not used) then the transfer length is the length of the
+       original file, and in this case the "Content-Length" is also the transfer length."
+
+       So the fallback is applied only in that case. When an encoding IS applied and no
+       Transfer-Length was carried, the transfer length is genuinely unknown from this FDT and is
+       left at 0 rather than guessed; the decode path then fails with a message naming the cause
+       instead of silently truncating its input. See the register entry on the profile conflict
+       this exposes. */
     val = file_ns.findAttribute(file, "Transfer-Length", fdt_ns);
     if (val != nullptr) {
       transfer_length = strtoull(val->Value(), nullptr, 0);
-    } else {
+    } else if (content_encoding.empty()) {
       transfer_length = content_length;
+    } else {
+      transfer_length = 0;
+      spdlog::warn("File TOI {} is content encoded ({}) but carries no Transfer-Length; its "
+                   "transfer length is not derivable from this FDT", toi, content_encoding);
     }
 
     auto content_md5 = std::string();
     val = file_ns.findAttribute(file, "Content-MD5", fdt_ns);
     if (val != nullptr) {
       content_md5 = val->Value();
-    }
-
-    auto content_encoding = std::string();
-    val = file_ns.findAttribute(file, "Content-Encoding", fdt_ns);
-    if (val != nullptr) {
-      content_encoding = val->Value();
     }
 
     auto content_type = std::string();
@@ -489,6 +507,39 @@ auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> void
     throw std::invalid_argument(
         "Content-Encoding must be absent or gzip in the MBMS Download Profile, got: " +
         fe.content_encoding + ". Use Profile::Unprofiled for a non-3GPP session.");
+  }
+
+  /* Content-Type is required of the sender under either 3GPP profile, so an entry that carries
+     none cannot be described conformantly and is refused rather than emitted without it.
+
+     TS 26.346 V18.2.0 clause L.4.2, first list: "The following FDT attributes, defined at both the
+     FDT-Instance and File levels, shall be carried in the FDT sent by the FLUTE sender, under
+     either the File-Instance or File element, and shall be supported by the FLUTE receiver:"
+     Content-Type is its first item.
+
+     The obligation reaches both 3GPP profiles by different routes, and reaches neither of them the
+     way it reaches plain FLUTE:
+
+       - Ts26346, the MBMS Download Profile, is bound by clause L.4.2 directly.
+       - Ts26517, 5G MBS object distribution, inherits it. TS 26.517 V18.6.0 clause 6.2.1: "If
+         FLUTE [12] is used to realise the Object Distribution Method, the MBS Distribution Session
+         shall conform to the MBMS Download Profile as defined in clause L.4 of TS 26.346 [7] with
+         the additional requirements in clause 6.2 of the present document."
+       - Unprofiled is plain FLUTE and is deliberately left alone. RFC 3926 clause 3.4.2: "Each
+         "File" element MUST contain at least two attributes "TOI" and "Content-Location"."
+         Content-Type is not among them; the same clause lists it under what a File element "MAY
+         contain".
+
+     Refused rather than defaulted. Substituting application/octet-stream would make the FDT
+     conformant by asserting a media type nobody established: RFC 9110 clause 8.3 offers that value
+     to a recipient that received no Content-Type, not to a sender inventing one, so there is no
+     source for the substitution. A caller with genuinely typeless octets says so explicitly with
+     set_content_type("application/octet-stream"), which records that it was a decision. */
+  if (is_3gpp(_profile) && fe.content_type.empty()) {
+    throw std::invalid_argument(
+        "Content-Type must be set in the MBMS Download Profile; TOI " + std::to_string(fe.toi) +
+        " (" + fe.content_location + ") has none. Set one, or use Profile::Unprofiled for a "
+        "non-3GPP session.");
   }
   if (_instance_id == _instance_id_sent) advance_instance_id();
   _file_entries.push_back(fe);
