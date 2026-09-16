@@ -233,3 +233,137 @@ TEST(TransmitterLifecycleTest, DeferredDeactivationDrainsQueuedFilesAndStopsFutu
   io.stop();
   io_thread.join();
 }
+
+
+/* Configuring a tunnel selects the encapsulated carriage; the announced destination is then
+   reached by decapsulation at the far end, so nothing is also sent to it directly. Both send
+   sites used to issue a plain copy alongside the encapsulated one, doubling egress with a copy
+   nothing downstream consumes.
+
+   TS 23.247 V18.8.0 clause 7.3.1 step 13: "The AF starts transmitting the DL media stream to
+   MB-UPF using the N6mb Tunnel, or optionally un-tunnelled i.e. as an IP multicast stream using
+   the HL MC address."
+
+   Two real sockets stand in for the tunnel peer and for the announced destination, so this counts
+   what actually leaves the Transmitter rather than inspecting its intent. */
+TEST(TransmitterTunnelCarriageTest, ConfiguredTunnelSuppressesTheDirectCopy) {
+  using namespace std::chrono_literals;
+
+  boost::asio::io_context io;
+  auto work_guard = boost::asio::make_work_guard(io);
+
+  boost::asio::ip::udp::socket tunnel_peer(
+      io, boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v4(), 0));
+  boost::asio::ip::udp::socket destination_peer(
+      io, boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v4(), 0));
+  const auto tunnel_port = tunnel_peer.local_endpoint().port();
+  const auto destination_port = destination_peer.local_endpoint().port();
+  boost::asio::ip::udp::endpoint tunnel_endpoint(boost::asio::ip::make_address("127.0.0.1"),
+                                                 tunnel_port);
+
+  Transmitter tx("127.0.0.1", destination_port, /*tsi*/ 1234, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                 tunnel_endpoint);
+
+  std::vector<uint8_t> tunnel_buf(2048), direct_buf(2048);
+  boost::asio::ip::udp::endpoint from;
+  std::promise<size_t> tunnel_promise, direct_promise;
+  auto tunnel_future = tunnel_promise.get_future();
+  auto direct_future = direct_promise.get_future();
+
+  tunnel_peer.async_receive_from(boost::asio::buffer(tunnel_buf), from,
+      [&](const boost::system::error_code& ec, size_t bytes) {
+        if (!ec) tunnel_promise.set_value(bytes);
+      });
+  destination_peer.async_receive_from(boost::asio::buffer(direct_buf), from,
+      [&](const boost::system::error_code& ec, size_t bytes) {
+        if (!ec) direct_promise.set_value(bytes);
+      });
+
+  const std::vector<char> payload{'t', 'u', 'n', 'n', 'e', 'l', '-', 'o', 'n', 'l', 'y'};
+  auto file = std::make_shared<Transmitter::FileDescription>("test/tunnel-only.bin", payload);
+  tx.send(file);
+
+  std::thread io_thread([&io]() { io.run(); });
+
+  /* The encapsulated carriage must be in use, so a suppressed direct copy is not read as a
+     Transmitter that sent nothing at all. */
+  ASSERT_EQ(tunnel_future.wait_for(2s), std::future_status::ready)
+      << "no encapsulated datagram reached the tunnel peer";
+
+  /* In the previous behaviour the direct copy was issued before the encapsulated one, so by the
+     time the tunnelled datagram has been received on loopback any duplicate would already be
+     queued. This grace is generous for that. */
+  EXPECT_EQ(direct_future.wait_for(300ms), std::future_status::timeout)
+      << "a datagram was also sent straight to the announced destination";
+
+  tx.deactivate();
+  work_guard.reset();
+  io.stop();
+  io_thread.join();
+}
+
+
+/* The 3GPP profiles permit content encoding but provide no carrier for the resulting transfer
+   length, so this sender declines it there rather than emit an object no conformant receiver can
+   size. The clauses are quoted at the check in Transmitter::send(); the contradiction is raised as
+   5G-MAG/Standards#212. Declining is conformant because the profile leaves the encoding to the
+   sender, TS 26.346 V18.2.0 clause L.4.2 making it a "may". Outside the profiles RFC 3926 permits
+   Transfer-Length, so the encoding stays available. */
+TEST(ProfileContentEncodingTest, RefusedUnderThe3gppProfiles) {
+  boost::asio::io_context io;
+  const std::vector<char> payload(4096, 'x');
+
+  for (auto profile : {LibFlute::Profile::Ts26517, LibFlute::Profile::Ts26346}) {
+    Transmitter tx("127.0.0.1", 5000, /*tsi*/ 1234, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                   /*tunnel*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ true,
+                   /*source_address*/ std::nullopt, profile);
+    auto fd = std::make_shared<Transmitter::FileDescription>("test/compressible.bin", payload);
+    fd->set_compression(Transmitter::FileDescription::COMPRESSION_GZIP);
+    EXPECT_THROW(tx.send(fd), std::runtime_error);
+  }
+}
+
+TEST(ProfileContentEncodingTest, AllowedOutsideTheProfiles) {
+  boost::asio::io_context io;
+  const std::vector<char> payload(4096, 'x');
+  Transmitter tx("127.0.0.1", 5000, /*tsi*/ 1234, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                 /*tunnel*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ true,
+                 /*source_address*/ std::nullopt, LibFlute::Profile::Unprofiled);
+  auto fd = std::make_shared<Transmitter::FileDescription>("test/compressible.bin", payload);
+  fd->set_compression(Transmitter::FileDescription::COMPRESSION_GZIP);
+  EXPECT_NO_THROW(tx.send(fd));
+  tx.deactivate();
+}
+
+TEST(ProfileContentEncodingTest, AnUnencodedObjectIsUnaffectedUnderTheProfile) {
+  boost::asio::io_context io;
+  const std::vector<char> payload(4096, 'x');
+  Transmitter tx("127.0.0.1", 5000, /*tsi*/ 1234, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                 /*tunnel*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ true,
+                 /*source_address*/ std::nullopt, LibFlute::Profile::Ts26517);
+  auto fd = std::make_shared<Transmitter::FileDescription>("test/plain.bin", payload);
+  fd->set_content_type("application/octet-stream");
+  EXPECT_NO_THROW(tx.send(fd));
+  tx.deactivate();
+}
+
+
+/* Under a tunnel the configured source address is the inner header's source, not the socket's own.
+   It need not name a local interface: the encapsulated source may belong to the application
+   provider while the sender sits on another network. Binding the socket to it then fails outright,
+   so the bind is skipped whenever a tunnel endpoint is configured. Uses a TEST-NET-1 address
+   (RFC 5737), which is guaranteed not to be a local interface. */
+TEST(TransmitterTunnelBindTest, SourceAddressNotOnThisHostIsAcceptedUnderATunnel) {
+  boost::asio::io_context io;
+  boost::asio::ip::udp::socket tunnel_peer(
+      io, boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v4(), 0));
+  boost::asio::ip::udp::endpoint tunnel_endpoint(boost::asio::ip::make_address("127.0.0.1"),
+                                                 tunnel_peer.local_endpoint().port());
+
+  EXPECT_NO_THROW({
+    Transmitter tx("239.255.9.42", 19342, /*tsi*/ 1234, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                   tunnel_endpoint, FileDeliveryTable::FDT_NS_NONE, /*active*/ true,
+                   /*source_address*/ std::string("192.0.2.1"));
+    tx.deactivate();
+  });
+}

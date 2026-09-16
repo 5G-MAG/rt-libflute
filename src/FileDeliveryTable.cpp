@@ -490,6 +490,39 @@ auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> void
         "Content-Encoding must be absent or gzip in the MBMS Download Profile, got: " +
         fe.content_encoding + ". Use Profile::Unprofiled for a non-3GPP session.");
   }
+
+  /* Content-Type is required of the sender under either 3GPP profile, so an entry that carries
+     none cannot be described conformantly and is refused rather than emitted without it.
+
+     TS 26.346 V18.2.0 clause L.4.2, first list: "The following FDT attributes, defined at both the
+     FDT-Instance and File levels, shall be carried in the FDT sent by the FLUTE sender, under
+     either the File-Instance or File element, and shall be supported by the FLUTE receiver:"
+     Content-Type is its first item.
+
+     The obligation reaches both 3GPP profiles by different routes, and reaches neither of them the
+     way it reaches plain FLUTE:
+
+       - Ts26346, the MBMS Download Profile, is bound by clause L.4.2 directly.
+       - Ts26517, 5G MBS object distribution, inherits it. TS 26.517 V18.6.0 clause 6.2.1: "If
+         FLUTE [12] is used to realise the Object Distribution Method, the MBS Distribution Session
+         shall conform to the MBMS Download Profile as defined in clause L.4 of TS 26.346 [7] with
+         the additional requirements in clause 6.2 of the present document."
+       - Unprofiled is plain FLUTE and is deliberately left alone. RFC 3926 clause 3.4.2: "Each
+         "File" element MUST contain at least two attributes "TOI" and "Content-Location"."
+         Content-Type is not among them; the same clause lists it under what a File element "MAY
+         contain".
+
+     Refused rather than defaulted. Substituting application/octet-stream would make the FDT
+     conformant by asserting a media type nobody established: RFC 9110 clause 8.3 offers that value
+     to a recipient that received no Content-Type, not to a sender inventing one, so there is no
+     source for the substitution. A caller with genuinely typeless octets says so explicitly with
+     set_content_type("application/octet-stream"), which records that it was a decision. */
+  if (is_3gpp(_profile) && fe.content_type.empty()) {
+    throw std::invalid_argument(
+        "Content-Type must be set in the MBMS Download Profile; TOI " + std::to_string(fe.toi) +
+        " (" + fe.content_location + ") has none. Set one, or use Profile::Unprofiled for a "
+        "non-3GPP session.");
+  }
   if (_instance_id == _instance_id_sent) advance_instance_id();
   _file_entries.push_back(fe);
 }
@@ -599,8 +632,17 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
 
        The parser below is deliberately unchanged, because the same clause's NOTE keeps this one
        mandatory for receivers: "With the exception of Transfer-Length, which is mandatory, these
-       parameters are optional to support by the FLUTE receiver." Nothing is lost on the wire either:
-       the receive path falls back to Content-Length when the attribute is absent. */
+       parameters are optional to support by the FLUTE receiver."
+
+       The receive path substitutes Content-Length for the absent attribute, which is correct only
+       where no content encoding was applied (RFC 3926 clause 3.4.2). A content-encoded object has
+       no carrier for its transfer length at all under this profile, clause 7.2.8 closing the other
+       one:
+
+       TS 26.346 V18.2.0 clause 7.2.8: "FLUTE packets carrying symbols of files (not FDT Instances)
+       shall not include an EXT_FTI."
+
+       Raised as 5G-MAG/Standards#212. */
     if (!is_3gpp(_profile) && file.fec_oti.transfer_length)
       f->SetAttribute("Transfer-Length", file.fec_oti.transfer_length);
     if (!file.content_md5.empty()) f->SetAttribute("Content-MD5", file.content_md5.c_str());
