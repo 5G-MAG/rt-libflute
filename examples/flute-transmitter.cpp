@@ -325,8 +325,12 @@ auto main(int argc, char **argv) -> int {
     } else {
       send_with_old_api(arguments);
     }
-  } catch (std::exception ex ) {
-    spdlog::error("Exiting on unhandled exception: %s", ex.what());
+  } catch (const std::exception& ex ) {
+    // BUG FIX: was "catch (std::exception ex)" (by value, an exception-slicing risk for any
+    // derived exception type) with a printf-style "%s" format -- spdlog uses fmt-style {}
+    // placeholders, so %s was never substituted; the actual exception message was silently
+    // dropped from every log line this ever printed.
+    spdlog::error("Exiting on unhandled exception: {}", ex.what());
   }
 
 exit:

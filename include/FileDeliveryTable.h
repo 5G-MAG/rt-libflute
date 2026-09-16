@@ -48,7 +48,7 @@ namespace LibFlute {
       *  @param fdt_namespace The XML namespace to use for FDT
       */
       FileDeliveryTable(uint32_t instance_id, FecOti fec_oti, FdtNamespace fdt_namespace = FDT_NS_NONE,
-                        Profile profile = Profile::Ts26517);
+                        Profile profile = Profile::Unprofiled);
 
      /**
       *  Parse an XML string and create a FDT class from it
@@ -155,9 +155,13 @@ namespace LibFlute {
       bool complete() const { return _complete; };
 
      /**
-      *  Add a file entry
+      *  Add a file entry, or replace the existing entry for the same TOI.
+      *
+      *  @return true if the table changed, false if it already held an identical entry for this
+      *          TOI. A caller that re-publishes the FDT on change can use this to avoid reissuing
+      *          an instance that would be byte-for-byte the same.
       */
-      void add(const FileEntry& entry);
+      bool add(const FileEntry& entry);
 
      /**
       *  Remove a file entry
@@ -204,7 +208,7 @@ namespace LibFlute {
 
       uint32_t _instance_id;
       uint32_t _instance_id_sent;
-      Profile _profile = Profile::Ts26517;
+      Profile _profile = Profile::Unprofiled;
 
       /** FDT Instance IDs that have been sent, and the (NTP-epoch-seconds) time each stops
        *  being live -- i.e. the Expires value that was in effect while that ID was in use.
