@@ -240,7 +240,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
     }
 
     try {
-      auto alc = LibFlute::AlcPacket(_data, bytes_recvd);
+      auto alc = LibFlute::AlcPacket(_data, bytes_recvd, _flute_version);
 
       if (alc.tsi() == _tsi) {
 
@@ -353,6 +353,22 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
               if (it->second.get() != file && !file->meta().content_location.empty() &&
                   it->second->meta().content_location == file->meta().content_location)
               {
+                /* Version 2 orders the two by the instance that declared them. RFC 6726 clause
+                   3.4.2: "The semantics for any two "File" elements declaring
+                   the same "Content-Location" but differing "TOI" is that the element appearing in
+                   the FDT Instance with the greater FDT Instance ID is considered to declare a
+                   newer instance (e.g., version) of the same "File"." So the older declaration is the
+                   one discarded, whichever of the two happens to have completed first. Version 1
+                   states no such ordering, and keeps the completed file. */
+                if (_flute_version >= 2 &&
+                    it->second->fdt_instance_id() > file->fdt_instance_id())
+                {
+                  spdlog::debug("Keeping TOI {} for '{}': declared by FDT instance {}, newer than {}",
+                      it->first, it->second->meta().content_location,
+                      it->second->fdt_instance_id(), file->fdt_instance_id());
+                  ++it;
+                  continue;
+                }
                 spdlog::debug("Replacing file with TOI {}", it->first);
                 it = _files.erase(it);
               }
@@ -372,7 +388,8 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
 
             if (alc.toi() == 0) { // parse complete FDT
               _fdt = std::make_unique<LibFlute::FileDeliveryTable>(
-                  alc.fdt_instance_id(), _files[alc.toi()]->buffer(), _files[alc.toi()]->length());
+                  alc.fdt_instance_id(), _files[alc.toi()]->buffer(), _files[alc.toi()]->length(),
+                  _flute_version);
 
               _files.erase(alc.toi());
               for (const auto& file_entry : _fdt->file_entries()) {
@@ -385,6 +402,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
                   // in-progress transfer, not a stale one. Adopt the FDT's metadata in place
                   // rather than discarding and restarting it.
                   existing_file->second->adopt_fdt_metadata(file_entry);
+                  existing_file->second->set_fdt_instance_id(_fdt->instance_id());
                 } else if (existing_file != _files.end() &&
                     existing_file->second->meta().content_location != file_entry.content_location) {
                   // TOI numbers get reused across FDT instances (the live window
@@ -406,7 +424,11 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
                 if (existing_file == _files.end()) {
                   spdlog::debug("Starting reception for file with TOI {}: {} ({})", file_entry.toi,
                       file_entry.content_location, file_entry.content_type);
-                  _files.emplace(file_entry.toi, std::make_shared<LibFlute::File>(file_entry));
+                  /* Record which instance declared this file: RFC 6726 clause 3.4.2 orders two
+                     declarations of the same Content-Location by their instance ID. */
+                  auto created = std::make_shared<LibFlute::File>(file_entry);
+                  created->set_fdt_instance_id(_fdt->instance_id());
+                  _files.emplace(file_entry.toi, std::move(created));
                 }
               }
             }

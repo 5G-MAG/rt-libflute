@@ -156,6 +156,19 @@ namespace LibFlute::IpSec {
     xsinfo.family = dest_info.family;
     xsinfo.mode = XFRM_MODE_TRANSPORT;
 
+    /* RFC 6726 clause 7.5 makes IPsec/ESP in transport mode the mandatory-to-implement security
+       configuration for FLUTE, and takes its service set from ALC: "[RFC5775] specifies that the
+       data origin authentication, content integrity, and anti-replay services SHALL be supported,
+       and that the confidentiality service is RECOMMENDED." The authentication algorithm attached
+       below covers the first two. Anti-replay is a property of the association rather than of an
+       algorithm, and needs a non-zero window; left at zero the kernel accepts a replayed packet.
+       32 is the largest window this attribute can express: the legacy replay state the kernel
+       keeps for it (struct xfrm_replay_state) holds its bitmap in a __u32, and a request for more
+       is clamped to 32. A larger window needs the extended sequence-number attribute
+       (XFRMA_REPLAY_ESN_VAL) instead, which is not needed here. Applies to both FLUTE versions:
+       nothing in RFC 3926 argues against it. */
+    xsinfo.replay_window = 32;
+
     std::vector<char> algo_buf(sizeof(struct xfrm_algo) + 512, 0);
     auto* algo = reinterpret_cast<struct xfrm_algo*>(algo_buf.data());
 
