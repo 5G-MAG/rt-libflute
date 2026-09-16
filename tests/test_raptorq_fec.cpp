@@ -217,6 +217,8 @@ std::string ssi_for(LibFlute::FecScheme scheme, uint16_t z, uint16_t n, uint8_t 
   e.content_location = "http://example.invalid/a";
   e.content_length = 4096;
   e.fec_oti = oti;
+  // Required of the sender under either 3GPP profile: TS 26.346 clause L.4.2, first list.
+  e.content_type = "application/octet-stream";
   fdt.add(e);
   return fdt.to_string();
 }

@@ -118,5 +118,6 @@ TEST(ProfileContentEncodingTest, AnUnencodedObjectIsUnaffected) {
                  /*content_fec_oti*/ std::nullopt, Profile::Ts26517);
   const std::vector<char> payload(4096, 'y');
   auto fd = std::make_shared<Transmitter::FileDescription>("test/plain.bin", payload);
+  fd->set_content_type("application/octet-stream");
   EXPECT_NO_THROW(tx.send(fd));
 }

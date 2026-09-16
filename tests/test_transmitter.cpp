@@ -131,6 +131,7 @@ TEST(TransmitterIPv6TunnelTest, BuildsCorrectInnerIPv6AndUdpHeaders) {
 
   const std::vector<char> payload{'i', 'p', 'v', '6', '-', 't', 'u', 'n', 'n', 'e', 'l'};
   auto file = std::make_shared<Transmitter::FileDescription>("test/ipv6-tunnel.bin", payload);
+  file->set_content_type("application/octet-stream");
   tx.send(file);
 
   std::thread io_thread([&io]() { io.run(); });
@@ -214,6 +215,8 @@ TEST(TransmitterLifecycleTest, DeferredDeactivationDrainsQueuedFilesAndStopsFutu
       "test/first.bin", first_payload);
   const auto second_file = std::make_shared<Transmitter::FileDescription>(
       "test/second.bin", second_payload);
+  first_file->set_content_type("application/octet-stream");
+  second_file->set_content_type("application/octet-stream");
 
   EXPECT_EQ(tx.send(first_file), 1);
   tx.deactivate(true);
@@ -281,6 +284,7 @@ TEST(TransmitterTunnelCarriageTest, ConfiguredTunnelSuppressesTheDirectCopy) {
 
   const std::vector<char> payload{'t', 'u', 'n', 'n', 'e', 'l', '-', 'o', 'n', 'l', 'y'};
   auto file = std::make_shared<Transmitter::FileDescription>("test/tunnel-only.bin", payload);
+  file->set_content_type("application/octet-stream");
   tx.send(file);
 
   std::thread io_thread([&io]() { io.run(); });
@@ -344,6 +348,7 @@ TEST(ProfileContentEncodingTest, AnUnencodedObjectIsUnaffectedUnderTheProfile) {
                  /*source_address*/ std::nullopt, /*content_fec_oti*/ std::nullopt,
                  LibFlute::Profile::Ts26517);
   auto fd = std::make_shared<Transmitter::FileDescription>("test/plain.bin", payload);
+  fd->set_content_type("application/octet-stream");
   EXPECT_NO_THROW(tx.send(fd));
   tx.deactivate();
 }

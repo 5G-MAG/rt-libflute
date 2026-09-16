@@ -47,6 +47,7 @@ TEST(FdtGrowthTest, CarouselResendOfUnchangedContentDoesNotGrowFdt) {
 
   std::string content = "hello world, unchanged across every resend";
   auto desc = std::make_shared<Transmitter::FileDescription>("carousel/item.txt", content.c_str(), content.size());
+  desc->set_content_type("application/octet-stream");
 
   // First send assigns a TOI; every subsequent send reuses it unchanged --
   // exactly the carousel-repeat pattern that used to leak one FDT entry per
@@ -71,6 +72,7 @@ TEST(FdtGrowthTest, ContentChangeRemovesThePreviousToisFdtEntry) {
 
   std::string content1 = "version one of the content";
   auto desc = std::make_shared<Transmitter::FileDescription>("changing/item.txt", content1.c_str(), content1.size());
+  desc->set_content_type("application/octet-stream");
   uint16_t toi1 = tx.send(desc);
   size_t entries_after_first = fdt_entry_count(tx.fdt().to_string());
 
@@ -92,6 +94,7 @@ TEST(FdtGrowthTest, RepeatedContentChangesDoNotAccumulateOrphans) {
 
   std::string content = "iteration 0";
   auto desc = std::make_shared<Transmitter::FileDescription>("changing/loop.txt", content.c_str(), content.size());
+  desc->set_content_type("application/octet-stream");
   tx.send(desc);
   size_t entries_after_first = fdt_entry_count(tx.fdt().to_string());
 
