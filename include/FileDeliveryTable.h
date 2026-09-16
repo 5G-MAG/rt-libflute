@@ -48,7 +48,7 @@ namespace LibFlute {
       *  @param fdt_namespace The XML namespace to use for FDT
       */
       FileDeliveryTable(uint32_t instance_id, FecOti fec_oti, FdtNamespace fdt_namespace = FDT_NS_NONE,
-                        Profile profile = Profile::Ts26517);
+                        Profile profile = Profile::Unprofiled);
 
      /**
       *  Parse an XML string and create a FDT class from it
@@ -208,7 +208,7 @@ namespace LibFlute {
 
       uint32_t _instance_id;
       uint32_t _instance_id_sent;
-      Profile _profile = Profile::Ts26517;
+      Profile _profile = Profile::Unprofiled;
 
       /** FDT Instance IDs that have been sent, and the (NTP-epoch-seconds) time each stops
        *  being live -- i.e. the Expires value that was in effect while that ID was in use.
