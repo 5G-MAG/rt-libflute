@@ -115,5 +115,7 @@ TEST(ProfileContentEncodingTest, AnUnencodedObjectIsUnaffected) {
                  /*active*/ false, /*source_address*/ std::nullopt, Profile::Ts26517);
   const std::vector<char> payload(4096, 'y');
   auto fd = std::make_shared<Transmitter::FileDescription>("test/plain.bin", payload);
+  // Required of the sender under either 3GPP profile: TS 26.346 clause L.4.2, first list.
+  fd->set_content_type("application/octet-stream");
   EXPECT_NO_THROW(tx.send(fd));
 }

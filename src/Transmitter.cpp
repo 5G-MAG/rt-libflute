@@ -549,12 +549,16 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
   _socket.set_option(boost::asio::ip::multicast::enable_loopback(true));
   _socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
 
-  /* A tunnelled session still sends an untunnelled copy to the real multicast destination, and
-     that copy has to originate from the configured source address too, or a receiver filtering
-     on the announced source (an SDP a=source-filter, say) never matches it. Binding was skipped
-     whenever a tunnel was configured, on the assumption the socket only ever reached the tunnel
-     endpoint. */
-  if (_source_address) {
+  /* The un-tunnelled carriage sends straight to the announced destination, usually a multicast
+     group, and that send has to originate from the configured source address or a receiver
+     filtering on the announced source (an SDP a=source-filter, say) never matches it.
+
+     Not under a tunnel. There the source address is the inner header's source, written by
+     create_ip_hdr(), and need not name a local interface at all: the encapsulated source may be the
+     application provider's while this sender sits on another network. Binding the socket to it would
+     fail in that case, and otherwise steers the outer datagram by an address that does not govern
+     it. The outer datagram is left to normal routing, which is what the any address gives. */
+  if (_source_address && !_tunnel_endpoint) {
     _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
     // bind() only sets the packet's claimed source address; it does not choose which interface a
     // multicast send actually goes out on. Without IP_MULTICAST_IF (boost's outbound_interface),
@@ -649,12 +653,16 @@ auto Transmitter::endpoint(boost::asio::ip::udp::endpoint &&destination) -> Tran
 auto Transmitter::source_address(const std::optional<boost::asio::ip::address> &source_address) -> Transmitter&
 {
   _source_address = source_address;
-  /* A tunnelled session still sends an untunnelled copy to the real multicast destination, and
-     that copy has to originate from the configured source address too, or a receiver filtering
-     on the announced source (an SDP a=source-filter, say) never matches it. Binding was skipped
-     whenever a tunnel was configured, on the assumption the socket only ever reached the tunnel
-     endpoint. */
-  if (_source_address) {
+  /* The un-tunnelled carriage sends straight to the announced destination, usually a multicast
+     group, and that send has to originate from the configured source address or a receiver
+     filtering on the announced source (an SDP a=source-filter, say) never matches it.
+
+     Not under a tunnel. There the source address is the inner header's source, written by
+     create_ip_hdr(), and need not name a local interface at all: the encapsulated source may be the
+     application provider's while this sender sits on another network. Binding the socket to it would
+     fail in that case, and otherwise steers the outer datagram by an address that does not govern
+     it. The outer datagram is left to normal routing, which is what the any address gives. */
+  if (_source_address && !_tunnel_endpoint) {
     _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
     // See the same bind()'s own comment in start(): bind() alone does not steer a multicast
     // send onto this address's interface, only IP_MULTICAST_IF does.
@@ -668,12 +676,16 @@ auto Transmitter::source_address(const std::optional<boost::asio::ip::address> &
 auto Transmitter::source_address(std::optional<boost::asio::ip::address> &&source_address) -> Transmitter&
 {
   _source_address = std::move(source_address);
-  /* A tunnelled session still sends an untunnelled copy to the real multicast destination, and
-     that copy has to originate from the configured source address too, or a receiver filtering
-     on the announced source (an SDP a=source-filter, say) never matches it. Binding was skipped
-     whenever a tunnel was configured, on the assumption the socket only ever reached the tunnel
-     endpoint. */
-  if (_source_address) {
+  /* The un-tunnelled carriage sends straight to the announced destination, usually a multicast
+     group, and that send has to originate from the configured source address or a receiver
+     filtering on the announced source (an SDP a=source-filter, say) never matches it.
+
+     Not under a tunnel. There the source address is the inner header's source, written by
+     create_ip_hdr(), and need not name a local interface at all: the encapsulated source may be the
+     application provider's while this sender sits on another network. Binding the socket to it would
+     fail in that case, and otherwise steers the outer datagram by an address that does not govern
+     it. The outer datagram is left to normal routing, which is what the any address gives. */
+  if (_source_address && !_tunnel_endpoint) {
     _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
     // See the same bind()'s own comment in start(): bind() alone does not steer a multicast
     // send onto this address's interface, only IP_MULTICAST_IF does.
@@ -759,23 +771,34 @@ auto Transmitter::send(
 
 auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file_description) -> uint16_t
 {
-  /* The MBMS Download Profile permits content encoding but provides no carrier for the resulting
-     transfer length, so this sender does not use it there. TS 26.346 V18.2.0 clause L.4.2 makes it
-     a sender's choice, which is what makes declining it conformant: "The following FDT attribute,
-     defined at both the FDT-Instance and File levels, may be carried in the FDT sent by the FLUTE
-     sender". Refusing rather than silently dropping the encoding, because a caller that asked for
-     compression and got an uncompressed object with no warning has been misled.
+  /* The 3GPP profiles permit an object to be content encoded but provide no carrier for the
+     resulting transfer length, so this sender declines to encode under them rather than emit an
+     object no conformant receiver can size.
 
-     Clause L.4.4 forbids Transfer-Length in the FDT and clause 7.2.8 forbids EXT_FTI on a content
-     packet, and RFC 3926 clause 3.4.2 lets Content-Length stand in only when no encoding was
-     applied, so an encoded object under this profile cannot state its length by any route. Raised
-     as 5G-MAG/Standards#212. Receiving a content-encoded object is unaffected: L.4.2 requires a
-     receiver to support gzip and this library does. */
+     Both carriers are closed. TS 26.346 V18.2.0 clause L.4.4 forbids the FDT attribute, listing
+     Transfer-Length first under "The following attributes shall not be carried in the FDT sent by
+     the FLUTE sender:", and the in-band route is closed by
+
+     TS 26.346 V18.2.0 clause 7.2.8: "FLUTE packets carrying symbols of files (not FDT Instances)
+     shall not include an EXT_FTI."
+
+     Content-Length cannot substitute, being equal to the transfer length only for an object carried
+     without an encoding (RFC 3926 clause 3.4.2). Declining is conformant because the profile leaves
+     the encoding to the sender:
+
+     TS 26.346 V18.2.0 clause L.4.2: "The following FDT attribute, defined at both the FDT-Instance
+     and File levels, may be carried in the FDT sent by the FLUTE sender, under either the
+     File-Instance or File element, and shall be supported by the FLUTE receiver:"
+
+     Refusing rather than silently sending the object uncompressed, because a caller that asked for
+     compression and got none without being told has been misled. The contradiction itself is 3GPP's
+     to resolve and is raised as 5G-MAG/Standards#212. Receiving a content-encoded object is
+     unaffected: the same clause obliges a receiver to support gzip and this library does. */
   if (is_3gpp(_profile) && !file_description->file_entry().content_encoding.empty()) {
     throw std::runtime_error(
-        "Content encoding is not used by this sender under the 3GPP profiles, which provide "
-        "no way to carry the resulting transfer length. See 5G-MAG/Standards#212, and the "
-        "citations at this check. Use Profile::Unprofiled, or send the object uncompressed.");
+        "Content encoding is not used by this sender under the 3GPP profiles, which provide no way "
+        "to carry the resulting transfer length. See 5G-MAG/Standards#212, and the citations at this "
+        "check. Use Profile::Unprofiled, or send the object uncompressed.");
   }
 
   if (file_description->has_tsi() && file_description->tsi() != _tsi) {
@@ -912,22 +935,17 @@ auto Transmitter::send_next_packet() -> void
 
       bytes_queued += packet->size();
 
-      /* A tunnel is an additional path, not a replacement for the announced one. Sending only the
-         encapsulated copy leaves a receiver that joins the announced destination directly, rather
-         than sitting behind the tunnel's decapsulation, with no packets at all. Both copies go out
-         when a tunnel is configured, and completion is tracked from the tunnelled send, which is
-         the primary path in that configuration; the plain copy is fire-and-forget. Without a
-         tunnel the plain send is the only one, and it carries the completion. */
-      if (_tunnel_endpoint) {
-        _socket.async_send_to(
-            boost::asio::buffer(packet->data(), packet->size()), _endpoint,
-            [packet](const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
-            {
-              if (error) {
-                spdlog::debug("sent_to (plain) error: {}", error.message());
-              }
-            });
+      /* A tunnel is a choice of carriage, not an additional path: configuring one selects the
+         encapsulated carriage and the announced destination is then reached by decapsulation at
+         the far end, so the plain copy is not also sent.
 
+         TS 23.247 V18.8.0 clause 7.3.1 step 13: "The AF starts transmitting the DL media stream to
+         MB-UPF using the N6mb Tunnel, or optionally un-tunnelled i.e. as an IP multicast stream
+         using the HL MC address."
+
+         A receiver that joins the announced destination directly is served by not configuring a
+         tunnel. Completion is tracked from whichever single send is issued. */
+      if (_tunnel_endpoint) {
         /* The completion handler owns the encapsulated buffer through this shared_ptr, so it
            outlives the asynchronous send. A raw new[] freed straight after issuing the send would
            be read after free. */
@@ -1062,15 +1080,7 @@ auto Transmitter::send_close_session_packet() -> void
     return;
   }
 
-  _socket.async_send_to(
-      boost::asio::buffer(packet->data(), packet->size()), _endpoint,
-      [packet](const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
-      {
-        if (error) {
-          spdlog::debug("close session send error: {}", error.message());
-        }
-      });
-
+  /* One carriage or the other, as in send_next_packet(); the clause is quoted there. */
   if (_tunnel_endpoint) {
     const size_t ip_hdr_len = ip_header_length(_endpoint.address().is_v6());
     const size_t data_size = packet->size() + ip_hdr_len + 8 /* UDP header */;
@@ -1087,6 +1097,15 @@ auto Transmitter::send_close_session_packet() -> void
         {
           if (error) {
             spdlog::debug("close session tunnel send error: {}", error.message());
+          }
+        });
+  } else {
+    _socket.async_send_to(
+        boost::asio::buffer(packet->data(), packet->size()), _endpoint,
+        [packet](const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
+        {
+          if (error) {
+            spdlog::debug("close session send error: {}", error.message());
           }
         });
   }
