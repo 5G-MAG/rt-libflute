@@ -30,6 +30,43 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
     throw std::runtime_error("Unsupported LCT version");
   }
 
+  /* Everything below walks the header using lengths taken from the packet itself, so the packet's
+     own claim about its header size is validated first, against both the flags that imply a
+     minimum and the number of bytes actually received.
+
+     RFC 3451 clause 5.1 on the field being trusted here:
+     "Total length of the LCT header in units of 32-bit words."
+
+     Two ways this goes wrong without the checks. A header claiming fewer words than its own
+     flags require makes the extension-space calculation below negative, which becomes a very
+     large size_t. A header claiming more words than were received sends every read past the end
+     of the buffer. Both are reachable from one datagram, so neither is a theoretical concern.
+     `code-derived, no spec claim` beyond the field's own definition. */
+  /* RFC 3451 clause 5.1 places two optional 32-bit fields inside the header, after the TOI and
+     before any header extension, each present only when its flag is set:
+     "Sender Current Time (SCT, if T = 1)" and "Expected Residual Time (ERT, if R = 1)".
+     Both count toward HDR_LEN. Omitting them made a conformant peer's SCT and ERT words get
+     walked as HET/HEL extension pairs, corrupting extension parsing.
+
+     TS 26.346 V18.2.0 clause L.4.7 on the MBMS side: "The network should set these flags/fields
+     to zero, and the UE should ignore them." Ignoring a field still means stepping over it, so
+     this is needed in both profiles: robustness against a non-conformant sender under the 3GPP
+     profile, plain correctness under general FLUTE. */
+  const size_t standard_header_words = 2 +
+    _lct_header.congestion_control_flag +
+    _lct_header.half_word_flag +
+    _lct_header.tsi_flag +
+    _lct_header.toi_flag +
+    _lct_header.sct_flag +
+    _lct_header.ert_flag;
+
+  if (_lct_header.lct_header_len < standard_header_words) {
+    throw std::runtime_error("LCT header length is shorter than its own flags require");
+  }
+  if ((size_t)_lct_header.lct_header_len * 4 > len) {
+    throw std::runtime_error("LCT header length exceeds the received packet length");
+  }
+
   char* hdr_ptr = data + 4;
   if (_lct_header.congestion_control_flag != 0) {
     throw std::runtime_error("Unsupported CCI field length");
@@ -80,19 +117,21 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
         throw std::runtime_error("TOI fields over 64 bits in length are not supported");
   } 
 
+  // Step over the SCT and ERT words when present, so the extension walk below starts where the
+  // extensions actually begin. RFC 3451 clause 5.1 field order is CCI, TSI, TOI, SCT, ERT.
+  if (_lct_header.sct_flag) hdr_ptr += 4;
+  if (_lct_header.ert_flag) hdr_ptr += 4;
+
   if (_lct_header.codepoint == 0) {
     _fec_oti.encoding_id = FecScheme::CompactNoCode;
   } else {
     throw std::runtime_error("Only Compact No-Code FEC is supported");
   }
 
-  auto expected_header_len = 2 +
-   _lct_header.congestion_control_flag +
-   _lct_header.half_word_flag +
-   _lct_header.tsi_flag +
-   _lct_header.toi_flag;
-
-  size_t ext_header_len = (_lct_header.lct_header_len - expected_header_len) * 4;
+  /* RFC 3451 clause 5.1: "if HDR_LEN is larger than the length of the standard header then the
+     remaining header space is taken by Header Extension fields." Both terms were validated
+     above, so this subtraction cannot wrap. */
+  size_t ext_header_len = ((size_t)_lct_header.lct_header_len - standard_header_words) * 4;
   while (ext_header_len > 0) {
     auto ext_ptr = hdr_ptr;
     uint8_t het = *ext_ptr;
@@ -105,6 +144,13 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
       ext_ptr += 1; // Skip HEL
     }
 
+    /* A variable-length extension declaring HEL 0 gives a zero-length extension, which the
+       bound below does not catch: the loop would then consume nothing and never terminate on a
+       single malformed packet. HEL counts the whole extension including its own HET and HEL
+       bytes, so zero is never legitimate. */
+    if (ext_len == 0) {
+      throw std::runtime_error("Header extension declares a zero length");
+    }
     if (ext_len > ext_header_len) {
       throw std::runtime_error("Header extension length exceeds remaining header length");
     }
@@ -124,17 +170,42 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                         ext_ptr += 2;
                         _fec_oti.transfer_length |= (uint64_t)(ntohl(*(uint32_t*)ext_ptr));
                         ext_ptr += 4;
-                        ext_ptr += 2; // reserved
+                        /* The FEC Instance ID, not a reserved field. RFC 3926 clause 5.1.1:
+                           "It is only present if the value of FEC Encoding ID is in the range of
+                           128-255. When the value of FEC Encoding ID is in the range of 0-127, this
+                           field is set to 0." Compact No-Code is 0, so it is stepped over rather
+                           than read; the width is the same either way. */
+                        ext_ptr += 2;
                         _fec_oti.encoding_symbol_length = ntohs(*(uint16_t*)ext_ptr);
                         ext_ptr += 2;
                         _fec_oti.max_source_block_length = ntohl(*(uint32_t*)ext_ptr);
+                        _has_fti = true;
                       }
                       break;
                     }
       case EXT_FDT: {
                       uint8_t flute_version = (*ext_ptr & 0xF0) >> 4;
-                      if (flute_version > 2) {
-                        throw std::runtime_error("Unsupported FLUTE version");
+                      /* This branch implements FLUTE version 1, and the version field is not
+                         advisory: it identifies which protocol the packet belongs to.
+
+                         RFC 3926 clause 3.4.1: "This document specifies FLUTE version 1. Hence
+                         in any ALC packet that carries FDT Instance and that belongs to the file
+                         delivery session as specified in this specification MUST set this field
+                         to '1'."
+
+                         Accepting 2 was accepting a packet from a protocol this build does not
+                         implement, and the two are not interchangeable underneath.
+                         RFC 6726 clause 11.1: "Therefore, an implementation that relies on
+                         [RFC3926] and RFC 3451 will not be backwards compatible with FLUTE as
+                         specified in this document."
+
+                         General FLUTE, not a 3GPP restriction: it holds in both profiles. What
+                         TS 26.346 adds is only that version 1 is the one it selects, so a 3GPP
+                         session could never legitimately carry 2 either. */
+                      if (flute_version != 1) {
+                        throw std::runtime_error("Unsupported FLUTE version " +
+                                                 std::to_string(flute_version) +
+                                                 "; this implementation is FLUTE version 1");
                       }
                       _fdt_instance_id =  (*ext_ptr & 0x0F) << 16;
                       ext_ptr++;
@@ -142,12 +213,22 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                       break;
                     }
       case EXT_CENC: {
+                       /* The set of algorithms is open: RFC 3926 clause 3.4.3 says of the CENC
+                          field that "The definition of this field is outside the scope of this
+                          specification." A value this library does not know therefore has to be
+                          refused rather than ignored. Falling through to NONE would hand the
+                          undecoded bytes to the FDT parser as though they were XML, which fails
+                          somewhere further on with an error naming the wrong thing. */
                        uint8_t encoding = *ext_ptr;
                        switch (encoding) {
                          case 0: _content_encoding = ContentEncoding::NONE; break;
                          case 1: _content_encoding = ContentEncoding::ZLIB; break;
                          case 2: _content_encoding = ContentEncoding::DEFLATE; break;
                          case 3: _content_encoding = ContentEncoding::GZIP; break;
+                         default:
+                           throw std::runtime_error(
+                               "EXT_CENC names content encoding " + std::to_string(encoding) +
+                               ", which this library cannot decode");
                        }
                        break;
                      }
@@ -158,11 +239,25 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
   }
 }
 
-LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_oti, const std::vector<LibFlute::EncodingSymbol>& symbols, size_t max_encoding_symbol_size, uint32_t fdt_instance_id)
+LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_oti, const std::vector<LibFlute::EncodingSymbol>& symbols, size_t max_encoding_symbol_size, uint32_t fdt_instance_id,
+                                bool close_session_flag, bool close_object_flag)
   : _fec_oti(fec_oti)
 {
+  // TSI width: this wire scheme always carries a 16-bit half-word component (half_word_flag=1,
+  // shared with TOI's own 16-bit half-word below) plus, when tsi_flag=1, an extra 32-bit word
+  // holding the high-order bits -- giving a 48-bit ceiling, matching the decoder in this same
+  // file. Values that fit in 16 bits keep the original on-wire size; anything larger sets
+  // tsi_flag and adds the extra word, instead of silently truncating to the low 16 bits.
+  if (tsi > 0xFFFFFFFFFFFFULL) {
+    throw std::runtime_error("TSI exceeds the 48-bit field width supported by this LCT encoding");
+  }
+  const bool wide_tsi = tsi > 0xFFFF;
+
   const size_t max_alc_header_size = 4;
   auto lct_header_len = 3;
+  if (wide_tsi) {
+    lct_header_len += 1;
+  }
   if (toi == 0) { // Add extensions for FDT
     lct_header_len += 5;
   }
@@ -177,18 +272,26 @@ LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_
 
   lct_header->version = 1;
   lct_header->half_word_flag = 1;
+  lct_header->tsi_flag = wide_tsi ? 1 : 0;
+  lct_header->close_session_flag = close_session_flag ? 1 : 0;
+  lct_header->close_object_flag = close_object_flag ? 1 : 0;
   lct_header->lct_header_len = lct_header_len;
   auto hdr_ptr = _buffer + 4;
   auto payload_ptr = _buffer + 4 * lct_header_len;
 
   auto payload_size = EncodingSymbol::to_payload(symbols, payload_ptr, max_encoding_symbol_size + max_alc_header_size, _fec_oti, ContentEncoding::NONE);
   _len = 4 * lct_header_len + payload_size;
-  
+
   hdr_ptr += 4; // CCI = 0
-  
-  *((uint16_t*)hdr_ptr) = htons(tsi);
+
+  *((uint16_t*)hdr_ptr) = htons(static_cast<uint16_t>(tsi & 0xFFFF));
   hdr_ptr += 2;
-  
+
+  if (wide_tsi) {
+    *((uint32_t*)hdr_ptr) = htonl(static_cast<uint32_t>(tsi >> 16));
+    hdr_ptr += 4;
+  }
+
   *((uint16_t*)hdr_ptr) = htons(toi);
   hdr_ptr += 2;
 
@@ -214,11 +317,55 @@ LibFlute::AlcPacket::AlcPacket(uint16_t tsi, uint16_t toi, LibFlute::FecOti fec_
     hdr_ptr += 2;
     *((uint32_t*)hdr_ptr) = htonl(static_cast<uint32_t>(_fec_oti.transfer_length & 0xFFFFFFFF));
     hdr_ptr += 4;
-    hdr_ptr += 2; // reserved
+    /* The FEC Instance ID, left at the zero the buffer already holds, which is what a
+       Fully-Specified scheme requires.
+
+       RFC 3926 clause 5.1.1: "When the value of FEC Encoding ID is in the range of 0-127, this
+       field is set to 0." */
+    hdr_ptr += 2;
     *((uint16_t*)hdr_ptr) = htons(_fec_oti.encoding_symbol_length);
     hdr_ptr += 2;
     *((uint32_t*)hdr_ptr) = htonl(_fec_oti.max_source_block_length);
   }
+}
+
+LibFlute::AlcPacket::AlcPacket(uint64_t tsi, CloseSession)
+{
+  /* RFC 3926 clause 3.1: "the exception that ALC packets sent in a FLUTE session with the Close
+     Session (A) flag set to 1 (signaling the end of the session) and that contain no payload
+     (carrying no information for any file or FDT) SHALL NOT carry the TOI"
+
+     The TSI and TOI share the half-word flag, so dropping the TOI drops the half-word too and the
+     TSI becomes a whole number of 32-bit words.
+     RFC 5651 clause 5.1: "The TSI field is 32*S + 16*H
+     bits in length"
+     One word is what this builds, which caps the TSI at 32 bits; a session with a
+     wider TSI cannot express this packet at all and says so rather than emitting a TOI the clause
+     forbids. */
+  if (tsi > 0xFFFFFFFFULL) {
+    throw std::runtime_error(
+        "a data-less Close Session packet carries no TOI, so its TSI must fit in 32 bits");
+  }
+
+  /* Base word, CCI, TSI. No TOI, no extensions, no FEC Payload ID, no payload. */
+  const uint8_t lct_header_len = 3;
+  _len = 4 * lct_header_len;
+  _buffer = (char*)calloc(_len, sizeof(char));
+
+  /* Written through the member so that this object's own accessors describe the packet it built,
+     not just the bytes on the wire. */
+  std::memset(&_lct_header, 0, sizeof(_lct_header));
+  _lct_header.version = 1;
+  _lct_header.half_word_flag = 0;
+  _lct_header.tsi_flag = 1;
+  _lct_header.toi_flag = 0;
+  _lct_header.close_session_flag = 1;
+  _lct_header.lct_header_len = lct_header_len;
+  std::memcpy(_buffer, &_lct_header, sizeof(_lct_header));
+
+  /* The CCI word stays at the zero calloc left. A session running a congestion control building
+     block has nothing to say in a packet that carries no data. */
+  *((uint32_t*)(_buffer + 8)) = htonl(static_cast<uint32_t>(tsi));
 }
 
 LibFlute::AlcPacket::~AlcPacket()

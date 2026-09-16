@@ -76,6 +76,9 @@ namespace
     {
         bool tunneled = false;
         std::string expected_location;
+        /* Which obligation set the sender is held to. The FDT schema follows from it, so the
+           namespace is not a separate knob: FileDeliveryTable derives it from the profile. */
+        LibFlute::Profile profile = LibFlute::Profile::Ts26517;
     };
 
     auto tunnel_bridge_stats(TunnelRuntime& tunnel_runtime) -> TunnelBridgeStats
@@ -401,7 +404,10 @@ namespace
             0,
             transmitter_io,
             tunnel_runtime.endpoint,
-            LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005);
+            LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005,
+            /*active*/ true,
+            /*source_address*/ std::nullopt,
+            options.profile);
 
         auto file_description = std::make_shared<LibFlute::Transmitter::FileDescription>(
             expected_location,
@@ -521,6 +527,39 @@ TEST(FluteEndToEndTest, TransmitsFileToReceiver)
     EndToEndOptions options;
     options.tunneled = false;
     options.expected_location = "e2e/payload.bin";
+    run_end_to_end_scenario(options);
+}
+
+/* One end-to-end pass per profile. Each selects a different FDT schema and a different set of
+   permitted FDT attributes, so "the library builds a conformant FDT" and "a receiver can
+   reconstruct the object from it" are separate claims; the suite covered only the first for two
+   of the three. The receiver takes no profile, by design: the profile constrains what a sender
+   may emit, while TS 26.346 V18.2.0 clause L.4.1 places a support obligation on the receiver, so
+   one receiver has to handle every profile's output. These three exercise exactly that. */
+TEST(FluteEndToEndProfileTest, Ts26517TransmitsAndReconstructs)
+{
+    EndToEndOptions options;
+    options.tunneled = false;
+    options.profile = LibFlute::Profile::Ts26517;
+    options.expected_location = "e2e/ts26517-payload.bin";
+    run_end_to_end_scenario(options);
+}
+
+TEST(FluteEndToEndProfileTest, Ts26346TransmitsAndReconstructs)
+{
+    EndToEndOptions options;
+    options.tunneled = false;
+    options.profile = LibFlute::Profile::Ts26346;
+    options.expected_location = "e2e/ts26346-payload.bin";
+    run_end_to_end_scenario(options);
+}
+
+TEST(FluteEndToEndProfileTest, UnprofiledTransmitsAndReconstructs)
+{
+    EndToEndOptions options;
+    options.tunneled = false;
+    options.profile = LibFlute::Profile::Unprofiled;
+    options.expected_location = "e2e/unprofiled-payload.bin";
     run_end_to_end_scenario(options);
 }
 
