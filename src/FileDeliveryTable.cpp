@@ -20,6 +20,7 @@
 #include <chrono>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <map>
 #include "spdlog/spdlog.h"
 
@@ -218,7 +219,11 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     _complete = (val == "true" || val == "1");
   }
 
-  spdlog::debug("Received new FDT with instance ID {}: {}", instance_id, buffer);
+  /* Bounded by the length the caller passed, not by a terminator. The buffer is the bytes taken
+     off the wire and nothing guarantees a NUL within len, so formatting it as a C string reads
+     past the object. See 5G-MAG/rt-libflute#111. */
+  spdlog::debug("Received new FDT with instance ID {}: {}", instance_id,
+                std::string_view(buffer, len));
 
   auto val = root_ns.findAttribute(fdt_instance, "FEC-OTI-FEC-Encoding-ID", fdt_ns);
   if (val != nullptr) {
