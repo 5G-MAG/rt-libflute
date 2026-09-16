@@ -342,6 +342,7 @@ TEST(ProfileContentEncodingTest, AnUnencodedObjectIsUnaffectedUnderTheProfile) {
                  /*tunnel*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ true,
                  /*source_address*/ std::nullopt, LibFlute::Profile::Ts26517);
   auto fd = std::make_shared<Transmitter::FileDescription>("test/plain.bin", payload);
+  fd->set_content_type("application/octet-stream");
   EXPECT_NO_THROW(tx.send(fd));
   tx.deactivate();
 }

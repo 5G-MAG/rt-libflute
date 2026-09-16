@@ -45,6 +45,8 @@ FileDeliveryTable::FileEntry make_entry(const FecOti &oti) {
   e.toi = 1;
   e.content_location = "http://example.invalid/seg1.m4s";
   e.content_length = 4096;
+  // Required of the sender under either 3GPP profile: TS 26.346 clause L.4.2, first list.
+  e.content_type = "video/mp4";
   e.expires = 0;
   e.fec_oti = oti;
   e.cache_control.no_cache = false;
@@ -118,10 +120,13 @@ TEST(GeneralFluteTest, TransferLengthStillCarriedOutsideTheProfile) {
 /* The delimitation itself. A session is bound by the general FLUTE documents always, and by
    TS 26.346 annex L.4 only under the 3GPP profile, which is the default. */
 
-TEST(ProfileDefaultTest, DefaultIsTheMbms3gppProfile) {
+/* A caller who selects no profile gets plain FLUTE, not a 3GPP one. The 3GPP profiles refuse a
+   session outright in several cases (TSI width, FEC scheme, content encoding), so imposing one on a
+   caller who did not ask would change behaviour on a library upgrade. A 3GPP sender asks. */
+TEST(ProfileDefaultTest, DefaultIsUnprofiled) {
   auto oti = make_fec_oti();
   FileDeliveryTable fdt(1, oti);
-  EXPECT_EQ(fdt.profile(), Profile::Ts26517);
+  EXPECT_EQ(fdt.profile(), Profile::Unprofiled);
 }
 
 TEST(ProfileDefaultTest, ProfileNotFdtNamespaceDecidesTheRestriction) {
@@ -147,7 +152,7 @@ TEST(MbmsDownloadProfileTest, ContentLengthIsCarriedInEveryMode) {
 
 TEST(MbmsDownloadProfileTest, CompleteNotCarriedUnderThe3gppProfile) {
   auto oti = make_fec_oti();
-  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2, Profile::Ts26517);
   fdt.add(make_entry(oti));
   fdt.set_complete(true);
   EXPECT_EQ(fdt.to_string().find("Complete"), std::string::npos);
@@ -202,7 +207,7 @@ TEST(MbmsDownloadProfileTest, GzipContentEncodingIsAccepted) {
 
 TEST(MbmsDownloadProfileTest, NonGzipContentEncodingIsRefused) {
   auto oti = make_fec_oti();
-  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2, Profile::Ts26517);
   auto e = make_entry(oti);
   e.content_encoding = "deflate";
   EXPECT_THROW(fdt.add(e), std::invalid_argument);
@@ -939,6 +944,80 @@ TEST(FdtFecEncodingId, AnUnrecognisedIdentifierIsRefusedAtTheFileLevel) {
                std::runtime_error);
 }
 
+/* A session's channels are what a multiple rate congestion control building block moves a receiver
+   between. RFC 5775 clause 2.1: "An ALC session comprises multiple channels originating at a single
+   sender". The Receiver joined exactly one group for the life of the session; it can now join and
+   leave others on the same interface. Nothing in the library drives this yet. */
+TEST(ReceiverChannelsTest, TheConstructedGroupIsJoined) {
+  boost::asio::io_context io;
+  LibFlute::Receiver rx("0.0.0.0", "239.9.9.1", 19501, /*tsi*/ 1, io);
+  EXPECT_EQ(rx.joined_channels().count("239.9.9.1"), 1u);
+  EXPECT_EQ(rx.joined_channels().size(), 1u);
+  rx.stop();
+}
+
+TEST(ReceiverChannelsTest, AFurtherChannelCanBeJoinedAndLeft) {
+  boost::asio::io_context io;
+  LibFlute::Receiver rx("0.0.0.0", "239.9.9.2", 19502, /*tsi*/ 1, io);
+
+  EXPECT_TRUE(rx.join_channel("239.9.9.3"));
+  EXPECT_EQ(rx.joined_channels().count("239.9.9.3"), 1u);
+  EXPECT_EQ(rx.joined_channels().size(), 2u);
+
+  EXPECT_TRUE(rx.leave_channel("239.9.9.3"));
+  EXPECT_EQ(rx.joined_channels().count("239.9.9.3"), 0u);
+  EXPECT_EQ(rx.joined_channels().size(), 1u);
+  rx.stop();
+}
+
+TEST(ReceiverChannelsTest, RedundantJoinsAndLeavesReportNoChange) {
+  boost::asio::io_context io;
+  LibFlute::Receiver rx("0.0.0.0", "239.9.9.4", 19503, /*tsi*/ 1, io);
+
+  EXPECT_FALSE(rx.join_channel("239.9.9.4")) << "already joined at construction";
+  EXPECT_FALSE(rx.leave_channel("239.9.9.5")) << "never joined";
+  EXPECT_EQ(rx.joined_channels().size(), 1u);
+  rx.stop();
+}
+
+
+/* The sending half of the same capability. A multiple rate congestion control building block sends
+   to several channels at different rates; RFC 5775 clause 2.1: "An ALC session comprises multiple
+   channels originating at a single sender". Nothing drives these yet. */
+TEST(TransmitterChannelsTest, ASessionStartsWithOneChannel) {
+  boost::asio::io_context io;
+  LibFlute::Transmitter tx("239.9.8.1", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                           std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false);
+  EXPECT_EQ(tx.channel_count(), 1u);
+  EXPECT_EQ(tx.channel_endpoint(0).address().to_string(), "239.9.8.1");
+}
+
+TEST(TransmitterChannelsTest, ChannelsCanBeAddedAndRemoved) {
+  boost::asio::io_context io;
+  LibFlute::Transmitter tx("239.9.8.2", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                           std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false);
+
+  const auto first = tx.add_channel("239.9.8.3", 5002);
+  const auto second = tx.add_channel("239.9.8.4", 5004);
+  EXPECT_EQ(first, 1u);
+  EXPECT_EQ(second, 2u);
+  EXPECT_EQ(tx.channel_count(), 3u);
+  EXPECT_EQ(tx.channel_endpoint(2).address().to_string(), "239.9.8.4");
+  EXPECT_EQ(tx.channel_endpoint(2).port(), 5004);
+
+  EXPECT_TRUE(tx.remove_channel(2));
+  EXPECT_EQ(tx.channel_count(), 2u);
+  EXPECT_EQ(tx.channel_endpoint(1).address().to_string(), "239.9.8.3");
+}
+
+TEST(TransmitterChannelsTest, TheConstructedChannelCannotBeRemoved) {
+  boost::asio::io_context io;
+  LibFlute::Transmitter tx("239.9.8.5", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                           std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false);
+  EXPECT_FALSE(tx.remove_channel(0)) << "a session with no channels is not a session";
+  EXPECT_FALSE(tx.remove_channel(7)) << "no such channel";
+  EXPECT_EQ(tx.channel_count(), 1u);
+}
 
 /* An object bootstrapped from a content packet's own EXT_FTI learns its Content-Encoding only from
    the FDT, nothing in EXT_FTI carrying it. Before adopt_fdt_metadata() took the field, such an
@@ -995,4 +1074,43 @@ TEST(ExtFtiBootstrapTest, AdoptedFdtMetadataCarriesTheContentEncoding) {
   file.decode();
   ASSERT_EQ(file.length(), original.size());
   EXPECT_EQ(memcmp(file.buffer(), original.data(), original.size()), 0);
+}
+
+/* TS 26.346 V18.2.0 clause L.4.2 lists Content-Type first among the attributes that "shall be
+   carried in the FDT sent by the FLUTE sender". An entry with none cannot be described
+   conformantly, so it is refused under either 3GPP profile rather than emitted without it. */
+TEST(ProfileContentTypeTest, AnEntryWithNoContentTypeIsRefusedUnderTs26517) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26517);
+  auto e = make_entry(oti);
+  e.content_type.clear();
+  EXPECT_THROW(fdt.add(e), std::invalid_argument);
+}
+
+TEST(ProfileContentTypeTest, AnEntryWithNoContentTypeIsRefusedUnderTs26346) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26346);
+  auto e = make_entry(oti);
+  e.content_type.clear();
+  EXPECT_THROW(fdt.add(e), std::invalid_argument);
+}
+
+/* RFC 3926 clause 3.4.2 requires only TOI and Content-Location, so a plain FLUTE session keeps
+   today's behaviour and the attribute is simply absent. */
+TEST(ProfileContentTypeTest, AnEntryWithNoContentTypeIsAcceptedUnprofiled) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Unprofiled);
+  auto e = make_entry(oti);
+  e.content_type.clear();
+  EXPECT_NO_THROW(fdt.add(e));
+  EXPECT_EQ(fdt.to_string().find("Content-Type"), std::string::npos);
+}
+
+TEST(ProfileContentTypeTest, AContentTypeIsCarriedIntoTheEmittedFdt) {
+  auto oti = make_fec_oti();
+  FileDeliveryTable fdt(1, oti, FileDeliveryTable::FDT_NS_NONE, Profile::Ts26517);
+  auto e = make_entry(oti);
+  e.content_type = "video/mp4";
+  ASSERT_NO_THROW(fdt.add(e));
+  EXPECT_NE(fdt.to_string().find("Content-Type=\"video/mp4\""), std::string::npos);
 }

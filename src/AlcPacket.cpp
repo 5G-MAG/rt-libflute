@@ -71,6 +71,18 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
   if (_lct_header.congestion_control_flag != 0) {
     throw std::runtime_error("Unsupported CCI field length");
   }
+  /* The 32 bits C=0 selects, read as WEBRC's short format of RFC 3738 clause 5.1. A session with no
+     building block sends zeros, which read back as channel 0 at sequence 0; only a receiver that
+     knows the session runs WEBRC should act on this. */
+  {
+    const auto* cci_bytes = reinterpret_cast<const uint8_t*>(hdr_ptr);
+    CongestionControlInfo cci;
+    cci.current_time_slot_index = cci_bytes[0];
+    cci.channel_number = cci_bytes[1];
+    cci.packet_sequence_number =
+        static_cast<uint16_t>((static_cast<uint16_t>(cci_bytes[2]) << 8) | cci_bytes[3]);
+    _cci = cci;
+  }
   // [TODO] read CCI
   hdr_ptr += 4;
 
@@ -240,7 +252,8 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
 }
 
 LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_oti, const std::vector<LibFlute::EncodingSymbol>& symbols, size_t max_encoding_symbol_size, uint32_t fdt_instance_id,
-                                bool close_session_flag, bool close_object_flag)
+                                bool close_session_flag, bool close_object_flag,
+                                const std::optional<CongestionControlInfo>& cci)
   : _fec_oti(fec_oti)
 {
   // TSI width: this wire scheme always carries a 16-bit half-word component (half_word_flag=1,
@@ -282,7 +295,22 @@ LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_
   auto payload_size = EncodingSymbol::to_payload(symbols, payload_ptr, max_encoding_symbol_size + max_alc_header_size, _fec_oti, ContentEncoding::NONE);
   _len = 4 * lct_header_len + payload_size;
 
-  hdr_ptr += 4; // CCI = 0
+  /* Congestion Control Information. Zero unless a building block supplied one: RFC 3738 clause 5.1
+     lays the short format out as CTSI (8 bits), Channel Number (8) and Packet Sequence Number (16),
+     which is exactly the 32 bits C=0 selects. A 3GPP session always sends zeros.
+
+     TS 26.346 V18.2.0 clause 7.2.7: "The length of the CCI (Congestion Control Identifier) field
+     shall be 32 bits and it is assigned a value of zero (C=0)."
+
+     The buffer is already zeroed, so the absent case writes nothing. */
+  if (cci) {
+    auto* cci_bytes = reinterpret_cast<uint8_t*>(hdr_ptr);
+    cci_bytes[0] = cci->current_time_slot_index;
+    cci_bytes[1] = cci->channel_number;
+    cci_bytes[2] = static_cast<uint8_t>((cci->packet_sequence_number >> 8) & 0xFF);
+    cci_bytes[3] = static_cast<uint8_t>(cci->packet_sequence_number & 0xFF);
+  }
+  hdr_ptr += 4;
 
   *((uint16_t*)hdr_ptr) = htons(static_cast<uint16_t>(tsi & 0xFFFF));
   hdr_ptr += 2;
