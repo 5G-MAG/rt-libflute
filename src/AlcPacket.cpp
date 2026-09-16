@@ -123,13 +123,15 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
   if (_lct_header.ert_flag) hdr_ptr += 4;
 
   /* The FEC scheme is taken from the Codepoint and from nothing else, using the identity mapping
-     onto the registered FEC Encoding IDs, which is what the send side writes.
+     onto the registered FEC Encoding IDs, which is what the send side writes. Codepoint 6 is
+     RaptorQ, which this branch adds and which is outside the 3GPP referenced set.
 
      RFC 3450 clause 2.2: "The LCT header contains a Codepoint field that MAY be used to
      communicate to a receiver the settings for information that may vary during a session." */
   switch (_lct_header.codepoint) {
     case 0: _fec_oti.encoding_id = FecScheme::CompactNoCode; break;
     case 1: _fec_oti.encoding_id = FecScheme::Raptor; break;
+    case 6: _fec_oti.encoding_id = FecScheme::RaptorQ; break;
     default: throw std::runtime_error("Unsupported FEC scheme (codepoint " +
                                       std::to_string(_lct_header.codepoint) + ")");
   }
@@ -205,6 +207,16 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                         ext_ptr += 2;
                         _fec_oti.nof_sub_blocks = *(uint8_t*)ext_ptr;
                         ext_ptr += 1;
+                        _fec_oti.symbol_alignment = *(uint8_t*)ext_ptr;
+                      } else if (_fec_oti.encoding_id == FecScheme::RaptorQ) {
+                        // Scheme-specific OTI (RFC 6330 §3.3.3): note the
+                        // field widths differ from Raptor's despite the
+                        // same 4-octet total -- 8-bit Z, 16-bit N (always 1
+                        // here), 8-bit Al.
+                        _fec_oti.nof_source_blocks = *(uint8_t*)ext_ptr;
+                        ext_ptr += 1;
+                        _fec_oti.nof_sub_blocks = ntohs(*(uint16_t*)ext_ptr);
+                        ext_ptr += 2;
                         _fec_oti.symbol_alignment = *(uint8_t*)ext_ptr;
                       } else {
                         throw std::runtime_error("EXT_FTI parsing not implemented for this FEC scheme");

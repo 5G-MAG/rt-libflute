@@ -433,7 +433,7 @@ namespace LibFlute {
       *                         meaning Compact No-Code -- today's behaviour, unchanged). Only
       *                         encoding_id, max_source_block_length and max_number_of_encoding_symbols
       *                         are read from it; encoding_symbol_length is always sized to this
-      *                         Transmitter's own path MTU, and the Raptor-specific OTI fields
+      *                         Transmitter's own path MTU, and the Raptor/RaptorQ-specific OTI fields
       *                         are computed fresh per file by LibFlute::File, not taken from here.
       *
       *  @throw boost::system::system_error When @p source_address is given a value and @p tunnel_endpoint has no value and the

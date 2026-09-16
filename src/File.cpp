@@ -71,7 +71,8 @@ File::File(const std::shared_ptr<Transmitter::FileDescription> &file_description
   _meta = _file_description->file_entry();
 
   if (_meta.fec_oti.encoding_id == FecScheme::CompactNoCode ||
-      _meta.fec_oti.encoding_id == FecScheme::Raptor) {
+      _meta.fec_oti.encoding_id == FecScheme::Raptor ||
+      _meta.fec_oti.encoding_id == FecScheme::RaptorQ) {
     _meta.fec_oti.transfer_length = length;
   } else {
     throw std::runtime_error("Unsupported FEC scheme");
@@ -121,7 +122,8 @@ File::File(uint32_t toi,
   _meta.fec_oti = fec_oti;
 
   if (_meta.fec_oti.encoding_id == FecScheme::CompactNoCode ||
-      _meta.fec_oti.encoding_id == FecScheme::Raptor) {
+      _meta.fec_oti.encoding_id == FecScheme::Raptor ||
+      _meta.fec_oti.encoding_id == FecScheme::RaptorQ) {
     _meta.fec_oti.transfer_length = length;
   } else {
     throw std::runtime_error("Unsupported FEC scheme");
@@ -180,7 +182,7 @@ auto File::put_symbol( const EncodingSymbol& symbol ) -> void
     return;
   }
 
-  // Raptor: unlike Compact No-Code, an ESI at or beyond K is
+  // Raptor/RaptorQ: unlike Compact No-Code, an ESI at or beyond K is
   // meaningful -- it's a repair symbol, not an error -- so there's no upper
   // bound to enforce here beyond not letting a malicious/corrupt sender grow
   // our per-block state unboundedly.
@@ -366,7 +368,8 @@ auto File::calculate_partitioning() -> void
 
 auto File::calculate_partitioning_raptor() -> void
 {
-  // RFC 5053 §4.2 partitioning: Kt = ceil(F/T); (KL, KS, ZL, ZS) =
+  // RFC 5053 §4.2 / RFC 6330 §4.4.1.2 partitioning (both schemes use the
+  // identical Partition[] function): Kt = ceil(F/T); (KL, KS, ZL, ZS) =
   // Partition[Kt, Z], where Partition[I, J] = (IL, IS, JL, JS) with
   // IL = ceil(I/J), IS = floor(I/J), JL = I - IS*J, JS = J - JL.
   //
@@ -374,12 +377,13 @@ auto File::calculate_partitioning_raptor() -> void
   // FecOti::nof_sub_blocks's comment in flute_types.h -- so the second
   // partition, Partition[T/Al, N], is trivial and doesn't need computing.
   //
-  // K is capped well below Raptor's hard spec limit (8192, RFC 5053 §5.7) by
-  // default, since the codec's linear system scales at least quadratically
-  // in block size (see GF2LinearSystem.h) -- a caller who actually wants
+  // K is capped well below either scheme's hard spec limit (Raptor: 8192,
+  // RFC 5053 §5.7; RaptorQ: 56403, RFC 6330 §5.6) by default, since both
+  // codecs' linear systems scale at least quadratically in block size (see
+  // GF2LinearSystem.h / GF256LinearSystem.h) -- a caller who actually wants
   // larger blocks can ask for them via max_source_block_length, up to the
   // scheme's real limit.
-  const uint32_t kSchemeMaxK = 8192;
+  const uint32_t kSchemeMaxK = (_meta.fec_oti.encoding_id == FecScheme::RaptorQ) ? 56403 : 8192;
   const uint32_t kDefaultK = 8192;
   uint32_t k_cap = _meta.fec_oti.max_source_block_length;
   if (k_cap == 0) k_cap = kDefaultK;
@@ -443,7 +447,11 @@ auto File::calculate_partitioning_raptor() -> void
 
 auto File::setup_raptor_codec_for_block(uint16_t sbn, uint32_t k) -> void
 {
-  _raptor_codecs[sbn] = std::make_shared<Raptor::RaptorCodec>(k);
+  if (_meta.fec_oti.encoding_id == FecScheme::RaptorQ) {
+    _raptor_codecs[sbn] = std::make_shared<RaptorQ::RaptorQCodec>(k);
+  } else {
+    _raptor_codecs[sbn] = std::make_shared<Raptor::RaptorCodec>(k);
+  }
 }
 
 auto File::nof_repair_symbols_for_block(uint32_t k) const -> uint32_t
