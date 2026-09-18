@@ -308,6 +308,29 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
 
   if (!error)
   {
+    /* Checked before the packet is parsed, so traffic that is not this session's cannot reach the
+       parser at all, let alone influence how a parse failure is handled.
+
+       RFC 3450 clause 4.5 orders the receiver's steps and puts this one before any processing of the
+       payload: "The receiver MUST verify that the sender IP address together with the TSI carried in
+       the header matches one of the (sender IP address, TSI) pairs that was received in a Session
+       Description and that the receiver is currently joined to."
+
+       Only checkable where the caller named the source. A source-specific join already has the
+       kernel filtering on it, so this is defence in depth there against a routing or membership
+       mistake; for an any-source session the library has no source to compare against and the
+       obligation cannot be met, which is recorded as a limitation rather than passed over.
+
+       The tunnel path cannot meet it at all: the original sender's address is not visible once the
+       datagram has been encapsulated, so that loop verifies the tunnel peer instead, which is the
+       only address it can see. Recorded as a limitation there rather than checked against an
+       endpoint that does not correspond to the FLUTE sender. */
+    if (_expected_source && _sender_endpoint.address() != *_expected_source) {
+      spdlog::warn("Discarding packet from {}, which is not this session's source {}",
+                   _sender_endpoint.address().to_string(), _expected_source->to_string());
+      arm_receive();
+      return;
+    }
     process_alc_datagram(_data, bytes_recvd);
     arm_receive();
   }
@@ -336,23 +359,12 @@ auto LibFlute::Receiver::process_alc_datagram(char* data, size_t bytes_recvd) ->
        calling this, so arming here would leave two outstanding reads on the plain socket, and would
        arm the plain socket from a datagram that arrived through the tunnel. */
     spdlog::trace("Received {} bytes", bytes_recvd);
-    /* The source is checked before the packet is parsed, so traffic that is not this session's
-       cannot reach the parser at all, let alone influence how a parse failure is handled.
-
-       RFC 3450 clause 4.5 orders the receiver's steps and puts this one before any processing of the
-       payload: "The receiver MUST verify that the sender IP address together with the TSI carried in
-       the header matches one of the (sender IP address, TSI) pairs that was received in a Session
-       Description and that the receiver is currently joined to."
-
-       Only checkable where the caller named the source. A source-specific join already has the
-       kernel filtering on it, so this is defence in depth there against a routing or membership
-       mistake; for an any-source session the library has no source to compare against and the
-       obligation cannot be met, which is recorded as a limitation rather than passed over. */
-    if (_expected_source && _sender_endpoint.address() != *_expected_source) {
-      spdlog::warn("Discarding packet from {}, which is not this session's source {}",
-                   _sender_endpoint.address().to_string(), _expected_source->to_string());
-      return;
-    }
+    /* The sender address is verified by each receive loop before it calls this, against whichever
+       endpoint that loop actually observed: handle_receive_from() against the session's source, and
+       handle_tunnel_receive_from() against the tunnel's. It used to be checked here instead, which
+       was wrong for the tunnel path: _sender_endpoint belongs to the plain socket and is not the
+       endpoint a tunnelled datagram arrived from, so every tunnelled packet was discarded as coming
+       from the wrong source. */
 
     try {
       auto alc = LibFlute::AlcPacket(data, bytes_recvd);
