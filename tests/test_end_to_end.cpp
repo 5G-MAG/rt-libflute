@@ -574,3 +574,116 @@ TEST(FluteEndToEndTest, TransmitsFileToReceiverThroughUdpTunnel)
     options.expected_location = "e2e/tunnelled-payload.bin";
     run_end_to_end_scenario(options);
 }
+
+/* Receiver tunnel mode, with a source-specific join.
+ *
+ * Two gaps in the cases above, and this bug lived in the overlap of them. The tunnelled case above
+ * bridges externally and feeds plain ALC bytes into the receiver's *normal* socket, so
+ * Receiver::handle_tunnel_receive_from() was never executed by a test; and no case passed a
+ * source_address, so the receiver's sender-address check was never armed either.
+ *
+ * Between them, a source check that compared a tunnelled datagram against the plain socket's sender
+ * endpoint passed every test and discarded every packet on a real deployment. This drives the
+ * transmitter's own encapsulation straight at a receiver bound in tunnel mode, with the source check
+ * armed, so that combination has to keep working.
+ */
+TEST(FluteEndToEndTest, TransmitsFileToTunnelModeReceiverWithSourceSpecificJoin)
+{
+    using namespace std::chrono_literals;
+
+    constexpr short receiver_tunnel_port = 18093;
+    const auto loopback = boost::asio::ip::make_address("127.0.0.1");
+    const boost::asio::ip::udp::endpoint receiver_tunnel_endpoint(loopback, receiver_tunnel_port);
+
+    /* The transmitter encapsulates in an inner IPv4 + UDP header, which is the 28 bytes the
+       tunnel_payload_limit above is derived from. Returning the offset of the ALC bytes is the whole
+       of packet_modifier_t's contract; a datagram too short to hold the header yields "no bytes
+       left", which the contract spells as an offset at or past the end. */
+    LibFlute::Receiver::packet_modifier_t strip_inner_ip_udp =
+        [](std::vector<uint8_t>& payload) -> size_t
+        {
+            constexpr size_t inner_header_bytes = 20 + 8;
+            return payload.size() > inner_header_bytes ? inner_header_bytes : payload.size();
+        };
+
+    boost::asio::io_context receiver_io;
+    boost::asio::io_context transmitter_io;
+
+    /* source_address armed, which is what no other case here does, and tunnel mode, which is what no
+       other case here reaches. */
+    LibFlute::Receiver receiver(receiver_interface,
+                                multicast_address,
+                                port,
+                                tsi,
+                                receiver_io,
+                                /*source_address*/ "127.0.0.1",
+                                receiver_tunnel_endpoint,
+                                /*tunnel_source*/ loopback,
+                                strip_inner_ip_udp);
+
+    LibFlute::Transmitter transmitter(multicast_address,
+                                      port,
+                                      tsi,
+                                      mtu,
+                                      0,
+                                      transmitter_io,
+                                      receiver_tunnel_endpoint,
+                                      LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005,
+                                      /*active*/ true,
+                                      /*source_address*/ std::nullopt,
+                                      /*content_fec_oti*/ std::nullopt,
+                                      LibFlute::Profile::Ts26517);
+
+    const auto now = std::chrono::system_clock::now();
+    const std::string location("e2e/tunnel-mode-ssm-payload.bin");
+    const std::vector<uint8_t> expected_payload(4096, 0x5a);
+
+    auto file_description = std::make_shared<LibFlute::Transmitter::FileDescription>(location, expected_payload);
+    file_description->set_content_type("application/octet-stream");
+    file_description->set_expiry_time(now + 60s);
+
+    std::promise<std::shared_ptr<LibFlute::File>> received_file_promise;
+    auto received_file_future = received_file_promise.get_future();
+
+    receiver.register_completion_callback(
+        [&received_file_promise, &receiver, &receiver_io](const std::shared_ptr<LibFlute::File>& file)
+        {
+            received_file_promise.set_value(file);
+            receiver.stop();
+            receiver_io.stop();
+        });
+
+    transmitter.register_completion_callback(
+        [&transmitter, &transmitter_io](const uint32_t)
+        {
+            transmitter.deactivate();
+            transmitter_io.stop();
+        });
+
+    std::thread receiver_thread([&receiver_io]() { receiver_io.run(); });
+    std::thread transmitter_thread([&transmitter_io]() { transmitter_io.run(); });
+
+    transmitter.send(file_description);
+
+    const auto received_ready = received_file_future.wait_for(10s);
+
+    transmitter.deactivate();
+    transmitter_io.stop();
+    receiver.stop();
+    receiver_io.stop();
+    if (transmitter_thread.joinable()) transmitter_thread.join();
+    if (receiver_thread.joinable()) receiver_thread.join();
+
+    /* The failure this guards against is a silent one: every packet discarded before parsing, so the
+       file simply never arrives and nothing else looks wrong. */
+    ASSERT_EQ(received_ready, std::future_status::ready)
+        << "no file arrived through the receiver's tunnel path with a source-specific join; "
+           "a datagram reaching handle_tunnel_receive_from() is most likely being rejected by a "
+           "sender-address check that does not apply to it";
+
+    const auto received_file = received_file_future.get();
+    ASSERT_NE(received_file, nullptr);
+    EXPECT_EQ(received_file->meta().content_location, location);
+    ASSERT_EQ(received_file->length(), expected_payload.size());
+    EXPECT_EQ(std::memcmp(received_file->buffer(), expected_payload.data(), expected_payload.size()), 0);
+}
