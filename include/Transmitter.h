@@ -701,6 +701,14 @@ namespace LibFlute {
       */
       void close_object(uint32_t toi);
 
+     /**
+      * Can transmit compressed objects
+      *
+      * Check if the Transmitter Profile allows object compression.
+      * @return `true` if the Profile configured for this Transmitter allows compressed objects to be sent, `false` otherwise.
+      */
+      bool can_compress_objects();
+
     private:
       void send_fdt();
       void send_next_packet();
