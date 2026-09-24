@@ -471,6 +471,18 @@ namespace LibFlute {
       const FileDeliveryTable& fdt() const { return *_fdt; }
 
      /**
+      *  Whether this Transmitter can send a content-encoded (compressed)
+      *  FileDescription. False under a 3GPP profile, which provides no
+      *  carrier for the resulting transfer length (see the citations at
+      *  send()'s own check, which throws rather than silently sending an
+      *  object requested compressed uncompressed). A caller that wants to
+      *  compress only when this sender can carry it should check this
+      *  before calling FileDescription::set_compression(), rather than
+      *  discover the rejection from a caught exception.
+      */
+      bool can_compress_objects() const { return !is_3gpp(_profile); }
+
+     /**
       * Get UDP Tunnel Address
       *
       * @return The optional UDP Tunnel Address for the Transmitter to use.
