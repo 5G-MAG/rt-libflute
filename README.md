@@ -136,6 +136,66 @@ sudo setcap 'cap_net_admin=eip' ./flute-transmitter
 sudo setcap 'cap_net_admin=eip' ./flute-receiver
 ````
 
+## Conformance profiles: 3GPP MBMS versus general FLUTE
+
+This library serves two different sets of obligations, and they are not degrees of strictness.
+A session correct as general FLUTE can be non-conformant as 3GPP MBMS, because the MBMS Download
+Profile forbids the sender things RFC 3926 permits.
+
+Select with the trailing `profile` argument on the `Transmitter` and `FileDeliveryTable`
+constructors. **The default is `Profile::Mbms3gpp`**, since that is what the specifications
+mandating FLUTE for this project require. Pass `Profile::GeneralFlute` for a non-3GPP session.
+
+```cpp
+LibFlute::Transmitter tx(addr, port, tsi, mtu, rate, io);                        // 3GPP, default
+LibFlute::Transmitter tx(addr, port, tsi, mtu, rate, io, {}, ns, true, {},
+                         LibFlute::Profile::GeneralFlute);                       // plain RFC 3926
+```
+
+The profile decides which obligations apply. The FDT namespace, a separate argument, decides
+which XML schema is emitted. They are independent.
+
+### What the 3GPP profile adds, over general FLUTE
+
+Every row below is a restriction on the **sender** only. Receive-side parsing is unchanged in all
+cases, because TS 26.346 annex L.4 keeps most of these optional-to-support for receivers and
+mandatory for two of them, so a receiver that refused them would break against a conformant peer.
+
+| Attribute / element | General FLUTE (RFC 3926) | 3GPP MBMS (TS 26.346 annex L.4) |
+|---|---|---|
+| `Transfer-Length` | permitted | not carried (clause L.4.4) |
+| `Complete` | permitted on FDT-Instance | not used by the sender (clause L.4.3) |
+| `FEC-OTI-FEC-Instance-ID` | permitted | not used at either level (clause L.4.2) |
+| `Content-Encoding` | any value | absent, or `gzip` only; other values refused (clause L.4.2) |
+| `Group` element | permitted | not used (clause L.4.2); this library never emits it |
+
+Behaviour required by RFC 3926 and the ALC/LCT documents beneath it applies in **both** profiles
+and is not switchable: the LCT header format, the 20-bit FDT Instance ID and its wraparound, the
+mandatory `Expires` attribute on FDT-Instance, and EXT_FTI support on any TOI other than 0.
+
+FLUTE version 2 (RFC 6726) and RaptorQ (RFC 6330) are referenced by neither TS 26.346 nor
+TS 26.517 at this baseline and are not part of either profile here. They live on their own
+branches.
+
+### Congestion control: conformant for 3GPP, not implemented for general FLUTE
+
+This library implements no congestion control. It offers a static, operator-set transmit rate
+limit, which is rate limiting with no feedback and no response to loss, and it writes the CCI
+field as zeros without reading it on receive.
+
+Under the **3GPP profile that is conformant**, and deliberately so.
+TS 26.346 V18.2.0 clause L.4.7: "As indicated in clause 7.2.4 of this specification, congestion
+control is not used for FLUTE delivery in MBMS, and therefore, FLUTE channelization should be
+provided by a single FLUTE channel with single rate transport."
+
+Under **general FLUTE it is not implemented**, and the requirement is a MUST.
+RFC 3450 clause 2.2: "Implementors of ALC MUST implement a multiple rate feedback-free
+congestion control building block that is in accordance to RFC 2357 [12]."
+
+So a non-3GPP deployment using `Profile::GeneralFlute` over a path where congestion matters is
+outside RFC 3450, and this is stated rather than claimed either way. Nothing here is presented as
+implementing that clause.
+
 ## Testing
 
 To execute the tests make sure to have built the project with testing enabled (see Step 3: Build setup).
