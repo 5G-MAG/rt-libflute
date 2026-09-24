@@ -1099,6 +1099,11 @@ auto Transmitter::close_object(uint32_t toi) -> void
   _closing_objects.insert(toi);
 }
 
+auto Transmitter::can_compress_objects() -> bool
+{
+  return !is_3gpp(_profile);
+}
+
 auto Transmitter::start_fdt_repeat_timer() -> void
 {
     _fdt_timer.expires_after(std::chrono::seconds(_fdt_repeat_interval));
