@@ -32,21 +32,24 @@ auto LibFlute::EncodingSymbol::from_payload(char* encoded_data, size_t data_len,
     throw std::runtime_error("Only unencoded or gzipped content is supported");
   }
 
-  if (fec_oti.encoding_id == FecScheme::CompactNoCode) {
+  // The FEC Payload ID wire format (16-bit SBN + 16-bit ESI, network byte
+  // order) is the same for Compact No-Code (RFC 5052 §5.1) and Raptor
+  // (RFC 5053 §3.1): only the *meaning* of an ESI >= the source block's
+  // symbol count differs (repair symbol vs. undefined).
+  if (fec_oti.encoding_id == FecScheme::CompactNoCode ||
+      fec_oti.encoding_id == FecScheme::Raptor) {
     source_block_number = ntohs(*(uint16_t*)encoded_data);
     encoded_data += 2;
     encoding_symbol_id = ntohs(*(uint16_t*)encoded_data);
     encoded_data += 2;
     data_len -= 4;
   } else {
-    throw std::runtime_error("Only compact no-code FEC is supported");
+    throw std::runtime_error("Unsupported FEC scheme");
   }
 
   int nof_symbols = std::ceil((float)data_len / (float)fec_oti.encoding_symbol_length);
   for (int i = 0; i < nof_symbols; i++) {
-    if (fec_oti.encoding_id == FecScheme::CompactNoCode) {
-      symbols.emplace_back(encoding_symbol_id, source_block_number, encoded_data, std::min(data_len, (size_t)fec_oti.encoding_symbol_length), fec_oti.encoding_id);
-    }
+    symbols.emplace_back(encoding_symbol_id, source_block_number, encoded_data, std::min(data_len, (size_t)fec_oti.encoding_symbol_length), fec_oti.encoding_id);
     encoded_data += fec_oti.encoding_symbol_length;
     encoding_symbol_id++;
   }
@@ -58,8 +61,21 @@ auto LibFlute::EncodingSymbol::to_payload(const std::vector<EncodingSymbol>& sym
 {
   size_t len = 0;
   auto ptr = encoded_data;
+
+  /* The FEC Payload ID written below is taken from the first symbol, so an empty list dereferences
+     end(). Reachable from the public API: AlcPacket's send-side constructor passes whatever vector
+     it was given straight through, and nothing checked. An ALC packet with no encoding symbols has
+     no payload to identify, so this is refused rather than silently emitting a header-only packet.
+     RULES.md rule 12 prefers failing loudly over quietly producing something meaningless.
+     `code-derived, no spec claim`. */
+  if (symbols.empty()) {
+    throw std::invalid_argument("Cannot build an ALC packet payload from an empty symbol list");
+  }
+
   auto first_symbol = symbols.begin();
-  if (fec_oti.encoding_id == FecScheme::CompactNoCode && data_len >= 4) {
+  bool scheme_supported = fec_oti.encoding_id == FecScheme::CompactNoCode ||
+                           fec_oti.encoding_id == FecScheme::Raptor;
+  if (scheme_supported && data_len >= 4) {
     *((uint16_t*)ptr) = htons(first_symbol->source_block_number());
     ptr += 2;
     *((uint16_t*)ptr) = htons(first_symbol->id());
@@ -67,7 +83,7 @@ auto LibFlute::EncodingSymbol::to_payload(const std::vector<EncodingSymbol>& sym
     len += 4;
     data_len -= 4;
   } else {
-    throw std::runtime_error("Only compact no-code FEC is supported");
+    throw std::runtime_error("Unsupported FEC scheme");
   }
 
   for (const auto& symbol : symbols) {
@@ -85,19 +101,22 @@ auto LibFlute::EncodingSymbol::to_payload(const std::vector<EncodingSymbol>& sym
 }
 
 auto LibFlute::EncodingSymbol::decode_to(char* buffer, size_t max_length) const -> void {
-  if (_fec_scheme == FecScheme::CompactNoCode) {
-    if (_data_len <= max_length) {
-      memcpy(buffer, _encoded_data, _data_len);
-    }
+  // An encoding symbol's on-the-wire bytes are already its final content --
+  // for Raptor that's true just as much as for Compact No-Code: a
+  // repair symbol's payload is the fully-computed LT combination by the time
+  // it reaches this class. What to *do* with a repair symbol (recognising
+  // its ESI is >= the source block's symbol count, feeding it to the block's
+  // decoder, and reconstructing any missing source symbols) is File's job,
+  // not this class's -- see File::put_symbol.
+  if (_data_len <= max_length) {
+    memcpy(buffer, _encoded_data, _data_len);
   }
 }
 
 auto LibFlute::EncodingSymbol::encode_to(char* buffer, size_t max_length) const -> size_t {
-  if (_fec_scheme == FecScheme::CompactNoCode) {
-    if (_data_len <= max_length) {
-      memcpy(buffer, _encoded_data, _data_len);
-      return _data_len;
-    }
+  if (_data_len <= max_length) {
+    memcpy(buffer, _encoded_data, _data_len);
+    return _data_len;
   }
   return 0;
 }
