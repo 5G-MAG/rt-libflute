@@ -95,7 +95,7 @@ TEST(ProfileContentEncodingTest, RefusedUnderThe3gppProfiles) {
   Transmitter tx("239.1.2.30", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                  /*tunnel_endpoint*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE,
                  /*active*/ false, /*source_address*/ std::nullopt,
-                 /*content_fec_oti*/ std::nullopt, Profile::Ts26517);
+                 /*content_fec_oti*/ std::nullopt, Profile::MBS);
   EXPECT_THROW(tx.send(gzipped_file()), std::runtime_error)
       << "a gzip-encoded object was accepted under a profile that cannot carry its transfer length";
 }
@@ -105,7 +105,7 @@ TEST(ProfileContentEncodingTest, AllowedOutsideTheProfile) {
   Transmitter tx("239.1.2.31", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                  /*tunnel_endpoint*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE,
                  /*active*/ false, /*source_address*/ std::nullopt,
-                 /*content_fec_oti*/ std::nullopt, Profile::Unprofiled);
+                 /*content_fec_oti*/ std::nullopt, Profile::None);
   EXPECT_NO_THROW(tx.send(gzipped_file()))
       << "plain RFC 3926 permits Content-Encoding, and Transfer-Length with it";
 }
@@ -115,7 +115,7 @@ TEST(ProfileContentEncodingTest, AnUnencodedObjectIsUnaffected) {
   Transmitter tx("239.1.2.32", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                  /*tunnel_endpoint*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE,
                  /*active*/ false, /*source_address*/ std::nullopt,
-                 /*content_fec_oti*/ std::nullopt, Profile::Ts26517);
+                 /*content_fec_oti*/ std::nullopt, Profile::MBS);
   const std::vector<char> payload(4096, 'y');
   auto fd = std::make_shared<Transmitter::FileDescription>("test/plain.bin", payload);
   fd->set_content_type("application/octet-stream");

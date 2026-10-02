@@ -416,7 +416,7 @@ TEST(ProfileFecSchemeTest, RaptorQRefusedUnderThe3gppProfiles) {
       LibFlute::Transmitter("239.1.4.10", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                             std::nullopt, LibFlute::FileDeliveryTable::FDT_NS_NONE,
                             /*active*/ false, std::nullopt, raptorq_oti(),
-                            LibFlute::Profile::Ts26517),
+                            LibFlute::Profile::MBS),
       std::runtime_error);
 }
 
@@ -426,7 +426,7 @@ TEST(ProfileFecSchemeTest, RaptorQAllowedOutsideThe3gppProfiles) {
       LibFlute::Transmitter("239.1.4.11", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                             std::nullopt, LibFlute::FileDeliveryTable::FDT_NS_NONE,
                             /*active*/ false, std::nullopt, raptorq_oti(),
-                            LibFlute::Profile::Unprofiled));
+                            LibFlute::Profile::None));
 }
 
 TEST(ProfileFecSchemeTest, RaptorRemainsAvailableUnderThe3gppProfiles) {
@@ -437,7 +437,7 @@ TEST(ProfileFecSchemeTest, RaptorRemainsAvailableUnderThe3gppProfiles) {
       LibFlute::Transmitter("239.1.4.12", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                             std::nullopt, LibFlute::FileDeliveryTable::FDT_NS_NONE,
                             /*active*/ false, std::nullopt, oti,
-                            LibFlute::Profile::Ts26517));
+                            LibFlute::Profile::MBS));
 }
 
 /* The admissible set is closed, so the check has to be a match against the two schemes clause
@@ -458,7 +458,7 @@ TEST(ProfileFecSchemeTest, ASchemeOutsideTheAdmissibleSetIsRefusedUnderThe3gppPr
       LibFlute::Transmitter("239.1.4.13", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                             std::nullopt, LibFlute::FileDeliveryTable::FDT_NS_NONE,
                             /*active*/ false, std::nullopt, oti,
-                            LibFlute::Profile::Ts26346),
+                            LibFlute::Profile::MBMS::Download),
       std::runtime_error);
 }
 

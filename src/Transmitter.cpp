@@ -527,7 +527,7 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
      RaptorQ is RFC 6330, which neither document references, so a receiver operating either profile
      has no obligation to decode it and in general will not. Refused here rather than sent: a
      session no receiver can decode is worse than a refusal at setup. Available under
-     Profile::Unprofiled, which is what this branch adds it for.
+     Profile::None, which is what this branch adds it for.
 
      Tested against the admissible set rather than against RaptorQ by name, so that a scheme added
      later is refused under a profile until someone decides otherwise, rather than admitted by
@@ -536,7 +536,7 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
       !is_3gpp_admissible_fec_scheme(content_fec_oti->encoding_id)) {
     throw std::runtime_error(
         "the 3GPP profiles admit only the Compact No-Code and Raptor FEC schemes; use one of those "
-        "or Profile::Unprofiled");
+        "or Profile::None");
   }
 
   /* The 3GPP profiles fix the TSI field at its narrowest width, so a value that would need the
@@ -553,7 +553,7 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
   if (is_3gpp(_profile) && tsi > 0xFFFF) {
     throw std::runtime_error(
         "TSI does not fit the 16-bit field TS 26.346 clause 7.2.7 fixes for it; use a TSI of 65535 "
-        "or less, or Profile::Unprofiled where RFC 3451 permits the wider encoding");
+        "or less, or Profile::None where RFC 3451 permits the wider encoding");
   }
 
   if (source_address) {
@@ -641,7 +641,7 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
     } else if (_fec_oti.max_source_block_length > ceiling_k) {
       throw std::runtime_error(
           "max_source_block_length would put a sub-block over the 256 KB ceiling TS 26.346 clause "
-          "7.2.3 sets for the 3GPP profiles; lower it, shorten the symbol, or use Profile::Unprofiled");
+          "7.2.3 sets for the 3GPP profiles; lower it, shorten the symbol, or use Profile::None");
     }
   }
 
@@ -907,7 +907,7 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
     throw std::runtime_error(
         "Content encoding is not used by this sender under the 3GPP profiles, which provide no way "
         "to carry the resulting transfer length. See 5G-MAG/Standards#212, and the citations at this "
-        "check. Use Profile::Unprofiled, or send the object uncompressed.");
+        "check. Use Profile::None, or send the object uncompressed.");
   }
 
   if (file_description->has_tsi() && file_description->tsi() != _tsi) {

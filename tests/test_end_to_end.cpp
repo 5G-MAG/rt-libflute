@@ -78,7 +78,7 @@ namespace
         std::string expected_location;
         /* Which obligation set the sender is held to. The FDT schema follows from it, so the
            namespace is not a separate knob: FileDeliveryTable derives it from the profile. */
-        LibFlute::Profile profile = LibFlute::Profile::Ts26517;
+        LibFlute::Profile profile = LibFlute::Profile::MBS;
     };
 
     auto tunnel_bridge_stats(TunnelRuntime& tunnel_runtime) -> TunnelBridgeStats
@@ -537,29 +537,29 @@ TEST(FluteEndToEndTest, TransmitsFileToReceiver)
    of the three. The receiver takes no profile, by design: the profile constrains what a sender
    may emit, while TS 26.346 V18.2.0 clause L.4.1 places a support obligation on the receiver, so
    one receiver has to handle every profile's output. These three exercise exactly that. */
-TEST(FluteEndToEndProfileTest, Ts26517TransmitsAndReconstructs)
+TEST(FluteEndToEndProfileTest, MbsTransmitsAndReconstructs)
 {
     EndToEndOptions options;
     options.tunneled = false;
-    options.profile = LibFlute::Profile::Ts26517;
+    options.profile = LibFlute::Profile::MBS;
     options.expected_location = "e2e/ts26517-payload.bin";
     run_end_to_end_scenario(options);
 }
 
-TEST(FluteEndToEndProfileTest, Ts26346TransmitsAndReconstructs)
+TEST(FluteEndToEndProfileTest, MbmsDownloadTransmitsAndReconstructs)
 {
     EndToEndOptions options;
     options.tunneled = false;
-    options.profile = LibFlute::Profile::Ts26346;
+    options.profile = LibFlute::Profile::MBMS::Download;
     options.expected_location = "e2e/ts26346-payload.bin";
     run_end_to_end_scenario(options);
 }
 
-TEST(FluteEndToEndProfileTest, UnprofiledTransmitsAndReconstructs)
+TEST(FluteEndToEndProfileTest, NoneTransmitsAndReconstructs)
 {
     EndToEndOptions options;
     options.tunneled = false;
-    options.profile = LibFlute::Profile::Unprofiled;
+    options.profile = LibFlute::Profile::None;
     options.expected_location = "e2e/unprofiled-payload.bin";
     run_end_to_end_scenario(options);
 }
@@ -632,7 +632,7 @@ TEST(FluteEndToEndTest, TransmitsFileToTunnelModeReceiverWithSourceSpecificJoin)
                                       /*active*/ true,
                                       /*source_address*/ std::nullopt,
                                       /*content_fec_oti*/ std::nullopt,
-                                      LibFlute::Profile::Ts26517);
+                                      LibFlute::Profile::MBS);
 
     const auto now = std::chrono::system_clock::now();
     const std::string location("e2e/tunnel-mode-ssm-payload.bin");

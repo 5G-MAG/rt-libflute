@@ -205,11 +205,11 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, FecOti fec_
   /* Each 3GPP profile fixes the FDT schema, so the namespace is taken from the profile rather than
      from a separate argument that could disagree with it.
 
-     TS 26.517 V18.6.0 clause 6.2.1, for Ts26517: "The MBSTF shall use the Profiled FDT Schema
+     TS 26.517 V18.6.0 clause 6.2.1, for Profile::MBS: "The MBSTF shall use the Profiled FDT Schema
      according to clause L.6 of TS 26.346 [7] to describe the object list currently being
      transmitted in the MBS Distribution Session."
 
-     TS 26.346 V18.2.0 clause 7.2.9, for Ts26346: "The extended FLUTE FDT instance schema
+     TS 26.346 V18.2.0 clause 7.2.9, for Profile::MBMS::Download: "The extended FLUTE FDT instance schema
      defined in clause 7.2.10.1 (based on the one in RFC 3926 [9]) shall be used."
 
      General FLUTE keeps whatever the caller asked for, RFC 3926 fixing no namespace. */
@@ -224,10 +224,10 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, FecOti fec_
         "Compact No-Code FEC scheme");
   }
 
-  switch (_profile) {
-    case Profile::Ts26517:        _fdt_namespace = FDT_NS_3GPP_CONSOLIDATED_V2; break;
-    case Profile::Ts26346: _fdt_namespace = FDT_NS_DRAFT_2005; break;
-    case Profile::Unprofiled: break;
+  if (_profile == Profile::MBS) {
+    _fdt_namespace = FDT_NS_3GPP_CONSOLIDATED_V2;
+  } else if (_profile == Profile::MBMS::Download) {
+    _fdt_namespace = FDT_NS_DRAFT_2005;
   }
 }
 
@@ -602,7 +602,7 @@ auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> bool
   if (is_3gpp(_profile) && !fe.content_encoding.empty() && fe.content_encoding != "gzip") {
     throw std::invalid_argument(
         "Content-Encoding must be absent or gzip in the MBMS Download Profile, got: " +
-        fe.content_encoding + ". Use Profile::Unprofiled for a non-3GPP session.");
+        fe.content_encoding + ". Use Profile::None for a non-3GPP session.");
   }
 
   /* Content-Type is required of the sender under either 3GPP profile, so an entry that carries
@@ -616,12 +616,12 @@ auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> bool
      The obligation reaches both 3GPP profiles, by different routes, and reaches neither of them the
      same way it reaches plain FLUTE:
 
-       - Ts26346, the MBMS Download Profile, is bound by clause L.4.2 directly.
-       - Ts26517, 5G MBS object distribution, inherits it. TS 26.517 V18.6.0 clause 6.2.1: "If
+       - MBMS::Download, the MBMS Download Profile, is bound by clause L.4.2 directly.
+       - MBS, 5G MBS object distribution, inherits it. TS 26.517 V18.6.0 clause 6.2.1: "If
          FLUTE [12] is used to realise the Object Distribution Method, the MBS Distribution Session
          shall conform to the MBMS Download Profile as defined in clause L.4 of TS 26.346 [7] with
          the additional requirements in clause 6.2 of the present document."
-       - Unprofiled is plain FLUTE and is deliberately left alone. RFC 3926 clause 3.4.2: "Each
+       - None is plain FLUTE and is deliberately left alone. RFC 3926 clause 3.4.2: "Each
          "File" element MUST contain at least two attributes "TOI" and "Content-Location"."
          Content-Type is not among them; the same clause lists it under what a File element "MAY
          contain". A session outside the 3GPP profiles keeps that behaviour.
@@ -635,7 +635,7 @@ auto LibFlute::FileDeliveryTable::add(const FileEntry& fe) -> bool
   if (is_3gpp(_profile) && fe.content_type.empty()) {
     throw std::invalid_argument(
         "Content-Type must be set in the MBMS Download Profile; TOI " + std::to_string(fe.toi) +
-        " (" + fe.content_location + ") has none. Set one, or use Profile::Unprofiled for a "
+        " (" + fe.content_location + ") has none. Set one, or use Profile::None for a "
         "non-3GPP session.");
   }
   /* One entry per TOI: a TOI identifies exactly one transport object within a session, so a second
@@ -764,7 +764,7 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
        Transfer-Length is the first item of that list.
 
        The prohibition binds a sender operating the MBMS Download Profile, which is what
-       Profile::Ts26517 selects. Under Profile::Unprofiled the session is plain RFC 3926, where
+       Profile::MBS selects. Under Profile::None the session is plain RFC 3926, where
        the attribute is permitted, so it is kept. Keyed on the profile rather than on the FDT
        namespace because the namespace says which schema is emitted, not which obligations apply.
 

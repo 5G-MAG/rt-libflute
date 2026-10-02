@@ -518,14 +518,14 @@ std::unique_ptr<LibFlute::Transmitter> raptor_tx(boost::asio::io_context& io, co
 
 TEST(SubBlockCeilingTest, AnOversizedSourceBlockIsRefusedUnderThe3gppProfiles) {
   boost::asio::io_context io;
-  EXPECT_THROW(raptor_tx(io, "239.1.5.10", 8192, LibFlute::Profile::Ts26517), std::runtime_error);
-  EXPECT_THROW(raptor_tx(io, "239.1.5.11", 8192, LibFlute::Profile::Ts26346), std::runtime_error);
+  EXPECT_THROW(raptor_tx(io, "239.1.5.10", 8192, LibFlute::Profile::MBS), std::runtime_error);
+  EXPECT_THROW(raptor_tx(io, "239.1.5.11", 8192, LibFlute::Profile::MBMS::Download), std::runtime_error);
 }
 
 TEST(SubBlockCeilingTest, TheDefaultIsBroughtUnderTheCeilingRatherThanRefused) {
   boost::asio::io_context io;
   // No maximum named, so the sender picks one, and what it picks must satisfy the clause.
-  auto tx = raptor_tx(io, "239.1.5.12", 0, LibFlute::Profile::Ts26517);
+  auto tx = raptor_tx(io, "239.1.5.12", 0, LibFlute::Profile::MBS);
   const auto& oti = tx->fec_oti();
   EXPECT_GT(oti.max_source_block_length, 0u);
   EXPECT_LT(static_cast<uint64_t>(oti.max_source_block_length) * oti.encoding_symbol_length,
@@ -534,13 +534,13 @@ TEST(SubBlockCeilingTest, TheDefaultIsBroughtUnderTheCeilingRatherThanRefused) {
 
 TEST(SubBlockCeilingTest, AValueUnderTheCeilingIsHonoured) {
   boost::asio::io_context io;
-  auto tx = raptor_tx(io, "239.1.5.13", 100, LibFlute::Profile::Ts26517);
+  auto tx = raptor_tx(io, "239.1.5.13", 100, LibFlute::Profile::MBS);
   EXPECT_EQ(tx->fec_oti().max_source_block_length, 100u);
 }
 
 TEST(SubBlockCeilingTest, NotAppliedOutsideThe3gppProfiles) {
   boost::asio::io_context io;
-  EXPECT_NO_THROW(raptor_tx(io, "239.1.5.14", 8192, LibFlute::Profile::Unprofiled));
+  EXPECT_NO_THROW(raptor_tx(io, "239.1.5.14", 8192, LibFlute::Profile::None));
 }
 
 // --- Objects too small to fill four symbols ---------------------------------------------------

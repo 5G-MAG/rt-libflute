@@ -111,11 +111,11 @@ class FdtCarouselProfileTest : public ::testing::TestWithParam<ProfileCase> {};
 INSTANTIATE_TEST_SUITE_P(
     AllProfiles, FdtCarouselProfileTest,
     ::testing::Values(
-        ProfileCase{"Ts26517", LibFlute::Profile::Ts26517,
+        ProfileCase{"MBS", LibFlute::Profile::MBS,
                     LibFlute::FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2, 0},
-        ProfileCase{"Ts26346", LibFlute::Profile::Ts26346,
+        ProfileCase{"MbmsDownload", LibFlute::Profile::MBMS::Download,
                     LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005, 2},
-        ProfileCase{"Unprofiled", LibFlute::Profile::Unprofiled,
+        ProfileCase{"None", LibFlute::Profile::None,
                     LibFlute::FileDeliveryTable::FDT_NS_RFC3926, 4}),
     [](const ::testing::TestParamInfo<ProfileCase>& info) { return info.param.name; });
 

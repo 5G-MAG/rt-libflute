@@ -60,7 +60,7 @@ std::shared_ptr<LibFlute::File> run_transfer(
   LibFlute::Transmitter transmitter(
       mcast_addr, port, tsi, 1400, 0, transmitter_io, std::nullopt,
       LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005, true, std::nullopt, fec_oti,
-      LibFlute::Profile::Unprofiled);
+      LibFlute::Profile::None);
 
   auto file_description = std::make_shared<LibFlute::Transmitter::FileDescription>(
       "e2e/payload.bin", expected_payload.c_str(), expected_payload.size());
