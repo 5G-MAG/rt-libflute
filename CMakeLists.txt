@@ -74,5 +74,11 @@ target_link_libraries( flute
 # ---- Tests Subdirectory (optional) ----
 option(BUILD_TESTING "Build unit tests" ON)
 if (BUILD_TESTING AND NOT DEFINED GTEST_DISABLE)
+  # enable_testing() must be called here, in the top-level list file, and not only in tests/.
+  # CTest writes CTestTestfile.cmake into the directory that enables testing and its children, so
+  # calling it only in the subdirectory leaves the build root with no test list at all. `ctest` run
+  # from the build root then prints "No tests were found" and exits 0, which is the normal
+  # invocation and the one CI uses: a green result having executed nothing.
+  enable_testing()
   add_subdirectory(tests)
 endif()

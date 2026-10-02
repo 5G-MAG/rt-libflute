@@ -37,6 +37,17 @@ namespace LibFlute {
       *  @returns shared_ptr to the received file
       */
       typedef std::function<void(std::shared_ptr<LibFlute::File>)> completion_callback_t;
+
+     /**
+      *  Definition of a callback invoked whenever an incoming packet carries the LCT Close
+      *  Session and/or Close Object flag (RFC 3451 clause 5.1, 'A' and 'B' bits), registered through
+      *  ::register_close_notification_callback.
+      *
+      *  @param session_closed True if the sender signalled the whole session is ending
+      *  @param object_closed True if the sender signalled no further data for this TOI
+      *  @param toi The TOI the packet carrying the flag(s) was for
+      */
+      typedef std::function<void(bool session_closed, bool object_closed, uint32_t toi)> close_notification_callback_t;
      /**
       *  Default constructor.
       *
@@ -70,7 +81,7 @@ namespace LibFlute {
       *  @param spi Security Parameter Index value to use
       *  @param key AES key as a hex string (without leading 0x). Must be an even number of characters long.
       */
-      void enable_ipsec( uint32_t spi, const std::string& aes_key);
+      void enable_ipsec( uint32_t spi, const std::string& aes_key, const std::string& auth_key = "");
 
      /**
       *  List all current files
@@ -95,6 +106,13 @@ namespace LibFlute {
       *  @param cb Function to call on file completion
       */
       void register_completion_callback(completion_callback_t cb) { _completion_cb = cb; };
+
+     /**
+      *  Register a callback for LCT Close Session / Close Object notifications
+      *
+      *  @param cb Function to call when an incoming packet carries either flag
+      */
+      void register_close_notification_callback(close_notification_callback_t cb) { _close_cb = cb; };
 
       void stop() { _running = false; }
     private:
@@ -126,9 +144,15 @@ namespace LibFlute {
       uint32_t _fdt_in_progress_instance_id = 0xFFFFFFFF;
       std::map<uint64_t, std::shared_ptr<LibFlute::File>> _files;
       std::mutex _files_mutex;
+      /** The session's source address where the caller named one, parsed once at construction so
+       *  the per-packet check costs no parsing. Empty for an any-source session. */
+      std::optional<boost::asio::ip::address> _expected_source;
+
       std::string _mcast_address;
+      unsigned short _mcast_port;
 
       completion_callback_t _completion_cb = nullptr;
+      close_notification_callback_t _close_cb = nullptr;
 
       bool _running = true;
 
