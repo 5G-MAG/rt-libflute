@@ -50,7 +50,7 @@ endif()
 
 target_sources(flute
   PRIVATE
-  src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp src/IpSec.cpp
+  src/Receiver.cpp src/Transmitter.cpp src/AlcPacket.cpp src/File.cpp src/EncodingSymbol.cpp src/FileDeliveryTable.cpp src/IpSec.cpp src/Webrc.cpp
     utils/base64.cpp
   PUBLIC
     include/Receiver.h include/Transmitter.h include/File.h
