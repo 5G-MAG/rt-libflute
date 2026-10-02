@@ -525,7 +525,7 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
   if (is_3gpp(_profile) && tsi > 0xFFFF) {
     throw std::runtime_error(
         "TSI does not fit the 16-bit field TS 26.346 clause 7.2.7 fixes for it; use a TSI of 65535 "
-        "or less, or Profile::Unprofiled where RFC 3451 permits the wider encoding");
+        "or less, or Profile::None where RFC 3451 permits the wider encoding");
   }
 
   if (source_address) {
@@ -798,7 +798,7 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
     throw std::runtime_error(
         "Content encoding is not used by this sender under the 3GPP profiles, which provide no way "
         "to carry the resulting transfer length. See 5G-MAG/Standards#212, and the citations at this "
-        "check. Use Profile::Unprofiled, or send the object uncompressed.");
+        "check. Use Profile::None, or send the object uncompressed.");
   }
 
   if (file_description->has_tsi() && file_description->tsi() != _tsi) {
