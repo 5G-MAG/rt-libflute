@@ -122,10 +122,16 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
   if (_lct_header.sct_flag) hdr_ptr += 4;
   if (_lct_header.ert_flag) hdr_ptr += 4;
 
-  if (_lct_header.codepoint == 0) {
-    _fec_oti.encoding_id = FecScheme::CompactNoCode;
-  } else {
-    throw std::runtime_error("Only Compact No-Code FEC is supported");
+  /* The FEC scheme is taken from the Codepoint and from nothing else, using the identity mapping
+     onto the registered FEC Encoding IDs, which is what the send side writes.
+
+     RFC 3450 clause 2.2: "The LCT header contains a Codepoint field that MAY be used to
+     communicate to a receiver the settings for information that may vary during a session." */
+  switch (_lct_header.codepoint) {
+    case 0: _fec_oti.encoding_id = FecScheme::CompactNoCode; break;
+    case 1: _fec_oti.encoding_id = FecScheme::Raptor; break;
+    default: throw std::runtime_error("Unsupported FEC scheme (codepoint " +
+                                      std::to_string(_lct_header.codepoint) + ")");
   }
 
   /* RFC 3451 clause 5.1: "if HDR_LEN is larger than the length of the standard header then the
@@ -162,25 +168,48 @@ LibFlute::AlcPacket::AlcPacket(char* data, size_t len)
                         break; // ignored
                       }
       case EXT_FTI: {
-                      if (_fec_oti.encoding_id == FecScheme::CompactNoCode) {
-                        if (hel != 4) {
-                          throw std::runtime_error("Invalid length for EXT_FTI header extension");
-                        }
-                        _fec_oti.transfer_length = (uint64_t)(ntohs(*(uint16_t*)ext_ptr)) << 32;
-                        ext_ptr += 2;
-                        _fec_oti.transfer_length |= (uint64_t)(ntohl(*(uint32_t*)ext_ptr));
-                        ext_ptr += 4;
-                        /* The FEC Instance ID, not a reserved field. RFC 3926 clause 5.1.1:
-                           "It is only present if the value of FEC Encoding ID is in the range of
-                           128-255. When the value of FEC Encoding ID is in the range of 0-127, this
-                           field is set to 0." Compact No-Code is 0, so it is stepped over rather
-                           than read; the width is the same either way. */
-                        ext_ptr += 2;
-                        _fec_oti.encoding_symbol_length = ntohs(*(uint16_t*)ext_ptr);
-                        ext_ptr += 2;
-                        _fec_oti.max_source_block_length = ntohl(*(uint32_t*)ext_ptr);
-                        _has_fti = true;
+                      /* Common FEC OTI: 10 octets of Transfer Length (48 bits, in the high
+                         bits of a 6-octet field), the 16-bit FEC Instance ID, and Encoding Symbol Length
+                         (16 bits), the same for every scheme. hel covers this plus 4 octets of
+                         scheme-specific OTI, so hel == 4 words in total.
+
+                         The clause is 6.2.4, not 5.2 as this comment previously said, and it
+                         defines the two elements read below.
+                         RFC 5052 clause 6.2.4: "Transfer-Length:  a non-negative integer
+                         indicating the length of the object in octets"
+                         RFC 5052 clause 6.2.4: "Encoding-Symbol-Length:  a non-negative integer
+                         indicating the length of each encoding symbol in octets"
+
+                         The 16 bits between them are the FEC Instance ID, not padding, and are
+                         stepped over rather than read because a Fully-Specified scheme sets them to
+                         zero. RFC 3926 clause 5.1.1: "When the value of FEC Encoding ID is in the
+                         range of 0-127, this field is set to 0." */
+                      if (hel != 4) {
+                        throw std::runtime_error("Invalid length for EXT_FTI header extension");
                       }
+                      _fec_oti.transfer_length = (uint64_t)(ntohs(*(uint16_t*)ext_ptr)) << 32;
+                      ext_ptr += 2;
+                      _fec_oti.transfer_length |= (uint64_t)(ntohl(*(uint32_t*)ext_ptr));
+                      ext_ptr += 4;
+                      ext_ptr += 2; // reserved
+                      _fec_oti.encoding_symbol_length = ntohs(*(uint16_t*)ext_ptr);
+                      ext_ptr += 2;
+
+                      if (_fec_oti.encoding_id == FecScheme::CompactNoCode) {
+                        // Compact No-Code adds only the Maximum Source Block Length here.
+                        _fec_oti.max_source_block_length = ntohl(*(uint32_t*)ext_ptr);
+                      } else if (_fec_oti.encoding_id == FecScheme::Raptor) {
+                        /* RFC 5053 clause 3.2.3: "a 4-octet field consisting of the parameters
+                           Z (2 octets), N (1 octet), and Al (1 octet)" */
+                        _fec_oti.nof_source_blocks = ntohs(*(uint16_t*)ext_ptr);
+                        ext_ptr += 2;
+                        _fec_oti.nof_sub_blocks = *(uint8_t*)ext_ptr;
+                        ext_ptr += 1;
+                        _fec_oti.symbol_alignment = *(uint8_t*)ext_ptr;
+                      } else {
+                        throw std::runtime_error("EXT_FTI parsing not implemented for this FEC scheme");
+                      }
+                      _has_fti = true;
                       break;
                     }
       case EXT_FDT: {
@@ -276,6 +305,28 @@ LibFlute::AlcPacket::AlcPacket(uint64_t tsi, uint16_t toi, LibFlute::FecOti fec_
   lct_header->close_session_flag = close_session_flag ? 1 : 0;
   lct_header->close_object_flag = close_object_flag ? 1 : 0;
   lct_header->lct_header_len = lct_header_len;
+
+  /* The Codepoint was never written, so every packet went out carrying 0 whatever scheme was in
+     use, because the buffer is calloc'ed. The receive path reads the FEC scheme from this field
+     and from nothing else, so a Raptor session was described on the wire as Compact No-Code and
+     its EXT_FTI was then parsed with the wrong field layout.
+
+     Using the field for this is permitted rather than required, and the mapping used here is the
+     one the document itself offers as the example.
+     RFC 3450 clause 2.2: "The LCT header contains a Codepoint field that MAY be used to
+     communicate to a receiver the settings for information that may vary during a session."
+
+     LIMITATION, recorded per SUBMISSION-RULES S12. The mapping is supposed to be advertised out
+     of band, and this library does not generate the Session Description, so the identity mapping
+     it uses is not advertised anywhere. A peer assuming a different mapping will misread the
+     field. Both halves of this library agree on the identity mapping, which is what the receive
+     path above already assumed and what this line makes true on the wire.
+     RFC 3450 clause 2.2: "If used, the mapping between settings and Codepoint values is to be
+     communicated in the Session Description, and this mapping is outside the scope of this
+     document."
+
+     Not a 3GPP matter: TS 26.346 does not mention the Codepoint field at all. */
+  lct_header->codepoint = static_cast<uint8_t>(_fec_oti.encoding_id);
   auto hdr_ptr = _buffer + 4;
   auto payload_ptr = _buffer + 4 * lct_header_len;
 
