@@ -448,7 +448,7 @@ namespace LibFlute {
           bool active = true,
           const std::optional<std::string>& source_address = std::nullopt,
           const std::optional<FecOti>& content_fec_oti = std::nullopt,
-          Profile profile = Profile::Unprofiled,
+          Profile profile = Profile::None,
           uint32_t fec_redundancy_level = kDefaultFecRedundancyLevel);
 
      /**
@@ -751,6 +751,14 @@ namespace LibFlute {
       * @param toi The TOI to close.
       */
       void close_object(uint32_t toi);
+
+     /**
+      * Can transmit compressed objects
+      *
+      * Check if the Transmitter Profile allows object compression.
+      * @return `true` if the Profile configured for this Transmitter allows compressed objects to be sent, `false` otherwise.
+      */
+      bool can_compress_objects();
 
     private:
       void send_fdt();
