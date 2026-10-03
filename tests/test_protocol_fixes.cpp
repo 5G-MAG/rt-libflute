@@ -18,6 +18,11 @@
 #include <thread>
 #include <vector>
 
+#include <sstream>
+
+#include "spdlog/spdlog.h"
+#include "spdlog/sinks/ostream_sink.h"
+
 #include "AlcPacket.h"
 #include "File.h"
 #include "FileDeliveryTable.h"
@@ -1303,4 +1308,40 @@ TEST(ProfileNamesTest, TheThreeProfilesAreDistinctAndOnlyNoneIsNot3gpp) {
   EXPECT_FALSE(is_3gpp(Profile::None));
   EXPECT_TRUE(is_3gpp(Profile::MBS));
   EXPECT_TRUE(is_3gpp(Profile::MBMS::Download));
+}
+
+
+/* 5G-MAG/rt-libflute#111: the FDT debug log formatted the received buffer as a C string, so it read
+   past the length it was given until it happened to meet a NUL. The bytes taken off the wire carry no
+   terminator. Here the buffer holds a valid FDT Instance followed, past the length passed in, by a
+   marker: a log bounded by the length never shows the marker. */
+TEST(FdtDebugLogTest, TheLogStopsAtTheLengthGivenNotAtANul) {
+  const std::string fdt =
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+      "<FDT-Instance xmlns=\"urn:IETF:metadata:2005:FLUTE:FDT\" Expires=\"4000000000\""
+      " FEC-OTI-FEC-Encoding-ID=\"0\" FEC-OTI-Maximum-Source-Block-Length=\"64\""
+      " FEC-OTI-Encoding-Symbol-Length=\"1400\">"
+      "<File TOI=\"1\" Content-Location=\"obj.bin\" Content-Length=\"10\"/></FDT-Instance>";
+  const std::string marker = "MARKER-PAST-THE-END";
+  std::vector<char> wire(fdt.begin(), fdt.end());
+  wire.insert(wire.end(), marker.begin(), marker.end());
+  wire.push_back('\0');  // only so the unbounded read stops here rather than running off the heap
+
+  std::ostringstream captured;
+  auto previous = spdlog::default_logger();
+  auto capture = std::make_shared<spdlog::logger>(
+      "fdt-capture", std::make_shared<spdlog::sinks::ostream_sink_mt>(captured));
+  capture->set_level(spdlog::level::debug);
+  spdlog::set_default_logger(capture);
+  try {
+    LibFlute::FileDeliveryTable parsed(1, wire.data(), fdt.size());
+  } catch (...) {
+    spdlog::set_default_logger(previous);
+    throw;
+  }
+  spdlog::set_default_logger(previous);
+
+  const auto log = captured.str();
+  ASSERT_NE(log.find("Received new FDT"), std::string::npos) << "the debug line was not logged:\n" << log;
+  EXPECT_EQ(log.find(marker), std::string::npos) << "the log read past the buffer:\n" << log;
 }
