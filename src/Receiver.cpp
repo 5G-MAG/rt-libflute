@@ -69,8 +69,14 @@ namespace {
 LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& address,
     short port, uint64_t tsi,
     boost::asio::io_context& io_context,
-    const std::string& source_address)
+    const std::string& source_address,
+    const std::optional<boost::asio::ip::udp::endpoint>& tunnel_address,
+    const std::optional<boost::asio::ip::address>& tunnel_source,
+    const std::optional<packet_modifier_t>& packet_modifier)
     : _socket(io_context)
+    , _tunnel_source(tunnel_source)
+    , _packet_modifier(packet_modifier.value_or(nullptr))
+    , _tunnel_data(max_length)
     , _tsi(tsi)
     , _mcast_address(address)
     , _mcast_port(static_cast<unsigned short>(port))
@@ -179,6 +185,32 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
     }
 
     arm_receive();
+
+    // https://github.com/5G-MAG/rt-libflute/issues/66 -- see packet_modifier_t's comment
+    // for the full rationale. This is deliberately IN ADDITION to the multicast join above,
+    // not instead of it: a Receiver has no way to know in advance whether local multicast
+    // delivery will actually work on a given deployment's path, so both are always armed and
+    // whichever one actually receives something feeds the same session state.
+    if (tunnel_address) {
+      if (!packet_modifier) {
+        // Fail closed, not open: an unset packet_modifier with no way to locate the ALC
+        // payload inside an unknown encapsulation means every tunnel datagram would have to
+        // be discarded anyway (see packet_modifier_t) -- so skip standing up the tunnel
+        // socket at all and say why, rather than silently binding a socket that can never
+        // usefully deliver anything.
+        spdlog::error("Receiver: tunnel_address given without a packet_modifier -- "
+                      "tunnel reception disabled, only the multicast path (if any) is active");
+      } else {
+        _tunnel_socket = std::make_unique<boost::asio::ip::udp::socket>(io_context);
+        _tunnel_socket->open(tunnel_address->protocol());
+        _tunnel_socket->set_option(boost::asio::ip::udp::socket::reuse_address(true));
+        _tunnel_socket->set_option(boost::asio::socket_base::receive_buffer_size(16*1024*1024));
+        _tunnel_socket->bind(*tunnel_address);
+        spdlog::info("Receiver: listening for tunnelled datagrams on {}:{}",
+                     tunnel_address->address().to_string(), tunnel_address->port());
+        arm_tunnel_receive();
+      }
+    }
 }
 
 LibFlute::Receiver::~Receiver()
@@ -206,6 +238,63 @@ namespace {
   }
 }
 
+auto LibFlute::Receiver::arm_tunnel_receive() -> void
+{
+  auto alive = _alive;
+  _tunnel_data.resize(max_length);
+  _tunnel_socket->async_receive_from(
+      boost::asio::buffer(_tunnel_data), _tunnel_sender_endpoint,
+      [this, alive](const boost::system::error_code& error, size_t bytes_recvd) {
+        if (!*alive) return;
+        handle_tunnel_receive_from(error, bytes_recvd);
+      });
+}
+
+auto LibFlute::Receiver::handle_tunnel_receive_from(const boost::system::error_code& error,
+    size_t bytes_recvd) -> void
+{
+  if (!_running) return;
+
+  if (!error)
+  {
+    if (_tunnel_source && _tunnel_sender_endpoint.address() != *_tunnel_source) {
+      // The "extra address checking" this issue asks for on top of whatever packet_modifier
+      // does -- see tunnel_source's comment in the header: this is a generic,
+      // encapsulation-agnostic admission check the library can reasonably own itself, unlike
+      // parsing any particular header format.
+      spdlog::warn("Receiver: discarding tunnel datagram from unexpected source {} (expected {})",
+                   _tunnel_sender_endpoint.address().to_string(), _tunnel_source->to_string());
+    } else {
+      _tunnel_data.resize(bytes_recvd);
+      size_t payload_offset = _packet_modifier(_tunnel_data);
+      if (payload_offset < _tunnel_data.size()) {
+        process_alc_datagram(reinterpret_cast<char*>(_tunnel_data.data() + payload_offset), _tunnel_data.size() - payload_offset);
+      } else {
+        spdlog::trace("Receiver: packet_modifier reported no usable payload in tunnel datagram, discarding");
+      }
+    }
+
+    arm_tunnel_receive();
+  }
+  else
+  {
+    // BUG FIX (found live, 2026-08-11): this used to just log and return, never re-arming --
+    // a single transient socket error (e.g. an ICMP port-unreachable surfacing as a UDP
+    // socket error on a subsequent read, confirmed live with the raw-capture-relay's
+    // loopback sendto() path) permanently killed tunnel reception for the rest of the
+    // process's life, with no further log output and no way to recover short of restarting
+    // rt-mbs-client. operation_aborted is the one error that means "don't re-arm" (this
+    // Receiver, or its socket, is being torn down -- re-arming here would race the
+    // destructor); every other error is presumed transient and worth retrying.
+    if (error != boost::asio::error::operation_aborted) {
+      spdlog::error("tunnel receive_from error: {} -- re-arming", error.message());
+      arm_tunnel_receive();
+    } else {
+      spdlog::error("tunnel receive_from error: {}", error.message());
+    }
+  }
+}
+
 auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key, const std::string& auth_key) -> void
 {
   LibFlute::IpSec::enable_esp(spi, _mcast_address, _mcast_port, LibFlute::IpSec::Direction::In,
@@ -219,6 +308,33 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
 
   if (!error)
   {
+    process_alc_datagram(_data, bytes_recvd);
+    arm_receive();
+  }
+  else
+  {
+    // BUG FIX: see the matching NOTE in handle_tunnel_receive_from() -- same "never re-arms
+    // on error" bug, same fix (re-arm on anything except operation_aborted).
+    if (error != boost::asio::error::operation_aborted) {
+      spdlog::error("receive_from error: {} -- re-arming", error.message());
+      arm_receive();
+    } else {
+      spdlog::error("receive_from error: {}", error.message());
+    }
+  }
+}
+
+// The actual ALC/FLUTE processing, shared by the normal multicast-socket path
+// (handle_receive_from(), unmodified) and the tunnel path (handle_tunnel_receive_from(),
+// after packet_modifier_t has located the payload inside whatever encapsulation wrapped it --
+// see packet_modifier_t's comment in the header for why these are two independent,
+// simultaneously-armed receive loops feeding into this one function rather than two entirely
+// separate copies of it).
+auto LibFlute::Receiver::process_alc_datagram(char* data, size_t bytes_recvd) -> void
+{
+    /* Discards below return rather than arming: both receive loops arm their own socket after
+       calling this, so arming here would leave two outstanding reads on the plain socket, and would
+       arm the plain socket from a datagram that arrived through the tunnel. */
     spdlog::trace("Received {} bytes", bytes_recvd);
     /* The source is checked before the packet is parsed, so traffic that is not this session's
        cannot reach the parser at all, let alone influence how a parse failure is handled.
@@ -235,12 +351,11 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
     if (_expected_source && _sender_endpoint.address() != *_expected_source) {
       spdlog::warn("Discarding packet from {}, which is not this session's source {}",
                    _sender_endpoint.address().to_string(), _expected_source->to_string());
-      arm_receive();
       return;
     }
 
     try {
-      auto alc = LibFlute::AlcPacket(_data, bytes_recvd);
+      auto alc = LibFlute::AlcPacket(data, bytes_recvd);
 
       if (alc.tsi() == _tsi) {
 
@@ -269,7 +384,6 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
            its session, and RFC 3926 clause 3.1 is what makes such a peer send one. */
         const size_t payload_len = bytes_recvd - alc.header_length();
         if (payload_len == 0) {
-          arm_receive();
           return;
         }
 
@@ -281,7 +395,6 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
         if (payload_len < 4) {
           spdlog::warn("Discarding a {}-byte payload, too short to hold a FEC Payload ID",
                        payload_len);
-          arm_receive();
           return;
         }
 
@@ -328,11 +441,24 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
           // the FDT once it arrives (see the merge below) or left blank if it never does.
           FileDeliveryTable::FileEntry fe{static_cast<uint32_t>(alc.toi()), "", static_cast<uint32_t>(alc.fec_oti().transfer_length), "", "", 0, alc.fec_oti()};
           _files[alc.toi()] = std::make_shared<LibFlute::File>(fe);
+
+          /* The FDT may already have described this object and been unable to say how long it is,
+             in which case its entry is waiting here rather than lost: adopt it now, so the object
+             is written to its Content-Location and decoded per its Content-Encoding instead of
+             landing anonymous and still compressed. */
+          if (_fdt) {
+            for (const auto& entry : _fdt->file_entries()) {
+              if (entry.toi == alc.toi()) {
+                _files[alc.toi()]->adopt_fdt_metadata(entry);
+                break;
+              }
+            }
+          }
         }
 
         if (_files.find(alc.toi()) != _files.end() && !_files[alc.toi()]->complete()) {
           auto encoding_symbols = LibFlute::EncodingSymbol::from_payload(
-              _data + alc.header_length(),
+              data + alc.header_length(),
               payload_len,
               _files[alc.toi()]->fec_oti(),
               alc.content_encoding());
@@ -404,6 +530,18 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
                   existing_file = _files.end();
                 }
                 if (existing_file == _files.end()) {
+                  if (file_entry.fec_oti.transfer_length == 0) {
+                    /* The FDT does not say how long this object is on the wire, which happens for a
+                       content-encoded object under the MBMS Download Profile: TS 26.346 V18.2.0
+                       clause L.4.4 forbids the sender from carrying Transfer-Length, and RFC 3926
+                       clause 3.4.2 only lets Content-Length stand in when no encoding was applied.
+                       Starting reception now would mean partitioning the object to a length that is
+                       simply unknown. Wait instead: the object's own EXT_FTI carries the length, and
+                       the branch above picks this entry's metadata up again once it arrives. */
+                    spdlog::debug("Deferring reception for TOI {}: transfer length not in the FDT, "
+                                  "awaiting the object's EXT_FTI", file_entry.toi);
+                    continue;
+                  }
                   spdlog::debug("Starting reception for file with TOI {}: {} ({})", file_entry.toi,
                       file_entry.content_location, file_entry.content_type);
                   _files.emplace(file_entry.toi, std::make_shared<LibFlute::File>(file_entry));
@@ -427,13 +565,6 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
       // std::terminate().
       spdlog::warn("Failed to decode ALC/FLUTE packet: {}", ex);
     }
-
-    arm_receive();
-  }
-  else
-  {
-    spdlog::error("receive_from error: {}", error.message());
-  }
 }
 
 auto LibFlute::Receiver::file_list() -> std::vector<std::shared_ptr<LibFlute::File>>

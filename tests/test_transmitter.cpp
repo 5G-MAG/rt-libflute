@@ -313,7 +313,7 @@ TEST(ProfileContentEncodingTest, RefusedUnderThe3gppProfiles) {
   boost::asio::io_context io;
   const std::vector<char> payload(4096, 'x');
 
-  for (auto profile : {LibFlute::Profile::Ts26517, LibFlute::Profile::Ts26346}) {
+  for (auto profile : {LibFlute::Profile::MBS, LibFlute::Profile::MBMS::Download}) {
     Transmitter tx("127.0.0.1", 5000, /*tsi*/ 1234, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                    /*tunnel*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ true,
                    /*source_address*/ std::nullopt, /*content_fec_oti*/ std::nullopt, profile);
@@ -329,7 +329,7 @@ TEST(ProfileContentEncodingTest, AllowedOutsideTheProfiles) {
   Transmitter tx("127.0.0.1", 5000, /*tsi*/ 1234, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                  /*tunnel*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ true,
                  /*source_address*/ std::nullopt,
-                 /*content_fec_oti*/ std::nullopt, LibFlute::Profile::Unprofiled);
+                 /*content_fec_oti*/ std::nullopt, LibFlute::Profile::None);
   auto fd = std::make_shared<Transmitter::FileDescription>("test/compressible.bin", payload);
   fd->set_compression(Transmitter::FileDescription::COMPRESSION_GZIP);
   EXPECT_NO_THROW(tx.send(fd));
@@ -342,7 +342,7 @@ TEST(ProfileContentEncodingTest, AnUnencodedObjectIsUnaffectedUnderTheProfile) {
   Transmitter tx("127.0.0.1", 5000, /*tsi*/ 1234, /*mtu*/ 1400, /*rate_limit*/ 0, io,
                  /*tunnel*/ std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ true,
                  /*source_address*/ std::nullopt,
-                 /*content_fec_oti*/ std::nullopt, LibFlute::Profile::Ts26517);
+                 /*content_fec_oti*/ std::nullopt, LibFlute::Profile::MBS);
   auto fd = std::make_shared<Transmitter::FileDescription>("test/plain.bin", payload);
   fd->set_content_type("application/octet-stream");
   EXPECT_NO_THROW(tx.send(fd));
