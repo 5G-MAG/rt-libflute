@@ -111,11 +111,6 @@ namespace LibFlute {
        */
       static const Profile MBS;
 
-      /** Transitional names, kept so existing callers build while they move to the names above. */
-      [[deprecated("use Profile::MBS")]] static const Profile Ts26517;
-      [[deprecated("use Profile::MBMS::Download")]] static const Profile Ts26346;
-      [[deprecated("use Profile::None")]] static const Profile Unprofiled;
-
       constexpr bool operator==(const Profile &other) const { return _value == other._value; }
       constexpr bool operator!=(const Profile &other) const { return _value != other._value; }
 
@@ -138,9 +133,6 @@ namespace LibFlute {
   inline constexpr Profile Profile::None{0};
   inline constexpr Profile Profile::MBMS::Download{1};
   inline constexpr Profile Profile::MBS{2};
-  inline constexpr Profile Profile::Ts26517{2};
-  inline constexpr Profile Profile::Ts26346{1};
-  inline constexpr Profile Profile::Unprofiled{0};
 
   /** True for the profiles bound by the 3GPP obligations, i.e. anything but an unprofiled session. */
   constexpr bool is_3gpp(Profile p) { return p != Profile::None; }

@@ -1289,18 +1289,7 @@ TEST(ProfileContentTypeTest, AContentTypeIsCarriedIntoTheEmittedFdt) {
 
 
 /* The profile names agreed on 5G-MAG/rt-libflute#99 are Profile::None, Profile::MBMS::Download and
-   Profile::MBS. The previous names remain as deprecated aliases so that existing callers, the BMSC
-   and the MBSTF among them, keep building while they move; this pins each alias to the value it
-   stands for, so the transition cannot silently change a caller's profile. */
-TEST(ProfileNamesTest, TransitionalNamesEqualTheFinalOnes) {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  EXPECT_TRUE(Profile::Ts26517 == Profile::MBS);
-  EXPECT_TRUE(Profile::Ts26346 == Profile::MBMS::Download);
-  EXPECT_TRUE(Profile::Unprofiled == Profile::None);
-#pragma GCC diagnostic pop
-}
-
+   Profile::MBS. */
 TEST(ProfileNamesTest, TheThreeProfilesAreDistinctAndOnlyNoneIsNot3gpp) {
   EXPECT_TRUE(Profile::None != Profile::MBS);
   EXPECT_TRUE(Profile::None != Profile::MBMS::Download);
