@@ -68,7 +68,8 @@ namespace LibFlute {
       AlcPacket(uint64_t tsi, CloseSession);
 
       AlcPacket(uint64_t tsi, uint16_t toi, FecOti fec_oti, const std::vector<EncodingSymbol>& symbols, size_t max_size, uint32_t fdt_instance_id,
-                bool close_session_flag = false, bool close_object_flag = false);
+                bool close_session_flag = false, bool close_object_flag = false,
+                bool include_fti = false);
 
      /**
       *  Default destructor.

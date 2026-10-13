@@ -448,7 +448,7 @@ namespace LibFlute {
           bool active = true,
           const std::optional<std::string>& source_address = std::nullopt,
           const std::optional<FecOti>& content_fec_oti = std::nullopt,
-          Profile profile = Profile::Unprofiled,
+          Profile profile = Profile::None,
           uint32_t fec_redundancy_level = kDefaultFecRedundancyLevel);
 
      /**
