@@ -35,3 +35,5 @@ build/
 .idea
 cmake-build-debug/
 build-release/
+# Written by meson when this repository is consumed as a subproject.
+.meson-subproject-wrap-hash.txt

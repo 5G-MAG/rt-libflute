@@ -53,6 +53,13 @@ static void create_udp_pkt( char *udp_buffer, const boost::asio::ip::udp::endpoi
 static void create_ip_hdr( char *ip_buffer, const boost::asio::ip::udp::endpoint &endpoint, size_t pkt_size,
                            const boost::asio::ip::address &local_address );
 static uint16_t calculate_sum( const uint8_t *buffer, size_t len );
+
+/** Fixed IP header length for the family in use: 20 bytes for an IPv4 header without options,
+ *  40 for an IPv6 header, which is fixed length and needs no extension header here.
+ *
+ *  RFC 8200 clause 8.3: "an upper-layer protocol must take into account the larger size of the
+ *  IPv6 header relative to the IPv4 header." */
+static size_t ip_header_length(bool is_v6) { return is_v6 ? 40 : 20; }
 static void write_uint16_be( uint8_t *buffer, uint16_t value );
 static void write_uint32_be( uint8_t *buffer, uint32_t value );
 
@@ -361,7 +368,15 @@ Transmitter::FileDescription &Transmitter::FileDescription::set_expiry_time(
 {
   auto diff = std::chrono::duration_cast<std::chrono::seconds>(expiry_time - _get_ntp_epoch());
   _file_entry.expires = diff.count();
-  _file_entry.cache_control.cache_expires = _file_entry.expires;
+
+  return *this;
+}
+
+Transmitter::FileDescription &Transmitter::FileDescription::set_cache_expiry_time(
+								const Transmitter::FileDescription::date_time_type &expiry_time)
+{
+  auto diff = std::chrono::duration_cast<std::chrono::seconds>(expiry_time - _get_ntp_epoch());
+  _file_entry.cache_control.cache_expires = diff.count();
 
   return *this;
 }
@@ -477,7 +492,10 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
                            boost::asio::io_context& io_context,
                            const std::optional<boost::asio::ip::udp::endpoint> &tunnel_endpoint,
                            Transmitter::FdtNamespace fdt_namespace, bool active,
-                           const std::optional<std::string> &source_address )
+                           const std::optional<std::string> &source_address,
+                           const std::optional<FecOti> &content_fec_oti,
+                           Profile profile,
+                           uint32_t fec_redundancy_level )
     : _endpoint(boost::asio::ip::make_address(destination_address), port)
     , _source_address()
     , _socket(io_context, _endpoint.protocol())
@@ -493,18 +511,37 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
     , _tunnel_endpoint(tunnel_endpoint)
     , _tunnel_local_address()
     , _active(active)
+    , _profile(profile)
+    , _fec_redundancy_level(fec_redundancy_level)
 {
+  /* The 3GPP profiles fix the TSI field at its narrowest width, so a value that would need the
+     wider encoding cannot be signalled under either of them. This is a clause 7.2 rule, binding on
+     MBMS download generally, not one of annex L.4's profile restrictions.
+
+     TS 26.346 V18.2.0 clause 7.2.7: "The Transmission Session Identifier (TSI) field shall be of
+     length 16 bits (S=0, H=1, 16 bits)."
+
+     Outside the profile RFC 3451 permits 16, 32 or 48 bits and the wider encoding is used, which is
+     what the TSI widening on this branch is for. Refused rather than truncated, since truncation
+     puts the session on an identifier nobody configured, and rather than widened, since that emits
+     a header the profile forbids. */
+  if (is_3gpp(_profile) && tsi > 0xFFFF) {
+    throw std::runtime_error(
+        "TSI does not fit the 16-bit field TS 26.346 clause 7.2.7 fixes for it; use a TSI of 65535 "
+        "or less, or Profile::None where RFC 3451 permits the wider encoding");
+  }
+
   if (source_address) {
     _source_address = boost::asio::ip::make_address(source_address.value());
   }
   _max_payload = mtu -
-    20 - // IPv4 header
+    ip_header_length(_endpoint.address().is_v6()) - // IP header, v4 or v6
      8 - // UDP header
     32 - // ALC Header with EXT_FDT and EXT_FTI
      4;  // SBN and ESI for compact no-code FEC
   if (_tunnel_endpoint.has_value()) {
     // Remove extra overhead for UDP tunnelling, if set
-    _max_payload -= 20 + // IPv4 header
+    _max_payload -= ip_header_length(_endpoint.address().is_v6()) + // IP header, v4 or v6
                     8; // UDP header
     boost::asio::ip::udp::socket local_socket(_io_context, _tunnel_endpoint.value().protocol());
     local_socket.connect(_tunnel_endpoint.value());
@@ -515,15 +552,75 @@ Transmitter::Transmitter ( const std::string& destination_address, short port,
   _socket.set_option(boost::asio::ip::multicast::enable_loopback(true));
   _socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
 
+  /* The un-tunnelled carriage sends straight to the announced destination, usually a multicast
+     group, and that send has to originate from the configured source address or a receiver
+     filtering on the announced source (an SDP a=source-filter, say) never matches it.
+
+     Not under a tunnel. There the source address is the inner header's source, written by
+     create_ip_hdr(), and need not name a local interface at all: the encapsulated source may be the
+     application provider's while this sender sits on another network. Binding the socket to it would
+     fail in that case, and otherwise steers the outer datagram by an address that does not govern
+     it. The outer datagram is left to normal routing, which is what the any address gives. */
   if (_source_address && !_tunnel_endpoint) {
     _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
+    // bind() only sets the packet's claimed source address; it does not choose which interface a
+    // multicast send actually goes out on. Without IP_MULTICAST_IF (boost's outbound_interface),
+    // the kernel picks the default route's interface for every multicast send regardless of the
+    // bound source (confirmed live: `ip route get <group>` with no source hint resolves to the
+    // machine's default-route interface, not the one implied by _source_address; the same query
+    // with `from <_source_address>` resolves correctly, which is what a bound send does NOT
+    // consult for multicast). code-derived, no spec claim: this is host networking, not FLUTE's
+    // own behaviour, so only applied when the source is IPv4 (the only case this project's own
+    // deployments use).
+    if (_source_address->is_v4()) {
+      _socket.set_option(boost::asio::ip::multicast::outbound_interface(_source_address->to_v4()));
+    }
   }
 
-  _fec_oti = FecOti{
-    .encoding_id = FecScheme::CompactNoCode,
-    .encoding_symbol_length = _max_payload,
-    .max_source_block_length = max_source_block_length};
-  _fdt = std::make_unique<FileDeliveryTable>(1, _fec_oti, fdt_namespace);
+  // Caller-supplied FEC OTI selects the scheme; otherwise Compact No-Code.
+  if (content_fec_oti.has_value() && content_fec_oti->encoding_id != FecScheme::CompactNoCode) {
+    _fec_oti = FecOti{
+      .encoding_id = content_fec_oti->encoding_id,
+      .encoding_symbol_length = _max_payload,
+      .max_source_block_length = content_fec_oti->max_source_block_length,
+      .max_number_of_encoding_symbols = content_fec_oti->max_number_of_encoding_symbols};
+  } else {
+    _fec_oti = FecOti{
+      .encoding_id = FecScheme::CompactNoCode,
+      .encoding_symbol_length = _max_payload,
+      .max_source_block_length = max_source_block_length};
+  }
+  /* A sub-block must stay under 256 KB under either 3GPP profile.
+
+     TS 26.346 V18.2.0 clause 7.2.3: "The values of N, Z, T and A shall be set such that the
+     sub-block size is less than 256 KB."
+
+     N, Z, T and A are the RFC 5053 scheme-specific parameters, so this binds the Raptor path. This
+     implementation fixes N at 1 (see FecOti::nof_sub_blocks), so a sub-block is a source block and
+     the constraint reduces to K * T < 256 KB, where T is the encoding symbol length settled above.
+
+     The obligation is on how the sender chooses the parameters, so the ceiling is applied as the
+     default when the caller named no maximum, rather than refusing a session that asked for nothing
+     wrong. A caller who does name a maximum above the ceiling is refused, since honouring it would
+     breach the clause and silently shrinking it would discard a stated configuration. */
+  if (is_3gpp(profile) && _fec_oti.encoding_id == FecScheme::Raptor) {
+    constexpr uint32_t kMaxSubBlockSize = 256 * 1024;
+    const uint32_t ceiling_k = (kMaxSubBlockSize - 1) / _fec_oti.encoding_symbol_length;
+    if (ceiling_k == 0) {
+      throw std::runtime_error(
+          "encoding symbol length leaves no room for a source block under the 256 KB sub-block "
+          "ceiling TS 26.346 clause 7.2.3 sets");
+    }
+    if (_fec_oti.max_source_block_length == 0) {
+      _fec_oti.max_source_block_length = ceiling_k;
+    } else if (_fec_oti.max_source_block_length > ceiling_k) {
+      throw std::runtime_error(
+          "max_source_block_length would put a sub-block over the 256 KB ceiling TS 26.346 clause "
+          "7.2.3 sets for the 3GPP profiles; lower it, shorten the symbol, or use Profile::None");
+    }
+  }
+
+  _fdt = std::make_unique<FileDeliveryTable>(1, _fec_oti, fdt_namespace, profile);
 
   if (_active) {
     start_fdt_repeat_timer();
@@ -555,13 +652,13 @@ auto Transmitter::udp_tunnel_address(std::optional<boost::asio::ip::udp::endpoin
     if (_tunnel_endpoint) _tunnel_endpoint = new_tunnel_endpoint;
   } else if (_tunnel_endpoint) {
     /* removing tunnel */
-    _max_payload += 20 + // IPv4 header
+    _max_payload += ip_header_length(_endpoint.address().is_v6()) + // IP header, v4 or v6
                     8; // UDP header
     _tunnel_endpoint = std::nullopt;
   } else {
     /* new tunnel */
     _tunnel_endpoint = std::move(new_tunnel_endpoint);
-    _max_payload -= 20 + // IPv4 header
+    _max_payload -= ip_header_length(_endpoint.address().is_v6()) + // IP header, v4 or v6
                     8; // UDP header
   }
 
@@ -598,8 +695,22 @@ auto Transmitter::endpoint(boost::asio::ip::udp::endpoint &&destination) -> Tran
 auto Transmitter::source_address(const std::optional<boost::asio::ip::address> &source_address) -> Transmitter&
 {
   _source_address = source_address;
+  /* The un-tunnelled carriage sends straight to the announced destination, usually a multicast
+     group, and that send has to originate from the configured source address or a receiver
+     filtering on the announced source (an SDP a=source-filter, say) never matches it.
+
+     Not under a tunnel. There the source address is the inner header's source, written by
+     create_ip_hdr(), and need not name a local interface at all: the encapsulated source may be the
+     application provider's while this sender sits on another network. Binding the socket to it would
+     fail in that case, and otherwise steers the outer datagram by an address that does not govern
+     it. The outer datagram is left to normal routing, which is what the any address gives. */
   if (_source_address && !_tunnel_endpoint) {
     _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
+    // See the same bind()'s own comment in start(): bind() alone does not steer a multicast
+    // send onto this address's interface, only IP_MULTICAST_IF does.
+    if (_source_address->is_v4()) {
+      _socket.set_option(boost::asio::ip::multicast::outbound_interface(_source_address->to_v4()));
+    }
   }
   return *this;
 }
@@ -607,15 +718,30 @@ auto Transmitter::source_address(const std::optional<boost::asio::ip::address> &
 auto Transmitter::source_address(std::optional<boost::asio::ip::address> &&source_address) -> Transmitter&
 {
   _source_address = std::move(source_address);
+  /* The un-tunnelled carriage sends straight to the announced destination, usually a multicast
+     group, and that send has to originate from the configured source address or a receiver
+     filtering on the announced source (an SDP a=source-filter, say) never matches it.
+
+     Not under a tunnel. There the source address is the inner header's source, written by
+     create_ip_hdr(), and need not name a local interface at all: the encapsulated source may be the
+     application provider's while this sender sits on another network. Binding the socket to it would
+     fail in that case, and otherwise steers the outer datagram by an address that does not govern
+     it. The outer datagram is left to normal routing, which is what the any address gives. */
   if (_source_address && !_tunnel_endpoint) {
     _socket.bind(boost::asio::ip::udp::endpoint(_source_address.value(),0));
+    // See the same bind()'s own comment in start(): bind() alone does not steer a multicast
+    // send onto this address's interface, only IP_MULTICAST_IF does.
+    if (_source_address->is_v4()) {
+      _socket.set_option(boost::asio::ip::multicast::outbound_interface(_source_address->to_v4()));
+    }
   }
   return *this;
 }
 
-auto Transmitter::enable_ipsec(uint32_t spi, const std::string& key) -> void
+auto Transmitter::enable_ipsec(uint32_t spi, const std::string& key, const std::string& auth_key) -> void
 {
-  IpSec::enable_esp(spi, _mcast_address, IpSec::Direction::Out, key);
+  IpSec::enable_esp(spi, _mcast_address, _endpoint.port(), IpSec::Direction::Out, key,
+                    auth_key);
 }
 
 auto Transmitter::handle_send_to(const boost::system::error_code& error) -> void
@@ -634,16 +760,57 @@ auto Transmitter::seconds_since_epoch() -> uint64_t
 
 auto Transmitter::send_fdt() -> void {
   if (_fdt->file_entries().empty()) return;
-  _fdt->set_expires(seconds_since_epoch() + _fdt_repeat_interval * 2);
-  auto fdt = _fdt->to_string();
+
+  const uint32_t instance_id = _fdt->instance_id();
+  const bool already_serialised = !_fdt_string_storage.empty() && _fdt_serialised_instance_id == instance_id;
+
+  if (already_serialised) {
+    /* This instance has already been serialised, so re-send those exact bytes rather than
+       building new ones. An FDT Instance is identified by its ID, and a receiver reassembles
+       its symbols under that identity.
+       RFC 3926 clause 3.4.1: "Each FDT Instance is uniquely identified within the file delivery
+       session by its FDT Instance ID."
+       Re-serialising on every repeat gave the same ID a different byte string each time (the
+       FDT-Instance Expires attribute moves with the clock), so a receiver combining symbols it
+       believed belonged to one object was mixing two, and reassembly could never validate.
+       Repeating an instance is expected -- the same clause's own model allows it: "A certain FDT
+       Instance may be repeated several times during a session" -- but a repeat has to be the same
+       instance, not a new document under an old number. */
+    std::lock_guard<std::mutex> guard(_files_mutex);
+    auto in_flight = _files.find(0);
+    if (in_flight != _files.end() && in_flight->second && !in_flight->second->complete()) {
+      /* Still going out. Replacing it here would restart it from its first symbol, and under a
+         rate limit an FDT spanning several symbols would never reach its last one. */
+      return;
+    }
+  } else {
+    _fdt->set_expires(seconds_since_epoch() + _fdt_repeat_interval * 2);
+    // Store into the member, not a local - see _fdt_string_storage's own doc
+    // comment: the File below only keeps a raw pointer into this buffer, and
+    // that pointer is read later, asynchronously, by send_next_packet().
+    _fdt_string_storage = _fdt->to_string();
+    _fdt_serialised_instance_id = instance_id;
+  }
+  // The FDT itself always goes out as Compact No-Code, regardless of what
+  // FEC scheme protects this Transmitter's content: it's re-sent on its own
+  // repeat timer already (real redundancy without needing FEC), and
+  // Raptor has a minimum source-block size (K >= 4) that a small FDT's
+  // single source block can fall below --
+  // caught by testing a real Transmitter -> Receiver transfer, not by any
+  // in-process File/codec test, all of which constructed content Files
+  // directly and never exercised send_fdt()'s own File construction.
+  FecOti fdt_fec_oti{
+    .encoding_id = FecScheme::CompactNoCode,
+    .encoding_symbol_length = _fec_oti.encoding_symbol_length,
+    .max_source_block_length = 64};
   auto file = std::make_shared<File>(
         0,
-        _fec_oti,
+        fdt_fec_oti,
         "",
         "",
         seconds_since_epoch() + _fdt_repeat_interval * 2,
-        (char*)fdt.c_str(),
-        fdt.length(),
+        (char*)_fdt_string_storage.c_str(),
+        _fdt_string_storage.length(),
         true);
   if (file) {
     file->set_fdt_instance_id( _fdt->instance_id() );
@@ -675,6 +842,7 @@ auto Transmitter::send(
         expires,
         data,
         length);
+  file->set_fec_redundancy_level(_fec_redundancy_level);
 
   _fdt->add(file->meta());
   send_fdt();
@@ -687,6 +855,36 @@ auto Transmitter::send(
 
 auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file_description) -> uint16_t
 {
+  /* The 3GPP profiles permit an object to be content encoded but provide no carrier for the
+     resulting transfer length, so this sender declines to encode under them rather than emit an
+     object no conformant receiver can size.
+
+     Both carriers are closed. TS 26.346 V18.2.0 clause L.4.4 forbids the FDT attribute, listing
+     Transfer-Length first under "The following attributes shall not be carried in the FDT sent by
+     the FLUTE sender:", and the in-band route is closed by
+
+     TS 26.346 V18.2.0 clause 7.2.8: "FLUTE packets carrying symbols of files (not FDT Instances)
+     shall not include an EXT_FTI."
+
+     Content-Length cannot substitute, being equal to the transfer length only for an object carried
+     without an encoding (RFC 3926 clause 3.4.2). Declining is conformant because the profile leaves
+     the encoding to the sender:
+
+     TS 26.346 V18.2.0 clause L.4.2: "The following FDT attribute, defined at both the FDT-Instance
+     and File levels, may be carried in the FDT sent by the FLUTE sender, under either the
+     File-Instance or File element, and shall be supported by the FLUTE receiver:"
+
+     Refusing rather than silently sending the object uncompressed, because a caller that asked for
+     compression and got none without being told has been misled. The contradiction itself is 3GPP's
+     to resolve and is raised as 5G-MAG/Standards#212. Receiving a content-encoded object is
+     unaffected: the same clause obliges a receiver to support gzip and this library does. */
+  if (is_3gpp(_profile) && !file_description->file_entry().content_encoding.empty()) {
+    throw std::runtime_error(
+        "Content encoding is not used by this sender under the 3GPP profiles, which provide no way "
+        "to carry the resulting transfer length. See 5G-MAG/Standards#212, and the citations at this "
+        "check. Use Profile::None, or send the object uncompressed.");
+  }
+
   if (file_description->has_tsi() && file_description->tsi() != _tsi) {
     // Reset TOI if the file_description is being used on a new TSI
     file_description->toi(0);
@@ -695,7 +893,6 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
 
   // Set the TSI and TOI for the FileDescription
   file_description->tsi(_tsi);
-  bool is_resend = (file_description->toi() != 0);
   if (file_description->toi() == 0) {
     if (file_description->previous_toi() != 0) {
       // This FileDescription's content changed since its last send (set_content()/
@@ -715,6 +912,7 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
   file_description->merge_fec_oti(_fec_oti);
 
   auto file = std::make_shared<File>(file_description);
+  file->set_fec_redundancy_level(_fec_redundancy_level);
   {
     std::lock_guard<std::mutex> guard(_files_mutex);
     // A reused (carousel-repeat) FileDescription keeps the same TOI, but map::insert() is a
@@ -723,15 +921,18 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
     // replaces it.
     _files[file_description->toi()] = file;
   }
-  if (is_resend) {
-    // Without this, add() below unconditionally appends another <File> entry for the same
-    // TOI on every single carousel repetition, without ever removing the previous one (the
-    // FDT has no other dedup by TOI) -- the FDT grows without bound the longer the object
-    // stays in the carousel, and eventually becomes too large to serialise/parse correctly.
-    _fdt->remove(file_description->toi());
+  // add() replaces the entry for a TOI it already holds, so a carousel repetition no longer needs
+  // to remove the previous entry first to stop the FDT growing without bound. It also reports
+  // whether the table actually changed: a repetition that describes the object exactly as the
+  // current instance already does leaves the table alone, and reissuing the FDT there would be
+  // harmful rather than merely wasteful. send_fdt() replaces the in-flight FDT object wholesale
+  // (insert_or_assign on TOI 0), restarting its transmission from the first symbol, so a sender
+  // repeating many objects would restart a multi-symbol FDT faster than it can finish sending,
+  // and receivers would never assemble a complete instance. The FDT's own repeat timer
+  // (fdt_send_tick) re-sends it regardless.
+  if (_fdt->add(file->meta())) {
+    send_fdt();
   }
-  _fdt->add(file->meta());
-  send_fdt();
   return file_description->toi();
 }
 
@@ -744,6 +945,17 @@ auto Transmitter::fdt_send_tick(const boost::system::error_code& error) -> void
   }
 }
 
+auto Transmitter::withdraw_file(uint32_t toi) -> void
+{
+  if (toi == 0) return; // TOI 0 is the FDT itself, never a described file
+  {
+    std::lock_guard<std::mutex> guard(_files_mutex);
+    _files.erase(toi);
+  }
+  _fdt->remove(toi);
+  send_fdt();
+}
+
 auto Transmitter::file_transmitted(uint32_t toi) -> void
 {
   {
@@ -751,19 +963,51 @@ auto Transmitter::file_transmitted(uint32_t toi) -> void
     _files.erase(toi);
   }
   if (toi != 0) {
-    _fdt->remove(toi);
-    send_fdt();
+    /* A repeating sender re-sends an object under the TOI it already has (see send(), which treats
+       a non-zero TOI as a resend), so dropping the description here would leave that object
+       transmitted but undescribed for the rest of the session. A receiver cannot recover an object
+       whose TOI no entry describes, however cleanly its symbols arrive, and receivers join at
+       arbitrary times, so the entry is what makes a repeating object acquirable at all. Retain the
+       description while the sender still intends to repeat it; one-shot senders keep removing it,
+       which is what bounds FDT growth for them.
+
+       Note this deliberately does NOT advertise the result as a full snapshot: the MBMS Download
+       Profile prohibits the sender doing so. TS 26.346 V18.2.0 clause L.4.3: "The following
+       parameters, defined at the FDT-Instance level, shall not be used by the FLUTE sender:",
+       whose list carries the mbms2008:FullFDT attribute. Retaining entries needs no such
+       signalling; it only stops the table forgetting objects that are still being sent. */
+    if (!_retain_transmitted_in_fdt) {
+      _fdt->remove(toi);
+      /* The table just changed, so publish the new one. Under retention it did not change: the
+         entry is still there and still correct, and re-publishing would be actively harmful.
+         send_fdt() replaces the in-flight FDT object wholesale (insert_or_assign on TOI 0), which
+         restarts its transmission from the first symbol. A retained table describes every object
+         the sender repeats, so it spans several symbols, and a sender completing one object per
+         few hundred milliseconds would restart it far more often than it can finish, leaving
+         receivers with a permanent stream of first symbols and no complete instance. Leave
+         re-transmission to the FDT's own repeat timer. */
+      send_fdt();
+    }
 
     if (_completion_cb) {
       _completion_cb(toi);
     }
   }
 
+  bool drained = false;
   {
     std::lock_guard<std::mutex> guard(_files_mutex);
-    if (_deactivate_when_all_files_sent && _files.empty()) {
+    drained = _files.empty();
+    if (_deactivate_when_all_files_sent && drained) {
       _complete_deactivation();
     }
+  }
+
+  /* The last packet with the flag set has now gone out, but a receiver that lost it has no other
+     way to learn the session ended: once the file set empties, send_fdt() has nothing to repeat.
+     One data-less packet, once. */
+  if (_session_closing && drained) {
+    send_close_session_packet();
   }
 }
 
@@ -791,49 +1035,78 @@ auto Transmitter::send_next_packet() -> void
       for(const auto& symbol : symbols) {
         spdlog::debug("sending TOI {} SBN {} ID {}", file->meta().toi, symbol.source_block_number(), symbol.id() );
       }
-      auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id());
+      /* EXT_FTI is never attached to a content packet under a 3GPP profile.
+
+         TS 26.346 V18.2.0 clause 7.2.8: "FLUTE packets carrying symbols of files (not FDT
+         Instances) shall not include an EXT_FTI."
+
+         This closes the second of the two carriers a content-encoded object's transfer length could
+         use, the first being the FDT's Transfer-Length attribute, which clause L.4.4 forbids. The
+         profile nonetheless permits gzip, so it allows a case it provides no way to signal. Raised
+         as 5G-MAG/Standards#212. Until that is answered the sender does not content encode under
+         these profiles at all, see Transmitter::send(), so the case does not arise; outside them
+         both the encoding and this extension remain available. */
+      const bool fti_on_content_packet = file->meta().toi != 0 &&
+                                         !is_3gpp(_profile) &&
+                                         !file->meta().content_encoding.empty();
+
+      auto packet = std::make_shared<AlcPacket>(_tsi, file->meta().toi, file->meta().fec_oti, symbols, _max_payload, file->fdt_instance_id(),
+                                                 _session_closing, _closing_objects.count(file->meta().toi) > 0,
+                                                 fti_on_content_packet);
+
       bytes_queued += packet->size();
 
-      boost::asio::ip::udp::endpoint send_endpoint;
-      const char *data = nullptr;
-      size_t data_size = 0;
-      std::shared_ptr<std::vector<char>> tunnel_data;
+      /* A tunnel is a choice of carriage, not an additional path: configuring one selects the
+         encapsulated carriage and the announced destination is then reached by decapsulation at
+         the far end, so the plain copy is not also sent.
+
+         TS 23.247 V18.8.0 clause 7.3.1 step 13: "The AF starts transmitting the DL media stream to
+         MB-UPF using the N6mb Tunnel, or optionally un-tunnelled i.e. as an IP multicast stream
+         using the HL MC address."
+
+         A receiver that joins the announced destination directly is served by not configuring a
+         tunnel. Completion is tracked from whichever single send is issued. */
       if (_tunnel_endpoint) {
-        send_endpoint = _tunnel_endpoint.value();
-        data_size = packet->size() + 20 /* IP header */ + 8 /* UDP header */;
-        // Own the encapsulated packet buffer via a shared_ptr held by the
-        // async_send_to completion lambda below, so it stays alive until the
-        // send actually completes (a raw new[] here with no matching delete[]
-        // would leak on every tunnelled packet).
-        tunnel_data = std::make_shared<std::vector<char>>(data_size);
-        data = tunnel_data->data();
+        /* The completion handler owns the encapsulated buffer through this shared_ptr, so it
+           outlives the asynchronous send. A raw new[] freed straight after issuing the send would
+           be read after free. */
+        const size_t ip_hdr_len = ip_header_length(_endpoint.address().is_v6());
+        const size_t data_size = packet->size() + ip_hdr_len + 8 /* UDP header */;
+        auto tunnel_data = std::make_shared<std::vector<char>>(data_size);
         auto local_address = _source_address ? _source_address.value() : _tunnel_local_address;
-        create_udp_pkt(const_cast<char*>(data) + 20, _endpoint, packet->data(), packet->size(), local_address);
-        create_ip_hdr(const_cast<char*>(data), _endpoint, data_size, local_address);
-      } else {
-        send_endpoint = _endpoint;
-        data = packet->data();
-        data_size = packet->size();
-      }
-      _socket.async_send_to(
-          boost::asio::buffer(data, data_size),
-          send_endpoint,
-          [file, symbols, packet, tunnel_data, this](
-              const boost::system::error_code& error,
-              std::size_t bytes_transferred)
-          {
-            (void)packet;
-            (void)tunnel_data;
-            (void)bytes_transferred;
-            if (error) {
-              spdlog::debug("sent_to error: {}", error.message());
-            } else {
-              file->mark_completed(symbols, !error);
-              if (file->complete()) {
-                file_transmitted(file->meta().toi);
+        create_udp_pkt(tunnel_data->data() + ip_hdr_len, _endpoint, packet->data(), packet->size(), local_address);
+        create_ip_hdr(tunnel_data->data(), _endpoint, data_size, local_address);
+
+        _socket.async_send_to(
+            boost::asio::buffer(*tunnel_data), _tunnel_endpoint.value(),
+            [file, symbols, packet, tunnel_data, this](
+                const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
+            {
+              if (error) {
+                spdlog::debug("sent_to (tunnel) error: {}", error.message());
+              } else {
+                file->mark_completed(symbols, !error);
+                if (file->complete()) {
+                  file_transmitted(file->meta().toi);
+                }
               }
-            }
-          });
+            });
+      } else {
+        _socket.async_send_to(
+            boost::asio::buffer(packet->data(), packet->size()), _endpoint,
+            [file, symbols, packet, this](
+                const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
+            {
+              if (error) {
+                spdlog::debug("sent_to error: {}", error.message());
+              } else {
+                file->mark_completed(symbols, !error);
+                if (file->complete()) {
+                  file_transmitted(file->meta().toi);
+                }
+              }
+            });
+      }
     }
   }
   if (_active) {
@@ -891,6 +1164,84 @@ auto Transmitter::_complete_deactivation() -> void
   _send_timer.cancel();
 }
 
+auto Transmitter::close_session() -> void
+{
+  _session_closing = true;
+  _fdt->set_complete(true);
+
+  /* Every packet from here on carries the flag, which is the whole signal while there is still
+     something to send. With an empty queue there is nothing to attach it to, so the flag would
+     reach no receiver at all; RFC 3926 clause 3.1 provides a packet for exactly that case and this
+     is where it is due. */
+  bool queue_empty = false;
+  {
+    std::lock_guard<std::mutex> guard(_files_mutex);
+    queue_empty = _files.empty();
+  }
+  if (queue_empty) {
+    send_close_session_packet();
+  }
+}
+
+/* RFC 3450 clause 4.1: "In some special cases an ALC sender may need to produce ALC packets that do
+   not contain any payload.  This may be required, for example, to signal the end of a session or to
+   convey congestion control information."
+
+   Fire and forget on both paths. There is no file to mark complete and nothing to retransmit: the
+   flag is advisory on the receiver's side, which RFC 5651 clause 5.1 puts as "the receiver SHOULD
+   assume that no more packets will be sent to the session", so a lost one costs a receiver a
+   timeout rather than data. */
+auto Transmitter::send_close_session_packet() -> void
+{
+  std::shared_ptr<AlcPacket> packet;
+  try {
+    packet = std::make_shared<AlcPacket>(_tsi, AlcPacket::CloseSession{});
+  } catch (const std::exception& ex) {
+    spdlog::warn("Not signalling end of session: {}", ex.what());
+    return;
+  }
+
+  /* One carriage or the other, as in send_next_packet(); the clause is quoted there. */
+  if (_tunnel_endpoint) {
+    const size_t ip_hdr_len = ip_header_length(_endpoint.address().is_v6());
+    const size_t data_size = packet->size() + ip_hdr_len + 8 /* UDP header */;
+    auto tunnel_data = std::make_shared<std::vector<char>>(data_size);
+    auto local_address = _source_address ? _source_address.value() : _tunnel_local_address;
+    create_udp_pkt(tunnel_data->data() + ip_hdr_len, _endpoint, packet->data(), packet->size(),
+                   local_address);
+    create_ip_hdr(tunnel_data->data(), _endpoint, data_size, local_address);
+
+    _socket.async_send_to(
+        boost::asio::buffer(*tunnel_data), _tunnel_endpoint.value(),
+        [packet, tunnel_data](const boost::system::error_code& error,
+                              std::size_t /*bytes_transferred*/)
+        {
+          if (error) {
+            spdlog::debug("close session tunnel send error: {}", error.message());
+          }
+        });
+  } else {
+    _socket.async_send_to(
+        boost::asio::buffer(packet->data(), packet->size()), _endpoint,
+        [packet](const boost::system::error_code& error, std::size_t /*bytes_transferred*/)
+        {
+          if (error) {
+            spdlog::debug("close session send error: {}", error.message());
+          }
+        });
+  }
+}
+
+auto Transmitter::close_object(uint32_t toi) -> void
+{
+  _closing_objects.insert(toi);
+}
+
+auto Transmitter::can_compress_objects() -> bool
+{
+  return !is_3gpp(_profile);
+}
+
 auto Transmitter::start_fdt_repeat_timer() -> void
 {
     _fdt_timer.expires_after(std::chrono::seconds(_fdt_repeat_interval));
@@ -901,8 +1252,7 @@ static void create_udp_pkt(char *udp_buffer, const boost::asio::ip::udp::endpoin
 {
   auto *udp_bytes = reinterpret_cast<uint8_t*>(udp_buffer);
   const auto udp_length = static_cast<uint16_t>(data_len + 8);
-  const auto source_address = local_address.to_v4().to_uint();
-  const auto destination_address = endpoint.address().to_v4().to_uint();
+  const bool is_v6 = endpoint.address().is_v6();
 
   write_uint16_be(udp_bytes, endpoint.port());
   write_uint16_be(udp_bytes + 2, endpoint.port());
@@ -910,20 +1260,59 @@ static void create_udp_pkt(char *udp_buffer, const boost::asio::ip::udp::endpoin
   write_uint16_be(udp_bytes + 6, 0);
   memcpy(udp_buffer + 8, data, data_len);
 
-  std::vector<uint8_t> checksum_bytes(12 + udp_length);
-  write_uint32_be(checksum_bytes.data(), source_address);
-  write_uint32_be(checksum_bytes.data() + 4, destination_address);
-  checksum_bytes[8] = 0;
-  checksum_bytes[9] = endpoint.protocol().protocol();
-  write_uint16_be(checksum_bytes.data() + 10, udp_length);
-  memcpy(checksum_bytes.data() + 12, udp_bytes, udp_length);
+  std::vector<uint8_t> checksum_bytes;
+  if (is_v6) {
+    /* RFC 8200 clause 8.1's pseudo-header: source (16), destination (16), upper-layer packet
+       length (32), three zero octets, next header (8). */
+    checksum_bytes.resize(40 + udp_length);
+    auto src_bytes = local_address.to_v6().to_bytes();
+    auto dst_bytes = endpoint.address().to_v6().to_bytes();
+    memcpy(checksum_bytes.data(), src_bytes.data(), src_bytes.size());
+    memcpy(checksum_bytes.data() + 16, dst_bytes.data(), dst_bytes.size());
+    write_uint32_be(checksum_bytes.data() + 32, udp_length);
+    checksum_bytes[36] = 0;
+    checksum_bytes[37] = 0;
+    checksum_bytes[38] = 0;
+    checksum_bytes[39] = endpoint.protocol().protocol();
+    memcpy(checksum_bytes.data() + 40, udp_bytes, udp_length);
+  } else {
+    checksum_bytes.resize(12 + udp_length);
+    write_uint32_be(checksum_bytes.data(), local_address.to_v4().to_uint());
+    write_uint32_be(checksum_bytes.data() + 4, endpoint.address().to_v4().to_uint());
+    checksum_bytes[8] = 0;
+    checksum_bytes[9] = endpoint.protocol().protocol();
+    write_uint16_be(checksum_bytes.data() + 10, udp_length);
+    memcpy(checksum_bytes.data() + 12, udp_bytes, udp_length);
+  }
 
-  write_uint16_be(udp_bytes + 6, calculate_sum(checksum_bytes.data(), checksum_bytes.size()));
+  uint16_t checksum = calculate_sum(checksum_bytes.data(), checksum_bytes.size());
+  if (is_v6 && checksum == 0) {
+    /* RFC 8200 clause 8.1: "whenever originating a UDP packet, an IPv6 node must compute a UDP
+       checksum over the packet and the pseudo-header, and, if that computation yields a result
+       of zero, it must be changed to hex FFFF for placement in the UDP header." */
+    checksum = 0xFFFF;
+  }
+  write_uint16_be(udp_bytes + 6, checksum);
 }
 
 static void create_ip_hdr(char *ip_buffer, const boost::asio::ip::udp::endpoint &endpoint, size_t pkt_size, const boost::asio::ip::address &local_address)
 {
   auto *ip_bytes = reinterpret_cast<uint8_t*>(ip_buffer);
+
+  if (endpoint.address().is_v6()) {
+    /* RFC 8200 clause 3 gives the header format. It is fixed at 40 bytes and carries no
+       checksum field of its own, which is why the UDP checksum above is mandatory. */
+    memset(ip_bytes, 0, 40);
+    ip_bytes[0] = 0x60; // version 6, traffic class high nibble zero
+    write_uint16_be(ip_bytes + 4, static_cast<uint16_t>(pkt_size - 40)); // payload, excluding this header
+    ip_bytes[6] = endpoint.protocol().protocol(); // next header
+    ip_bytes[7] = 63; // hop limit, matching the IPv4 path's TTL below
+    auto src_bytes = local_address.to_v6().to_bytes();
+    auto dst_bytes = endpoint.address().to_v6().to_bytes();
+    memcpy(ip_bytes + 8, src_bytes.data(), src_bytes.size());
+    memcpy(ip_bytes + 24, dst_bytes.data(), dst_bytes.size());
+    return;
+  }
 
   memset(ip_bytes, 0, 20);
   ip_bytes[0] = 0x45; // IPv4, 20-byte header

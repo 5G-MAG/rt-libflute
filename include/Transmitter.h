@@ -22,6 +22,7 @@
 #include <queue>
 #include <string>
 #include <map>
+#include <set>
 #include <mutex>
 #include <optional>
 //#include "File.h"
@@ -286,12 +287,31 @@ namespace LibFlute {
         FileDescription &set_content_type(const std::string &content_type);
 
        /**
-        * Change the file expiry time
+        * Change the file expiry time.
+        *
+        * This is the File element's own Expires attribute, an optional attribute of FileType in
+        * the TS 26.346 annex L.6.1 profiled schema. It says when the file itself stops being
+        * valid, and it is NOT the cache directive: see set_cache_expiry_time() for that. The two
+        * were previously set together and could not be given different values.
         *
         * @param expiry_time The expiry time of the file in the FLUTE session.
         * @return this file description
         */
         FileDescription &set_expiry_time(const date_time_type &expiry_time);
+
+       /**
+        * Change the cache expiry time carried in the mbms2007:Cache-Control element.
+        *
+        * A separate value from set_expiry_time(): CacheControlType in the annex L.6.1 profiled
+        * schema is an xs:choice of no-cache, max-stale and Expires, so at most one of those
+        * appears, and the Expires it carries is a caching directive to intermediates rather than
+        * a statement about the file's own validity. Leave it unset to emit no Cache-Control
+        * element at all, which the schema permits since the element is minOccurs="0".
+        *
+        * @param expiry_time The cache expiry time.
+        * @return this file description
+        */
+        FileDescription &set_cache_expiry_time(const date_time_type &expiry_time);
 
        /**
         *  Get the currently set expiry time
@@ -409,6 +429,12 @@ namespace LibFlute {
       *  @param fdt_namespace Which XML namespace to use for the FDT (default: none)
       *  @param active Start as active/inactive FLUTE session (default: active)
       *  @param source_address Source address (default: automatically assign source address)
+      *  @param content_fec_oti FEC scheme to protect this session's content with (default: no value,
+      *                         meaning Compact No-Code -- today's behaviour, unchanged). Only
+      *                         encoding_id, max_source_block_length and max_number_of_encoding_symbols
+      *                         are read from it; encoding_symbol_length is always sized to this
+      *                         Transmitter's own path MTU, and the Raptor-specific OTI fields
+      *                         are computed fresh per file by LibFlute::File, not taken from here.
       *
       *  @throw boost::system::system_error When @p source_address is given a value and @p tunnel_endpoint has no value and the
       *                            address in @p source_address could not be bound as the local end of the connection.
@@ -420,12 +446,29 @@ namespace LibFlute {
           const std::optional<boost::asio::ip::udp::endpoint>& tunnel_endpoint = std::nullopt,
           FdtNamespace fdt_namespace = FileDeliveryTable::FDT_NS_NONE,
           bool active = true,
-          const std::optional<std::string>& source_address = std::nullopt);
+          const std::optional<std::string>& source_address = std::nullopt,
+          const std::optional<FecOti>& content_fec_oti = std::nullopt,
+          Profile profile = Profile::None,
+          uint32_t fec_redundancy_level = kDefaultFecRedundancyLevel);
 
      /**
       *  Default destructor.
       */
       virtual ~Transmitter();
+
+     /**
+      *  Get the FEC OTI this Transmitter applies to the content it sends
+      *  (see the @p content_fec_oti constructor parameter).
+      */
+      const FecOti& fec_oti() const { return _fec_oti; }
+
+     /**
+      *  Get the File Delivery Table this Transmitter maintains for its
+      *  content (mainly useful for inspecting/testing its serialised size
+      *  and entry count -- e.g. to confirm a carousel-repeated send didn't
+      *  leave a stale entry behind).
+      */
+      const FileDeliveryTable& fdt() const { return *_fdt; }
 
      /**
       * Get UDP Tunnel Address
@@ -490,6 +533,11 @@ namespace LibFlute {
       *
       * @return The maximum bit rate.
       */
+     /**
+      *  Read-only access to the session's current FDT, for tests that need to
+      *  observe what the sender is advertising. Not part of the sending API.
+      */
+
       uint32_t rate_limit() const { return _rate_limit; };
 
      /**
@@ -573,7 +621,7 @@ namespace LibFlute {
       *  @param spi Security Parameter Index value to use
       *  @param aes_key AES key as a hex string (without leading 0x). Must be an even number of characters long.
       */
-      void enable_ipsec( uint32_t spi, const std::string& aes_key);
+      void enable_ipsec( uint32_t spi, const std::string& aes_key, const std::string& auth_key = "");
 
      /**
       *  Transmit a file (deprecated).
@@ -628,6 +676,36 @@ namespace LibFlute {
       void register_completion_callback(completion_callback_t cb) { _completion_cb = cb; };
 
      /**
+      *  Stop sending a file and drop its FDT entry.
+      *
+      *  Needed by a sender using retain_transmitted_in_fdt(): with retention on, nothing else ever
+      *  removes an entry, so a caller that stops repeating an object must say so or its description
+      *  would outlive it. Safe to call for a TOI that is not currently described.
+      *
+      *  @param toi TOI of the file to withdraw
+      */
+      void withdraw_file(uint32_t toi);
+
+     /**
+      *  Get whether transmitted files stay described in the FDT.
+      */
+      bool retain_transmitted_in_fdt() const { return _retain_transmitted_in_fdt; };
+
+     /**
+      *  Keep a file's FDT entry after its transmission completes, instead of removing it.
+      *
+      *  For a sender that repeats objects (an object carousel), the same object is re-sent under the
+      *  TOI it already holds, so removing its entry on completion leaves it transmitted but
+      *  undescribed. A receiver cannot recover an object whose TOI no FDT entry describes, and
+      *  receivers join at arbitrary times, so retention is what makes a repeating object acquirable.
+      *
+      *  Leave this off for one-shot delivery, where removal is what bounds the table's growth.
+      *
+      *  @param retain true to keep entries for transmitted files
+      */
+      Transmitter &retain_transmitted_in_fdt(bool retain) { _retain_transmitted_in_fdt = retain; return *this; };
+
+     /**
       * Activate the FLUTE session
       *
       * If the Transmitter is currently deactivated then the state is set to active and the FLUTE stream will start transmitting.
@@ -658,9 +736,34 @@ namespace LibFlute {
       */
       size_t number_of_files() { std::lock_guard<std::mutex> guard(_files_mutex); return _files.size(); };
 
+     /**
+      * Signal that this session is ending: no further files will ever be added. Marks the FDT
+      * as Complete (RFC 3926 clause 3.4.2, so receivers know the file set is final) and sets the LCT Close
+      * Session flag (RFC 3451 clause 5.1, 'A' bit) on every packet sent from this point on, including for
+      * files already in flight.
+      */
+      void close_session();
+
+     /**
+      * Signal that no further data will be sent for a specific TOI. Sets the LCT Close Object
+      * flag (RFC 3451 clause 5.1, 'B' bit) on subsequent packets carrying that TOI.
+      *
+      * @param toi The TOI to close.
+      */
+      void close_object(uint32_t toi);
+
+     /**
+      * Can transmit compressed objects
+      *
+      * Check if the Transmitter Profile allows object compression.
+      * @return `true` if the Profile configured for this Transmitter allows compressed objects to be sent, `false` otherwise.
+      */
+      bool can_compress_objects();
+
     private:
       void send_fdt();
       void send_next_packet();
+      void send_close_session_packet();
       void fdt_send_tick(const boost::system::error_code& error);
       void start_fdt_repeat_timer();
 
@@ -671,6 +774,10 @@ namespace LibFlute {
       void handle_send_to(const boost::system::error_code& error);
       boost::asio::ip::udp::endpoint _endpoint;
       std::optional<boost::asio::ip::address> _source_address;
+
+      /** Which obligation set this session is held to. Fixed at construction; the profile decides
+       *  what may be signalled, so it cannot change once a session is running. */
+      Profile _profile;
       boost::asio::ip::udp::socket _socket;
       boost::asio::io_context& _io_context;
       boost::asio::steady_timer _send_timer;
@@ -682,6 +789,35 @@ namespace LibFlute {
       std::unique_ptr<FileDeliveryTable> _fdt;
       std::map<uint32_t, std::shared_ptr<File>> _files;
       std::mutex _files_mutex;
+      // Backing storage for the FDT's own File object (TOI 0): send_fdt()
+      // builds this from a local std::string whose lifetime must match the
+      // TOI-0 File entry in _files, not just the send_fdt() call that
+      // creates it - File only holds a raw pointer into this string's
+      // buffer, and send_next_packet() reads through that pointer later,
+      // asynchronously, well after send_fdt() would otherwise have returned
+      // and the local string been destroyed. This closes the definite,
+      // always-eventually-triggered dangling-pointer bug; it leaves a much
+      // narrower residual risk if send_fdt() is called again (e.g. from
+      // another file being added/removed) before the previous FDT's own
+      // packets finish sending, since this single buffer would then be
+      // overwritten while an old File's pointer still refers to it. FDT
+      // content is tiny (a handful of file entries' XML) and normally
+      // finishes transmitting well within one _fdt_repeat_interval, so this
+      // is expected to be rare in practice; a fully robust fix would give
+      // each File its own copy or ref-counted storage.
+      std::string _fdt_string_storage;
+
+      // FDT Instance ID whose serialisation _fdt_string_storage currently holds. A repeat of that
+      // same instance must re-send those bytes unchanged (see send_fdt()); a different instance
+      // re-serialises. UINT32_MAX means "nothing serialised yet".
+      uint32_t _fdt_serialised_instance_id = UINT32_MAX;
+
+      bool _session_closing = false;
+      std::set<uint32_t> _closing_objects;
+
+      // See retain_transmitted_in_fdt(). Off by default so one-shot senders keep the existing
+      // remove-on-completion behaviour that bounds FDT growth.
+      bool _retain_transmitted_in_fdt = false;
 
       unsigned _fdt_repeat_interval = 5;
       uint16_t _toi = 1;
@@ -697,6 +833,9 @@ namespace LibFlute {
       boost::asio::ip::address _tunnel_local_address;
 
       std::atomic<bool> _active;
+      // FEC redundancy level applied to content objects of this session, as a
+      // percentage of a source block's k symbols. See kDefaultFecRedundancyLevel.
+      uint32_t _fec_redundancy_level;
       std::atomic<bool> _deactivate_when_all_files_sent = false;
   };
 
