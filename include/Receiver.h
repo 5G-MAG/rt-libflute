@@ -124,12 +124,16 @@ namespace LibFlute {
       *         @p packet_modifier does -- source-address admission is a generic,
       *         encapsulation-agnostic concept the library can reasonably own, unlike parsing
       *         any particular header format.
-      *  @param packet_modifier Required whenever tunnel_address is set (ignored otherwise,
-      *         and if omitted while tunnel_address is set, every tunnel datagram is
-      *         discarded -- silently failing open would be far worse than silently
-      *         discarding). See packet_modifier_t; there is no default implementation, since
-      *         any default would itself bake an assumption about the tunnel's wire format
-      *         into the library, exactly what this issue asks not to do.
+      *  @param packet_modifier Locates the ALC/LCT packet in each tunnel datagram (ignored
+      *         when tunnel_address is not set). If omitted, each tunnel datagram is taken as an
+      *         ALC/LCT packet as it is, from its first byte: no encapsulation is assumed. That needs
+      *         @p tunnel_source too, to say who may send them (RFC 3450 clause 4.5 has the receiver
+      *         verify the sender address with the TSI): with neither, the tunnel is not enabled,
+      *         the error is logged, and tunnel_active() returns false. See
+      *         packet_modifier_t; the library parses no encapsulation of its own (GTP-U or
+      *         other), which stays with the application. If the tunnel socket cannot be opened
+      *         or bound, the error is logged and the multicast path keeps working; the
+      *         constructor does not throw for it.
       */
       Receiver( const std::string& iface, const std::string& address,
           short port, uint64_t tsi,
@@ -138,6 +142,12 @@ namespace LibFlute {
           const std::optional<boost::asio::ip::udp::endpoint>& tunnel_address = std::nullopt,
           const std::optional<boost::asio::ip::address>& tunnel_source = std::nullopt,
           const std::optional<packet_modifier_t>& packet_modifier = std::nullopt);
+
+      /** Whether tunnel reception is running: the tunnel socket was opened and bound, and the settings allow it.
+       *  False when no tunnel_address was given, when it could not be bound, or when it was refused for lack
+       *  of both a packet_modifier and a tunnel_source. An application that depends on the tunnel checks this,
+       *  because the constructor does not throw for these. */
+      bool tunnel_active() const { return _tunnel_socket != nullptr; }
 
      /**
       *  Destructor. Marks the receiver as no longer alive so that any async_receive_from
@@ -201,6 +211,7 @@ namespace LibFlute {
       // inside _tunnel_data) -- see packet_modifier_t's comment in the header for why these
       // are two independent, simultaneously-armed receive loops rather than a single one.
       void process_alc_datagram(char* data, size_t len, const boost::asio::ip::address& sender, bool from_tunnel);
+      void log_decode_failure(const char* what, bool from_tunnel);
       void handle_tunnel_receive_from(const boost::system::error_code& error,
           size_t bytes_recvd);
       void arm_tunnel_receive();
@@ -211,6 +222,9 @@ namespace LibFlute {
       boost::asio::ip::udp::endpoint _tunnel_sender_endpoint;
       std::optional<boost::asio::ip::address> _tunnel_source;
       packet_modifier_t _packet_modifier;
+      // Tunnel datagrams that did not parse as ALC/LCT: the first is logged as a warning, the
+      // rest at debug level, so traffic that is still encapsulated does not flood the log.
+      uint64_t _tunnel_decode_failures = 0;
       // Sized like _data (see max_length below) but as a resizable buffer rather than a
       // fixed char array: packet_modifier_t takes a std::vector<uint8_t>& so a caller-supplied
       // modifier can shrink/grow the datagram in place (e.g. after decrypting a payload that
