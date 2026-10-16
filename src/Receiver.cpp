@@ -192,22 +192,22 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
     // delivery will actually work on a given deployment's path, so both are always armed and
     // whichever one actually receives something feeds the same session state.
     if (tunnel_address) {
-      if (!packet_modifier) {
-        // Fail closed, not open: an unset packet_modifier with no way to locate the ALC
-        // payload inside an unknown encapsulation means every tunnel datagram would have to
-        // be discarded anyway (see packet_modifier_t) -- so skip standing up the tunnel
-        // socket at all and say why, rather than silently binding a socket that can never
-        // usefully deliver anything.
-        spdlog::error("Receiver: tunnel_address given without a packet_modifier -- "
-                      "tunnel reception disabled, only the multicast path (if any) is active");
+      /* A tunnel socket that cannot be set up does not take the multicast path down with it:
+         the error is logged and the Receiver goes on with multicast reception only. */
+      boost::system::error_code ec;
+      auto sock = std::make_unique<boost::asio::ip::udp::socket>(io_context);
+      sock->open(tunnel_address->protocol(), ec);
+      if (!ec) sock->set_option(boost::asio::ip::udp::socket::reuse_address(true), ec);
+      if (!ec) sock->set_option(boost::asio::socket_base::receive_buffer_size(16*1024*1024), ec);
+      if (!ec) sock->bind(*tunnel_address, ec);
+      if (ec) {
+        spdlog::error("Receiver: tunnel reception on {}:{} disabled, the socket could not be set up: {}",
+                      tunnel_address->address().to_string(), tunnel_address->port(), ec.message());
       } else {
-        _tunnel_socket = std::make_unique<boost::asio::ip::udp::socket>(io_context);
-        _tunnel_socket->open(tunnel_address->protocol());
-        _tunnel_socket->set_option(boost::asio::ip::udp::socket::reuse_address(true));
-        _tunnel_socket->set_option(boost::asio::socket_base::receive_buffer_size(16*1024*1024));
-        _tunnel_socket->bind(*tunnel_address);
-        spdlog::info("Receiver: listening for tunnelled datagrams on {}:{}",
-                     tunnel_address->address().to_string(), tunnel_address->port());
+        _tunnel_socket = std::move(sock);
+        spdlog::info("Receiver: listening for tunnelled datagrams on {}:{}{}",
+                     tunnel_address->address().to_string(), tunnel_address->port(),
+                     _packet_modifier ? "" : ", taken as ALC/LCT packets as they are (no packet_modifier)");
         arm_tunnel_receive();
       }
     }
@@ -266,7 +266,8 @@ auto LibFlute::Receiver::handle_tunnel_receive_from(const boost::system::error_c
                    _tunnel_sender_endpoint.address().to_string(), _tunnel_source->to_string());
     } else {
       _tunnel_data.resize(bytes_recvd);
-      size_t payload_offset = _packet_modifier(_tunnel_data);
+      // Without a packet_modifier the datagram is the ALC/LCT packet itself.
+      size_t payload_offset = _packet_modifier ? _packet_modifier(_tunnel_data) : 0;
       if (payload_offset < _tunnel_data.size()) {
         process_alc_datagram(reinterpret_cast<char*>(_tunnel_data.data() + payload_offset), _tunnel_data.size() - payload_offset,
                              _tunnel_sender_endpoint.address(), true);
@@ -562,15 +563,31 @@ auto LibFlute::Receiver::process_alc_datagram(char* data, size_t bytes_recvd,
         spdlog::warn("Discarding packet for unknown TSI {}", alc.tsi());
       }
     } catch (const std::exception &ex) {
-      spdlog::warn("Failed to decode ALC/FLUTE packet: {}", ex.what());
+      log_decode_failure(ex.what(), from_tunnel);
     } catch (const char* ex) {
       // AlcPacket/EncodingSymbol/File/FileDeliveryTable all throw raw
       // string literals (not std::exception) for malformed/unsupported
       // packets - a single such packet would otherwise propagate past this
       // handler entirely uncaught and crash the whole receiver via
       // std::terminate().
-      spdlog::warn("Failed to decode ALC/FLUTE packet: {}", ex);
+      log_decode_failure(ex, from_tunnel);
     }
+}
+
+auto LibFlute::Receiver::log_decode_failure(const char* what, bool from_tunnel) -> void
+{
+  if (!from_tunnel) {
+    spdlog::warn("Failed to decode ALC/FLUTE packet: {}", what);
+    return;
+  }
+  /* Tunnel traffic that does not parse is most often still encapsulated (a missing or wrong
+     packet_modifier), and then every datagram fails: say so once, then count quietly. */
+  if (++_tunnel_decode_failures == 1) {
+    spdlog::warn("Failed to decode a tunnel datagram as ALC/FLUTE: {} -- if the tunnel traffic is "
+                 "encapsulated, give a packet_modifier; further failures are logged at debug level", what);
+  } else {
+    spdlog::debug("Failed to decode tunnel datagram {} as ALC/FLUTE: {}", _tunnel_decode_failures, what);
+  }
 }
 
 auto LibFlute::Receiver::file_list() -> std::vector<std::shared_ptr<LibFlute::File>>
