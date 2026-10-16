@@ -268,7 +268,8 @@ auto LibFlute::Receiver::handle_tunnel_receive_from(const boost::system::error_c
       _tunnel_data.resize(bytes_recvd);
       size_t payload_offset = _packet_modifier(_tunnel_data);
       if (payload_offset < _tunnel_data.size()) {
-        process_alc_datagram(reinterpret_cast<char*>(_tunnel_data.data() + payload_offset), _tunnel_data.size() - payload_offset);
+        process_alc_datagram(reinterpret_cast<char*>(_tunnel_data.data() + payload_offset), _tunnel_data.size() - payload_offset,
+                             _tunnel_sender_endpoint.address(), true);
       } else {
         spdlog::trace("Receiver: packet_modifier reported no usable payload in tunnel datagram, discarding");
       }
@@ -308,7 +309,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
 
   if (!error)
   {
-    process_alc_datagram(_data, bytes_recvd);
+    process_alc_datagram(_data, bytes_recvd, _sender_endpoint.address(), false);
     arm_receive();
   }
   else
@@ -330,7 +331,8 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
 // see packet_modifier_t's comment in the header for why these are two independent,
 // simultaneously-armed receive loops feeding into this one function rather than two entirely
 // separate copies of it).
-auto LibFlute::Receiver::process_alc_datagram(char* data, size_t bytes_recvd) -> void
+auto LibFlute::Receiver::process_alc_datagram(char* data, size_t bytes_recvd,
+    const boost::asio::ip::address& sender, bool from_tunnel) -> void
 {
     /* Discards below return rather than arming: both receive loops arm their own socket after
        calling this, so arming here would leave two outstanding reads on the plain socket, and would
@@ -348,9 +350,13 @@ auto LibFlute::Receiver::process_alc_datagram(char* data, size_t bytes_recvd) ->
        kernel filtering on it, so this is defence in depth there against a routing or membership
        mistake; for an any-source session the library has no source to compare against and the
        obligation cannot be met, which is recorded as a limitation rather than passed over. */
-    if (_expected_source && _sender_endpoint.address() != *_expected_source) {
+    /* `sender` is the address of the socket the datagram arrived on, passed in by its receive
+       handler, never a member shared between the two loops. source_address applies to the
+       multicast socket; a tunnel datagram's sender is the tunnel's, admitted by tunnel_source in
+       handle_tunnel_receive_from(). */
+    if (!from_tunnel && _expected_source && sender != *_expected_source) {
       spdlog::warn("Discarding packet from {}, which is not this session's source {}",
-                   _sender_endpoint.address().to_string(), _expected_source->to_string());
+                   sender.to_string(), _expected_source->to_string());
       return;
     }
 

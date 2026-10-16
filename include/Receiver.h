@@ -200,7 +200,7 @@ namespace LibFlute {
       // (handle_tunnel_receive_from(), data at whatever offset packet_modifier_t returns
       // inside _tunnel_data) -- see packet_modifier_t's comment in the header for why these
       // are two independent, simultaneously-armed receive loops rather than a single one.
-      void process_alc_datagram(char* data, size_t len);
+      void process_alc_datagram(char* data, size_t len, const boost::asio::ip::address& sender, bool from_tunnel);
       void handle_tunnel_receive_from(const boost::system::error_code& error,
           size_t bytes_recvd);
       void arm_tunnel_receive();
