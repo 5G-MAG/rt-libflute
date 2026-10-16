@@ -53,6 +53,7 @@ add_flute_test_executable(flute_raptor_codec_tests test_raptor_codec.cpp "raptor
 add_flute_test_executable(flute_raptor_tests test_raptor_fec.cpp "raptor:")
 add_flute_test_executable(flute_raptor_e2e_tests test_raptor_e2e.cpp "raptor_e2e:")
 add_flute_test_executable(flute_fdt_carousel_tests test_fdt_carousel.cpp "fdt_carousel:")
+add_flute_test_executable(flute_fdt_order_tests test_fdt_order.cpp "fdt_order:")
 add_flute_test_executable(flute_ipsec_tests test_ipsec.cpp "ipsec:")
 add_flute_test_executable(flute_example_tests test_examples.cpp "examples:")
 # The example tests drive the real flute-receiver program, so they need it built and its path.

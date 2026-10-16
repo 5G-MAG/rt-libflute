@@ -913,14 +913,12 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
 
   auto file = std::make_shared<File>(file_description);
   file->set_fec_redundancy_level(_fec_redundancy_level);
-  {
-    std::lock_guard<std::mutex> guard(_files_mutex);
-    // A reused (carousel-repeat) FileDescription keeps the same TOI, but map::insert() is a
-    // no-op if that key is already present -- silently keeping the stale File and discarding
-    // the just-built one with the updated content. Use assignment so a resend actually
-    // replaces it.
-    _files[file_description->toi()] = file;
-  }
+  // The FDT is updated before the object is queued: send_next_packet() runs on the io_context
+  // thread and sends from the first incomplete entry of _files, so an object queued first can
+  // have its first packet sent before any FDT Instance describing it.
+  // RFC 3926 section 3.4.1: "It is RECOMMENDED that FDT Instance that contains the file
+  // description entry for a file is sent prior to the sending of the described file within a
+  // file delivery session."
   // add() replaces the entry for a TOI it already holds, so a carousel repetition no longer needs
   // to remove the previous entry first to stop the FDT growing without bound. It also reports
   // whether the table actually changed: a repetition that describes the object exactly as the
@@ -932,6 +930,14 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
   // (fdt_send_tick) re-sends it regardless.
   if (_fdt->add(file->meta())) {
     send_fdt();
+  }
+  {
+    std::lock_guard<std::mutex> guard(_files_mutex);
+    // A reused (carousel-repeat) FileDescription keeps the same TOI, but map::insert() is a
+    // no-op if that key is already present -- silently keeping the stale File and discarding
+    // the just-built one with the updated content. Use assignment so a resend actually
+    // replaces it.
+    _files[file_description->toi()] = file;
   }
   return file_description->toi();
 }
