@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/banner.svg" width="100%" alt="Reference Tools · Content Delivery Protocols: FLUTE Protocol and Profiles">
+  <img src=".github/banner.svg" width="100%" alt="Reference Tools · Content Delivery Protocols and Tools: FLUTE Protocol and Profiles">
 </p>
 
 <p align="center">
@@ -8,8 +8,7 @@
 </p>
 
 <p align="center">
-  <img alt="Status: under development"
-    src="https://img.shields.io/badge/Status-Under%20Development-e67e22">
+  <img alt="Status" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fwww.5g-mag.com%2Fbadges%2Fstatus%2Frt-libflute.json">
   <a href="https://github.com/5G-MAG/rt-libflute/releases"><img alt="Version"
     src="https://img.shields.io/github/v/release/5G-MAG/rt-libflute?label=Version"></a>
   <a href="LICENSE"><img alt="License: 5G-MAG Public License v1.0"
@@ -28,7 +27,7 @@
 
 |  |  |
 |---|---|
-| **Part of** | [Content Delivery Protocols](https://www.5g-mag.com/reference-tools/content-delivery/), alongside [rt-cmmf-encoder](https://github.com/5G-MAG/rt-cmmf-encoder), [rt-mbms-client](https://github.com/5G-MAG/rt-mbms-client), [rt-media-origin](https://github.com/5G-MAG/rt-media-origin) |
+| **Part of** | [Content Delivery Protocols and Tools](https://www.5g-mag.com/reference-tools/content-delivery/), alongside [rt-cmmf-encoder](https://github.com/5G-MAG/rt-cmmf-encoder), [rt-media-android-application](https://github.com/5G-MAG/rt-media-android-application), [rt-media-origin](https://github.com/5G-MAG/rt-media-origin) |
 
 ## Introduction
 
