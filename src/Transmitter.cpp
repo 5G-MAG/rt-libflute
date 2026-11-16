@@ -759,6 +759,7 @@ auto Transmitter::seconds_since_epoch() -> uint64_t
 }
 
 auto Transmitter::send_fdt() -> void {
+  std::lock_guard<std::recursive_mutex> fdt_guard(_fdt_mutex);
   if (_fdt->file_entries().empty()) return;
 
   const uint32_t instance_id = _fdt->instance_id();
@@ -844,8 +845,11 @@ auto Transmitter::send(
         length);
   file->set_fec_redundancy_level(_fec_redundancy_level);
 
-  _fdt->add(file->meta());
-  send_fdt();
+  {
+    std::lock_guard<std::recursive_mutex> fdt_guard(_fdt_mutex);
+    _fdt->add(file->meta());
+    send_fdt();
+  }
   {
     std::lock_guard<std::mutex> guard(_files_mutex);
     _files.insert({toi, file});
@@ -899,7 +903,10 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
       // set_compression() zeroed its TOI for exactly this reason) -- the FDT entry for its
       // old TOI is otherwise never revisited once a new TOI is assigned below, and would sit
       // in the FDT forever, growing it by one stale entry per content change.
-      _fdt->remove(file_description->previous_toi());
+      {
+        std::lock_guard<std::recursive_mutex> fdt_guard(_fdt_mutex);
+        _fdt->remove(file_description->previous_toi());
+      }
       file_description->reset_previous_toi();
     }
     file_description->toi(_toi);
@@ -928,8 +935,11 @@ auto Transmitter::send(const std::shared_ptr<Transmitter::FileDescription> &file
   // repeating many objects would restart a multi-symbol FDT faster than it can finish sending,
   // and receivers would never assemble a complete instance. The FDT's own repeat timer
   // (fdt_send_tick) re-sends it regardless.
-  if (_fdt->add(file->meta())) {
-    send_fdt();
+  {
+    std::lock_guard<std::recursive_mutex> fdt_guard(_fdt_mutex);
+    if (_fdt->add(file->meta())) {
+      send_fdt();
+    }
   }
   {
     std::lock_guard<std::mutex> guard(_files_mutex);
@@ -958,8 +968,11 @@ auto Transmitter::withdraw_file(uint32_t toi) -> void
     std::lock_guard<std::mutex> guard(_files_mutex);
     _files.erase(toi);
   }
-  _fdt->remove(toi);
-  send_fdt();
+  {
+    std::lock_guard<std::recursive_mutex> fdt_guard(_fdt_mutex);
+    _fdt->remove(toi);
+    send_fdt();
+  }
 }
 
 auto Transmitter::file_transmitted(uint32_t toi) -> void
@@ -983,6 +996,7 @@ auto Transmitter::file_transmitted(uint32_t toi) -> void
        whose list carries the mbms2008:FullFDT attribute. Retaining entries needs no such
        signalling; it only stops the table forgetting objects that are still being sent. */
     if (!_retain_transmitted_in_fdt) {
+      std::lock_guard<std::recursive_mutex> fdt_guard(_fdt_mutex);
       _fdt->remove(toi);
       /* The table just changed, so publish the new one. Under retention it did not change: the
          entry is still there and still correct, and re-publishing would be actively harmful.
@@ -1173,7 +1187,10 @@ auto Transmitter::_complete_deactivation() -> void
 auto Transmitter::close_session() -> void
 {
   _session_closing = true;
-  _fdt->set_complete(true);
+  {
+    std::lock_guard<std::recursive_mutex> fdt_guard(_fdt_mutex);
+    _fdt->set_complete(true);
+  }
 
   /* Every packet from here on carries the flag, which is the whole signal while there is still
      something to send. With an empty queue there is nothing to attach it to, so the flag would

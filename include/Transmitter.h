@@ -789,6 +789,13 @@ namespace LibFlute {
       std::unique_ptr<FileDeliveryTable> _fdt;
       std::map<uint32_t, std::shared_ptr<File>> _files;
       std::mutex _files_mutex;
+      // Guards _fdt, _fdt_string_storage and _fdt_serialised_instance_id. The FDT is changed by the
+      // thread that calls send() and withdraw_file(), and by the io_context thread in
+      // file_transmitted() and fdt_send_tick(); an unguarded to_string() walked file entries that
+      // remove() was freeing. Recursive because send_fdt() is reached with the lock already held.
+      // Lock order: this before _files_mutex (send_fdt() takes _files_mutex while holding it); no
+      // code takes _files_mutex and then this one.
+      std::recursive_mutex _fdt_mutex;
       // Backing storage for the FDT's own File object (TOI 0): send_fdt()
       // builds this from a local std::string whose lifetime must match the
       // TOI-0 File entry in _files, not just the send_fdt() call that
