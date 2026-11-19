@@ -41,6 +41,18 @@ namespace LibFlute {
       };
 
      /**
+      *  The schemaVersion of the profiled FDT schema (TS 26.346 V19.3.0 clause L.6.1) and of the extended FDT schema
+      *  (clause 7.2.10.1): the highest version of each that this library parses, and the value the sender writes.
+      *
+      *  Clause L.6.3: "The BM-SC shall set the schemaVersion element to 3 in all instance documents that comply with
+      *  the FDT schema specified in clause 6.1." Clause 7.2.10.1: "In this version of the present document the network
+      *  shall set the content of the schemaVersion element, defined as a child of the FDT-Instance element, to the
+      *  value 5."
+      */
+      static constexpr unsigned PROFILED_SCHEMA_VERSION = 3;
+      static constexpr unsigned EXTENDED_SCHEMA_VERSION = 5;
+
+     /**
       *  Create an empty FDT
       *
       *  @param instance_id FDT instance ID to set
@@ -181,6 +193,20 @@ namespace LibFlute {
       };
 
      /**
+      *  The value of the schemaVersion element of the FDT Instance that was parsed, 0 when it has none.
+      */
+      unsigned schema_version() const { return _schema_version; }
+
+     /**
+      *  The version of the FDT schema that the instance was parsed with: "the schema that has the highest schema version
+      *  attribute value that is equal to or less than the value in the received schemaVersion element" (TS 26.346
+      *  V19.3.0 clause L.6.3 and clause 7.2.10.1). That is the received value, or the highest version this library
+      *  knows for the namespace when the received one is higher or there is none. 0 for a namespace that defines no
+      *  schema version.
+      */
+      unsigned effective_schema_version() const;
+
+     /**
       * Mark instance sent
       */
       void sent() { _instance_id_sent = _instance_id; };
@@ -226,6 +252,7 @@ namespace LibFlute {
          set_expires(). code-derived, no spec claim. */
       uint64_t _expires = 0;
       bool _complete = false;
+      unsigned _schema_version = 0;
 
       FdtNamespace _fdt_namespace;
   };

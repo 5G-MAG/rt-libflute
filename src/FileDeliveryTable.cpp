@@ -315,6 +315,13 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     }
   }
 
+  /* The schema version of the instance, a child element of FDT-Instance. */
+  if (auto sv = root_ns.findChildElement(fdt_instance, "schemaVersion", fdt_ns); sv != nullptr && sv->GetText() != nullptr) {
+    _schema_version = static_cast<unsigned>(strtoul(sv->GetText(), nullptr, 10));
+  }
+  spdlog::debug("FDT instance {}: schemaVersion {}, parsed with schema version {}", instance_id, _schema_version,
+                effective_schema_version());
+
   /* Content-Type and Content-Encoding are defined at both the FDT-Instance and the File level, and the value of a File
      element takes precedence over the one of the FDT-Instance.
 
@@ -674,6 +681,16 @@ auto LibFlute::FileDeliveryTable::remove(uint32_t toi) -> void
     }
   }
   if (_instance_id == _instance_id_sent) advance_instance_id();
+}
+
+auto LibFlute::FileDeliveryTable::effective_schema_version() const -> unsigned {
+  unsigned known = 0;
+  if (_fdt_namespace == FDT_NS_3GPP_CONSOLIDATED_V2) {
+    known = PROFILED_SCHEMA_VERSION;
+  } else if (_fdt_namespace == FDT_NS_DRAFT_2005) {
+    known = EXTENDED_SCHEMA_VERSION;
+  }
+  return (_schema_version != 0 && _schema_version < known) ? _schema_version : known;
 }
 
 auto LibFlute::FileDeliveryTable::to_string() const -> std::string {

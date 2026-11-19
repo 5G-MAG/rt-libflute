@@ -106,3 +106,57 @@ TEST(FileEtagTest, QualifiedAttributeOfTheExtendedSchemaIsStillRead)
     auto entry = only_entry(xml);
     EXPECT_EQ(entry.etag, "abc");
 }
+
+// Schema version, TS 26.346 V19.3.0 clause L.6.3 (profiled schema) and clause 7.2.10.1 (extended schema): the receiver
+// "shall use the schema that has the highest schema version attribute value that is equal to or less than the value in the
+// received schemaVersion element".
+namespace
+{
+    FileDeliveryTable parsed_with_schema_version(const std::string& fdt_namespace, const std::string& schema_version_element)
+    {
+        const std::string xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><FDT-Instance xmlns=\"" + fdt_namespace +
+                                "\" Expires=\"3900000000\">"
+                                "<File TOI=\"1\" Content-Location=\"http://example.invalid/a\" Content-Length=\"100\"/>" +
+                                schema_version_element + "</FDT-Instance>";
+        std::vector<char> buf(xml.begin(), xml.end());
+        return FileDeliveryTable(1, buf.data(), buf.size());
+    }
+    const std::string profiled_ns = "urn:3GPP:metadata:2022:FLUTE:FDT";
+    const std::string extended_ns = "urn:IETF:metadata:2005:FLUTE:FDT";
+} // namespace
+
+TEST(SchemaVersionTest, ReceivedVersionOfTheProfiledSchemaIsUsed)
+{
+    auto fdt = parsed_with_schema_version(profiled_ns, "<schemaVersion>3</schemaVersion>");
+    EXPECT_EQ(fdt.schema_version(), 3U);
+    EXPECT_EQ(fdt.effective_schema_version(), 3U);
+}
+
+TEST(SchemaVersionTest, AnOlderVersionIsParsedWithThatVersion)
+{
+    auto fdt = parsed_with_schema_version(profiled_ns, "<schemaVersion>2</schemaVersion>");
+    EXPECT_EQ(fdt.schema_version(), 2U);
+    EXPECT_EQ(fdt.effective_schema_version(), 2U);
+}
+
+TEST(SchemaVersionTest, ANewerVersionIsParsedWithTheHighestKnownOne)
+{
+    EXPECT_EQ(parsed_with_schema_version(profiled_ns, "<schemaVersion>9</schemaVersion>").effective_schema_version(),
+              FileDeliveryTable::PROFILED_SCHEMA_VERSION);
+    EXPECT_EQ(parsed_with_schema_version(extended_ns, "<schemaVersion>9</schemaVersion>").effective_schema_version(),
+              FileDeliveryTable::EXTENDED_SCHEMA_VERSION);
+}
+
+TEST(SchemaVersionTest, ExtendedSchemaVersionIsRead)
+{
+    auto fdt = parsed_with_schema_version(extended_ns, "<schemaVersion>5</schemaVersion>");
+    EXPECT_EQ(fdt.schema_version(), 5U);
+    EXPECT_EQ(fdt.effective_schema_version(), 5U);
+}
+
+TEST(SchemaVersionTest, NoVersionElementIsParsedWithTheHighestKnownVersion)
+{
+    auto fdt = parsed_with_schema_version(profiled_ns, "");
+    EXPECT_EQ(fdt.schema_version(), 0U);
+    EXPECT_EQ(fdt.effective_schema_version(), FileDeliveryTable::PROFILED_SCHEMA_VERSION);
+}
