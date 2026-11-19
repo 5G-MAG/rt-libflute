@@ -53,6 +53,17 @@ namespace LibFlute {
       typedef std::function<void(bool session_closed, bool object_closed, uint32_t toi)> close_notification_callback_t;
 
      /**
+      *  Definition of a callback invoked when the FDT Instance most recently received has reached its Expires time and
+      *  no newer FDT Instance has been received since, registered through ::register_fdt_expiry_callback.
+      *
+      *  The files still in ::file_list are left as they are, so the callback can look at what is incomplete.
+      *
+      *  @param fdt_instance_id The FDT Instance ID of the instance that expired
+      *  @param expires The Expires of that instance, in seconds since the NTP epoch
+      */
+      typedef std::function<void(uint32_t fdt_instance_id, uint64_t expires)> fdt_expiry_callback_t;
+
+     /**
       *  Definition of the caller-supplied hook that locates the ALC/LCT payload inside a
       *  tunnelled datagram.
       *
@@ -199,6 +210,17 @@ namespace LibFlute {
       */
       void register_close_notification_callback(close_notification_callback_t cb) { _close_cb = cb; };
 
+     /**
+      *  Register a callback for the expiry of the FDT Instance most recently received.
+      *
+      *  The callback runs on the io_context that the Receiver was given, when the Expires time of that instance has
+      *  passed and no newer instance has been received. A newer instance received before then replaces the wait. The
+      *  Receiver does not use the callback after ::stop.
+      *
+      *  @param cb Function to call when the instance has expired
+      */
+      void register_fdt_expiry_callback(fdt_expiry_callback_t cb) { _fdt_expiry_cb = cb; };
+
       void stop() { _running = false; }
     private:
 
@@ -215,6 +237,10 @@ namespace LibFlute {
       void handle_tunnel_receive_from(const boost::system::error_code& error,
           size_t bytes_recvd);
       void arm_tunnel_receive();
+      // Waits for the Expires of the FDT Instance just accepted; the caller holds _files_mutex. A wait is replaced by
+      // the next call, whether or not it has run.
+      void arm_fdt_expiry_timer(uint32_t fdt_instance_id, uint64_t expires);
+      void on_fdt_expiry_timer(uint64_t generation, uint32_t fdt_instance_id, uint64_t expires);
       boost::asio::ip::udp::socket _socket;
       boost::asio::ip::udp::endpoint _sender_endpoint;
 
@@ -261,6 +287,11 @@ namespace LibFlute {
 
       completion_callback_t _completion_cb = nullptr;
       close_notification_callback_t _close_cb = nullptr;
+      fdt_expiry_callback_t _fdt_expiry_cb = nullptr;
+      boost::asio::steady_timer _fdt_expiry_timer;
+      // Counts the waits for an FDT expiry, guarded by _files_mutex: a wait whose handler was already queued when a
+      // newer instance was accepted runs anyway, and finds its number out of date.
+      uint64_t _fdt_expiry_generation = 0;
 
       bool _running = true;
 

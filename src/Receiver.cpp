@@ -80,6 +80,7 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
     , _tsi(tsi)
     , _mcast_address(address)
     , _mcast_port(static_cast<unsigned short>(port))
+    , _fdt_expiry_timer(io_context)
 {
     // Restored alongside the ANY-bind/specific-interface-join fixes below:
     // an earlier version of those fixes made this whole constructor IPv4
@@ -256,6 +257,48 @@ auto LibFlute::Receiver::arm_tunnel_receive() -> void
         if (!*alive) return;
         handle_tunnel_receive_from(error, bytes_recvd);
       });
+}
+
+auto LibFlute::Receiver::arm_fdt_expiry_timer(uint32_t fdt_instance_id, uint64_t expires) -> void
+{
+  const uint64_t generation = ++_fdt_expiry_generation;
+  if (expires == 0) {
+    /* FileDeliveryTable::expired() takes 0 as "does not expire". */
+    _fdt_expiry_timer.cancel();
+    return;
+  }
+  /* The instance may be used through the second of its Expires (expired() is "now > Expires"), so the wait ends one
+     second after it. The wait is cut at one day and taken up again when it ends early: a wait taken from the sender's
+     value as it stands would overflow the clock arithmetic for a value that far ahead. */
+  constexpr uint64_t longest_wait = 24 * 3600;
+  const uint64_t now = ntp_seconds_now();
+  const uint64_t remaining = expires >= now ? expires - now + 1 : 0;
+  _fdt_expiry_timer.expires_after(std::chrono::seconds(std::min(remaining, longest_wait)));
+  auto alive = _alive;
+  _fdt_expiry_timer.async_wait(
+      [this, alive, generation, fdt_instance_id, expires](const boost::system::error_code& error) {
+        if (!*alive || error) return;
+        on_fdt_expiry_timer(generation, fdt_instance_id, expires);
+      });
+}
+
+auto LibFlute::Receiver::on_fdt_expiry_timer(uint64_t generation, uint32_t fdt_instance_id, uint64_t expires) -> void
+{
+  fdt_expiry_callback_t callback;
+  {
+    const std::lock_guard<std::mutex> lock(_files_mutex);
+    /* A newer instance was accepted after this wait was queued, or the receiver was stopped. */
+    if (generation != _fdt_expiry_generation || !_running) return;
+    if (ntp_seconds_now() <= expires) {
+      arm_fdt_expiry_timer(fdt_instance_id, expires);
+      return;
+    }
+    callback = _fdt_expiry_cb;
+  }
+  /* Outside the lock: the callback may call back into the Receiver. */
+  if (callback) {
+    callback(fdt_instance_id, expires);
+  }
 }
 
 auto LibFlute::Receiver::handle_tunnel_receive_from(const boost::system::error_code& error,
@@ -541,6 +584,7 @@ auto LibFlute::Receiver::process_alc_datagram(char* data, size_t bytes_recvd,
             if (alc.toi() == 0) { // parse complete FDT
               _fdt = std::make_unique<LibFlute::FileDeliveryTable>(
                   alc.fdt_instance_id(), _files[alc.toi()]->buffer(), _files[alc.toi()]->length());
+              arm_fdt_expiry_timer(_fdt->instance_id(), _fdt->expires());
 
               _files.erase(alc.toi());
               for (const auto& file_entry : _fdt->file_entries()) {
