@@ -455,8 +455,15 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
       }
     }
 
+    /* File-ETag is written in one of two ways. The profiled schema of TS 26.346 clause L.6.1 declares it on FileType
+       without a namespace (xs:attribute name="File-ETag"), so it is read as an attribute of the FDT namespace; the
+       extended schema of clause 7.2.10 imports it as mbms2012:File-ETag. Both are the same attribute, which "represents
+       the value of the entity tag as specified in section 8.8.3 of RFC 9110" (clause L.6.2, V19.3.0). */
     auto mbms2012_file_etag = "";
     val = file_ns.findAttribute(file, "File-ETag", mbms2012_ns);
+    if (val == nullptr) {
+      val = file_ns.findAttribute(file, "File-ETag", fdt_ns);
+    }
     if (val != nullptr) {
       mbms2012_file_etag = val->Value();
     }

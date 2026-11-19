@@ -84,3 +84,25 @@ TEST(FdtInstanceAttributeTest, ContentEncodingOfTheFileTakesPrecedence)
     auto entry = only_entry(fdt_xml("Content-Encoding=\"gzip\"", "Content-Encoding=\"deflate\" Transfer-Length=\"60\""));
     EXPECT_EQ(entry.content_encoding, "deflate");
 }
+
+// File-ETag, TS 26.346 V19.3.0 clause L.6.2: "The File-ETag represents the value of the entity tag as specified in section
+// 8.8.3 of RFC 9110". The profiled schema of clause L.6.1 declares it without a namespace; the extended schema of clause
+// 7.2.10 imports it as mbms2012:File-ETag.
+TEST(FileEtagTest, UnqualifiedAttributeOfTheProfiledSchemaIsRead)
+{
+    auto entry = only_entry(fdt_xml("", "File-ETag=\"v1\""));
+    EXPECT_EQ(entry.etag, "v1");
+}
+
+TEST(FileEtagTest, QualifiedAttributeOfTheExtendedSchemaIsStillRead)
+{
+    const std::string xml =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<FDT-Instance xmlns=\"urn:IETF:metadata:2005:FLUTE:FDT\" xmlns:mbms2012=\"urn:3GPP:metadata:2012:MBMS:FLUTE:FDT\" "
+        "Expires=\"3900000000\">"
+        "<File TOI=\"1\" Content-Location=\"http://example.invalid/a\" Content-Length=\"100\" "
+        "mbms2012:File-ETag=\"abc\"/>"
+        "<schemaVersion>5</schemaVersion></FDT-Instance>";
+    auto entry = only_entry(xml);
+    EXPECT_EQ(entry.etag, "abc");
+}
