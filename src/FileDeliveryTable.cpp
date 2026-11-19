@@ -865,17 +865,20 @@ auto LibFlute::FileDeliveryTable::to_string() const -> std::string {
      Keyed on the FDT namespace, because this belongs to the schema being emitted and is meaningless
      in a document that declares neither.
 
-     TS 26.346 V18.2.0 clause L.6.3, for the annex L.6.1 profiled schema: "The BM-SC shall set the
-     schemaVersion element to 2 in all instance documents"
+     TS 26.346 V19.3.0 clause L.6.3, for the annex L.6.1 profiled schema: "The BM-SC shall set the
+     schemaVersion element to 3 in all instance documents that comply with the FDT schema specified
+     in clause 6.1."
 
-     TS 26.346 V18.2.0 clause 7.2.10.1, for the extended schema of that clause: "In this version of
+     TS 26.346 V19.3.0 clause 7.2.10.1, for the extended schema of that clause: "In this version of
      the present document the network shall set the content of the schemaVersion element, defined as
-     a child of the FDT-Instance element, to the value 4."
+     a child of the FDT-Instance element, to the value 5."
+
+     (V18.2.0 said 2 and 4.)
 
      The delimiter element is deliberately not emitted: neither schema's sequence contains one. */
   if (_fdt_namespace == FDT_NS_3GPP_CONSOLIDATED_V2 || _fdt_namespace == FDT_NS_DRAFT_2005) {
     auto sv = doc.NewElement("schemaVersion");
-    sv->SetText(_fdt_namespace == FDT_NS_3GPP_CONSOLIDATED_V2 ? 2 : 4);
+    sv->SetText(_fdt_namespace == FDT_NS_3GPP_CONSOLIDATED_V2 ? PROFILED_SCHEMA_VERSION : EXTENDED_SCHEMA_VERSION);
     root->InsertEndChild(sv);
   }
 

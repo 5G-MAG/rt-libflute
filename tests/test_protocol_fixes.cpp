@@ -108,11 +108,11 @@ TEST(MbmsDownloadProfileTest, TransferLengthNotCarriedUnderMbmsDownload) {
 TEST(MbmsDownloadProfileTest, ProfileDecidesTheSchemaNotTheNamespaceArgument) {
   auto mbs = emit(FileDeliveryTable::FDT_NS_RFC3926, Profile::MBS);
   EXPECT_NE(mbs.find("urn:3GPP:metadata:2022:FLUTE:FDT"), std::string::npos) << mbs;
-  EXPECT_NE(mbs.find("<schemaVersion>2</schemaVersion>"), std::string::npos);
+  EXPECT_NE(mbs.find("<schemaVersion>3</schemaVersion>"), std::string::npos);
 
   auto mbms = emit(FileDeliveryTable::FDT_NS_RFC3926, Profile::MBMS::Download);
   EXPECT_NE(mbms.find("urn:IETF:metadata:2005:FLUTE:FDT"), std::string::npos) << mbms;
-  EXPECT_NE(mbms.find("<schemaVersion>4</schemaVersion>"), std::string::npos);
+  EXPECT_NE(mbms.find("<schemaVersion>5</schemaVersion>"), std::string::npos);
 }
 
 TEST(GeneralFluteTest, TransferLengthStillCarriedOutsideTheProfile) {
@@ -351,13 +351,13 @@ TEST(FluteVersionTest, VersionZeroIsRejected) {
   EXPECT_THROW(AlcPacket(p.data(), p.size()), std::runtime_error);
 }
 
-/* TS 26.346 V18.2.0 clause L.6.3 fixes schemaVersion at 2 for the profiled FDT schema, whose
+/* TS 26.346 V19.3.0 clause L.6.3 fixes schemaVersion at 3 for the profiled FDT schema, whose
    L.6.1 definition makes it a mandatory child element after the File elements. Keyed on the FDT
    namespace, not the profile: it is required by the schema being emitted. */
 
-TEST(ProfiledFdtSchemaTest, SchemaVersionTwoIsEmittedForTheProfiledSchema) {
+TEST(ProfiledFdtSchemaTest, SchemaVersionThreeIsEmittedForTheProfiledSchema) {
   auto out = emit(FileDeliveryTable::FDT_NS_3GPP_CONSOLIDATED_V2);
-  EXPECT_NE(out.find("<schemaVersion>2</schemaVersion>"), std::string::npos);
+  EXPECT_NE(out.find("<schemaVersion>3</schemaVersion>"), std::string::npos);
 }
 
 TEST(ProfiledFdtSchemaTest, SchemaVersionFollowsTheFileElements) {
@@ -376,13 +376,13 @@ TEST(ProfiledFdtSchemaTest, SchemaVersionNotEmittedForSchemasThatDoNotDefineIt) 
   EXPECT_EQ(emit(FileDeliveryTable::FDT_NS_NONE).find("schemaVersion"), std::string::npos);
 }
 
-/* TS 26.346 V18.2.0 clause 7.2.10.1: "In this version of the present document the network shall set
+/* TS 26.346 V19.3.0 clause 7.2.10.1: "In this version of the present document the network shall set
    the content of the schemaVersion element, defined as a child of the FDT-Instance element, to the
-   value 4." That is the extended schema of that clause, which is the one MbmsDownload emits, and it
-   takes a different value from the annex L.6.1 profiled schema's 2. */
-TEST(ProfiledFdtSchemaTest, SchemaVersionFourForTheExtendedSchema) {
+   value 5." That is the extended schema of that clause, which is the one MbmsDownload emits, and it
+   takes a different value from the annex L.6.1 profiled schema's 3. */
+TEST(ProfiledFdtSchemaTest, SchemaVersionFiveForTheExtendedSchema) {
   auto xml = emit(FileDeliveryTable::FDT_NS_DRAFT_2005);
-  EXPECT_NE(xml.find("<schemaVersion>4</schemaVersion>"), std::string::npos) << xml;
+  EXPECT_NE(xml.find("<schemaVersion>5</schemaVersion>"), std::string::npos) << xml;
 }
 
 TEST(ProfiledFdtSchemaTest, DelimiterIsNotEmitted) {
