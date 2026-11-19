@@ -549,7 +549,15 @@ auto File::create_blocks(bool have_source_data) -> void
 
 auto File::get_next_symbols(size_t max_size) -> std::vector<EncodingSymbol> 
 {
-  int nof_symbols = std::ceil((float)(max_size - 4) / (float)_meta.fec_oti.encoding_symbol_length);
+  /* How many whole encoding symbols fit in the room a packet has for them. `max_size` is that room: the
+     Transmitter's _max_payload already leaves out the 4 bytes of the FEC Payload ID (SBN and ESI), which
+     AlcPacket adds back on top and EncodingSymbol::to_payload takes off again. Rounding this up, as it
+     was, sent as many symbols as the symbol length "almost" allowed: with the object's own symbol length
+     below the packet's (Raptor shortens it for a small object so that the source block has the K it
+     needs) the packet could not hold the last symbol, to_payload dropped it with a warning, and it had
+     already been marked queued, so it was never sent. A packet carries at least one symbol. */
+  const size_t symbol_length = _meta.fec_oti.encoding_symbol_length;
+  int nof_symbols = symbol_length > 0 && max_size >= symbol_length ? (int)(max_size / symbol_length) : 1;
   auto cnt = 0;
   std::vector<EncodingSymbol> symbols;
   

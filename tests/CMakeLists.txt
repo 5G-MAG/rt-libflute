@@ -52,6 +52,7 @@ add_flute_test_executable(flute_compression_tests test_compression.cpp "compress
 add_flute_test_executable(flute_raptor_codec_tests test_raptor_codec.cpp "raptor_codec:")
 add_flute_test_executable(flute_raptor_tests test_raptor_fec.cpp "raptor:")
 add_flute_test_executable(flute_raptor_e2e_tests test_raptor_e2e.cpp "raptor_e2e:")
+add_flute_test_executable(flute_raptor_small_objects_tests test_raptor_small_objects.cpp "raptor_small_objects:")
 add_flute_test_executable(flute_fdt_carousel_tests test_fdt_carousel.cpp "fdt_carousel:")
 add_flute_test_executable(flute_fdt_order_tests test_fdt_order.cpp "fdt_order:")
 add_flute_test_executable(flute_fdt_attribute_tests test_fdt_attributes.cpp "fdt_attributes:")
