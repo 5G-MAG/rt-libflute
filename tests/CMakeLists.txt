@@ -55,6 +55,7 @@ add_flute_test_executable(flute_raptor_e2e_tests test_raptor_e2e.cpp "raptor_e2e
 add_flute_test_executable(flute_fdt_carousel_tests test_fdt_carousel.cpp "fdt_carousel:")
 add_flute_test_executable(flute_fdt_order_tests test_fdt_order.cpp "fdt_order:")
 add_flute_test_executable(flute_fdt_attribute_tests test_fdt_attributes.cpp "fdt_attributes:")
+add_flute_test_executable(flute_receiver_checksum_tests test_receiver_checksum.cpp "receiver_checksum:")
 add_flute_test_executable(flute_receiver_tunnel_tests test_receiver_tunnel.cpp "e2e:receiver_tunnel:")
 add_flute_test_executable(flute_ipsec_tests test_ipsec.cpp "ipsec:")
 add_flute_test_executable(flute_example_tests test_examples.cpp "examples:")

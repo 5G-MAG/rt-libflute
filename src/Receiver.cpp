@@ -505,6 +505,15 @@ auto LibFlute::Receiver::process_alc_datagram(char* data, size_t bytes_recvd,
 
             file->decode();
 
+            /* An object whose decoded content fails its Content-MD5 is reset to incomplete by decode() and is not handed
+               on as it is. The object is received again, from a File made afresh from its FDT entry: the one at hand
+               holds the decoded content in the buffer that the symbols are written to. */
+            if (!file->complete()) {
+              spdlog::warn("File with TOI {} fails its Content-MD5 after decoding, receiving it again", alc.toi());
+              _files[alc.toi()] = std::make_shared<LibFlute::File>(file->meta());
+              return;
+            }
+
             spdlog::debug("File with TOI {} completed", alc.toi());
             if (alc.toi() != 0 && _completion_cb) {
               _completion_cb(_files[alc.toi()]);
