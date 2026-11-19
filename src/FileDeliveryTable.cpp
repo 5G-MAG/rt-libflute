@@ -315,6 +315,25 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     }
   }
 
+  /* Content-Type and Content-Encoding are defined at both the FDT-Instance and the File level, and the value of a File
+     element takes precedence over the one of the FDT-Instance.
+
+     TS 26.346 V19.3.0 clause L.4.2: "The following FDT attributes, defined at both the FDT-Instance and File levels,
+     shall be carried in the FDT sent by the FLUTE sender, under either the File-Instance or File element, and shall be
+     supported by the FLUTE receiver:" (Content-Type first), and the same for Content-Encoding set to 'gzip', which
+     "may be carried". */
+  std::string instance_content_type;
+  val = root_ns.findAttribute(fdt_instance, "Content-Type", fdt_ns);
+  if (val != nullptr) {
+    instance_content_type = val->Value();
+  }
+
+  std::string instance_content_encoding;
+  val = root_ns.findAttribute(fdt_instance, "Content-Encoding", fdt_ns);
+  if (val != nullptr) {
+    instance_content_encoding = val->Value();
+  }
+
   for (auto file = root_ns.findChildElement(fdt_instance, "File", fdt_ns);
       file != nullptr; file = root_ns.findSiblingElement(file, "File", fdt_ns)) {
 
@@ -340,7 +359,7 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
     }
 
     /* Parsed before the transfer length below, which depends on whether an encoding is applied. */
-    auto content_encoding = std::string();
+    auto content_encoding = instance_content_encoding;
     val = file_ns.findAttribute(file, "Content-Encoding", fdt_ns);
     if (val != nullptr) {
       content_encoding = val->Value();
@@ -377,7 +396,7 @@ LibFlute::FileDeliveryTable::FileDeliveryTable(uint32_t instance_id, char* buffe
       content_md5 = val->Value();
     }
 
-    auto content_type = std::string();
+    auto content_type = instance_content_type;
     val = file_ns.findAttribute(file, "Content-Type", fdt_ns);
     if (val != nullptr) {
       content_type = val->Value();
