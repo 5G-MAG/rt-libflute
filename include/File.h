@@ -119,6 +119,14 @@ namespace LibFlute {
       const LibFlute::FileDeliveryTable::FileEntry& meta() const { return _meta; };
 
      /**
+      *  The time, in NTP-epoch seconds, after which the FDT Instance that carried the entry this File was made from may no
+      *  longer be used to interpret its packets: the Expires of that FDT Instance. 0 when the File was not made from an
+      *  FDT entry (it was started from a packet's own EXT_FTI).
+      */
+      uint64_t fdt_expiry() const { return _fdt_expiry; };
+      void set_fdt_expiry(uint64_t expiry) { _fdt_expiry = expiry; };
+
+     /**
       *  Fill in the FDT-derived fields (content_location, content_type, ...) once the FDT
       *  entry for this TOI becomes available. Used when reception started from a packet's own
       *  EXT_FTI before the describing FDT arrived, so the in-progress reception isn't discarded
@@ -328,6 +336,7 @@ namespace LibFlute {
       bool _been_decoded = false;
 
       LibFlute::FileDeliveryTable::FileEntry _meta;
+      uint64_t _fdt_expiry = 0;
       unsigned long _received_at;
       unsigned _access_count = 0;
 

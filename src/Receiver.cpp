@@ -428,6 +428,24 @@ auto LibFlute::Receiver::process_alc_datagram(char* data, size_t bytes_recvd,
           _fdt.reset();
         }
 
+        /* A File made from an FDT entry is not interpreted with it beyond the expiry of the FDT Instance that carried the
+           entry.
+           TS 26.346 V19.3.0 clause 7.2.9: "For MBMS operation, the UE shall not use a received FDT Instance to interpret
+           packets received beyond the expiration time of the FDT Instance." The File is dropped, as the FDT Instance is
+           above; the object is received again when a valid FDT Instance describes it.
+           The Expires attribute of the File element is not applied here: TS 26.346 V19.3.0 no longer defines it in the
+           profiled schema or says that it takes precedence, while TS 26.517 V19.3.0 clause 6.2.3.5 still requires it
+           (5G-MAG/Standards#238, open). */
+        if (alc.toi() != 0) {
+          if (auto held = _files.find(alc.toi());
+              held != _files.end() && held->second->fdt_expiry() != 0 && ntp_seconds_now() > held->second->fdt_expiry()) {
+            spdlog::debug("Discarding the File with TOI {}, its FDT entry expired at {}", alc.toi(),
+                          held->second->fdt_expiry());
+            _files.erase(held);
+            return;
+          }
+        }
+
         if (alc.toi() == 0 && (!_fdt || _fdt->instance_id() != alc.fdt_instance_id())) {
           // (Re)start reception of the FDT (TOI 0) for THIS instance. The FDT is
           // a FLUTE object reassembled from its symbols like any file, but unlike
@@ -535,6 +553,7 @@ auto LibFlute::Receiver::process_alc_datagram(char* data, size_t bytes_recvd,
                   // in-progress transfer, not a stale one. Adopt the FDT's metadata in place
                   // rather than discarding and restarting it.
                   existing_file->second->adopt_fdt_metadata(file_entry);
+                  existing_file->second->set_fdt_expiry(_fdt->expires());
                 } else if (existing_file != _files.end() &&
                     existing_file->second->meta().content_location != file_entry.content_location) {
                   // TOI numbers get reused across FDT instances (the live window
@@ -568,7 +587,9 @@ auto LibFlute::Receiver::process_alc_datagram(char* data, size_t bytes_recvd,
                   }
                   spdlog::debug("Starting reception for file with TOI {}: {} ({})", file_entry.toi,
                       file_entry.content_location, file_entry.content_type);
-                  _files.emplace(file_entry.toi, std::make_shared<LibFlute::File>(file_entry));
+                  auto started = std::make_shared<LibFlute::File>(file_entry);
+                  started->set_fdt_expiry(_fdt->expires());
+                  _files.emplace(file_entry.toi, std::move(started));
                 }
               }
             }
