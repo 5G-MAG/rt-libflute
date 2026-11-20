@@ -19,10 +19,13 @@
 
 namespace LibFlute {
 
-/// Shared shape of a per-source-block FEC codec, implemented by
-/// Raptor::RaptorCodec (RFC 5053). Lets File hold this behind a polymorphic
-/// interface rather than a Raptor-specific one directly, so a future scheme
-/// can slot in alongside it without changing File's own bookkeeping.
+/// Shared shape of a per-source-block FEC codec, implemented by both
+/// Raptor::RaptorCodec (RFC 5053) and RaptorQ::RaptorQCodec (RFC 6330).
+/// Lets File hold one polymorphic codec per source block instead of
+/// duplicating its Raptor-family handling once per scheme -- the two
+/// schemes' internal maths are quite different (GF(2) vs GF(256), three-
+/// vs six-element tuples, no K->K' padding step vs one), but from File's
+/// point of view they're both "feed it symbols, ask if it can decode yet".
 class FecBlockCodec {
   public:
     virtual ~FecBlockCodec() = default;

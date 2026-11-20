@@ -594,6 +594,14 @@ TEST(FileRaptorSmallObjectTest, RaptorLeavesTheSymbolAloneWhenTheObjectAlreadyRe
   EXPECT_EQ(round_trip(FecScheme::Raptor, 20000, 256), 256u);
 }
 
+TEST(FileRaptorSmallObjectTest, RaptorQKeepsTheSessionSymbolBecauseItPadsInstead) {
+  // The shortening on the Raptor branch is Raptor-only, and this is the branch where that can be
+  // asserted. RaptorQ imposes no equivalent floor, so shortening its symbol would be a change made
+  // for no reason. `code-derived, no spec claim`: this pins the observable behaviour rather than
+  // restating what RFC 6330 requires, which was not opened for this.
+  EXPECT_EQ(round_trip(FecScheme::RaptorQ, 600, 1024), 1024u);
+}
+
 TEST(FileRaptorSmallObjectTest, RaptorEncodesAnObjectOfExactlyFourBytes) {
   EXPECT_GT(round_trip(FecScheme::Raptor, 4, 1024), 0u);
 }

@@ -118,7 +118,7 @@ TEST(GeneralFluteTest, TransferLengthStillCarriedOutsideTheProfile) {
 }
 
 /* The delimitation itself. A session is bound by the general FLUTE documents always, and by
-   TS 26.346 annex L.4 only under the 3GPP profile, which is the default. */
+   TS 26.346 annex L.4 only under a 3GPP profile, which the caller selects. */
 
 /* A caller who selects no profile gets plain FLUTE, not a 3GPP one. The 3GPP profiles refuse a
    session outright in several cases (TSI width, FEC scheme, content encoding), so imposing one on a

@@ -13,18 +13,18 @@
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
-// Real Transmitter -> UDP multicast socket -> real Receiver, with Raptor
-// actually enabled -- unlike test_raptor_fec.cpp, which exercises the codec
-// and File/EncodingSymbol entirely in-process, this is the one thing that
-// was *not* covered anywhere else: real wire serialization of Raptor
-// encoding symbols over an actual socket, real FileDeliveryTable XML
-// generation/parsing carrying the FEC-OTI-Number-Of-Source-Blocks/Sub-
-// Blocks/Symbol-Alignment-Parameter attributes (the codec-level and
-// File-level tests never serialize to XML at all -- they pass a FileEntry
-// struct directly from encoder to decoder in memory), and real repair-symbol
-// generation/consumption through Transmitter/Receiver's actual send/receive
-// loops, not a hand-rolled loop in a test. Mirrors test_end_to_end.cpp's
-// existing pattern.
+// Real Transmitter -> UDP multicast socket -> real Receiver, with Raptor/
+// RaptorQ actually enabled -- unlike test_raptor_fec.cpp/test_raptorq_fec.cpp,
+// which exercise the codecs and File/EncodingSymbol entirely in-process, this
+// is the one thing that was *not* covered anywhere else: real wire
+// serialization of Raptor/RaptorQ encoding symbols over an actual socket,
+// real FileDeliveryTable XML generation/parsing carrying the FEC-OTI-Number-
+// Of-Source-Blocks/Sub-Blocks/Symbol-Alignment-Parameter attributes (the
+// codec-level and File-level tests never serialize to XML at all -- they
+// pass a FileEntry struct directly from encoder to decoder in memory), and
+// real repair-symbol generation/consumption through Transmitter/Receiver's
+// actual send/receive loops, not a hand-rolled loop in a test. Mirrors
+// test_end_to_end.cpp's existing pattern.
 #include <gtest/gtest.h>
 
 #include <boost/asio.hpp>
@@ -53,9 +53,14 @@ std::shared_ptr<LibFlute::File> run_transfer(
   boost::asio::io_context transmitter_io;
 
   LibFlute::Receiver receiver("0.0.0.0", mcast_addr, port, tsi, receiver_io);
+  /* General FLUTE, not the MBMS Download Profile. RaptorQ is not among the schemes TS 26.346
+     clause L.4.7 admits, so a RaptorQ session is by definition a general-FLUTE one and the profile
+     refuses it at construction. Raptor would be accepted either way; both run here under the same
+     profile so the two cases stay comparable. */
   LibFlute::Transmitter transmitter(
       mcast_addr, port, tsi, 1400, 0, transmitter_io, std::nullopt,
-      LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005, true, std::nullopt, fec_oti);
+      LibFlute::FileDeliveryTable::FDT_NS_DRAFT_2005, true, std::nullopt, fec_oti,
+      LibFlute::Profile::Unprofiled);
 
   auto file_description = std::make_shared<LibFlute::Transmitter::FileDescription>(
       "e2e/payload.bin", expected_payload.c_str(), expected_payload.size());
@@ -122,6 +127,18 @@ TEST(RaptorE2ETest, RealTransmitterToReceiverOverMulticast) {
   ASSERT_NE(received, nullptr);
   EXPECT_EQ(received->meta().fec_oti.encoding_id, LibFlute::FecScheme::Raptor);
   EXPECT_GT(received->meta().fec_oti.nof_source_blocks, 0u); // survived real FDT XML round-trip
+  ASSERT_EQ(received->length(), payload.size());
+  EXPECT_EQ(std::string(received->buffer(), received->length()), payload);
+}
+
+TEST(RaptorQE2ETest, RealTransmitterToReceiverOverMulticast) {
+  std::string payload = make_payload(30000, 43);
+  LibFlute::FecOti fec_oti{.encoding_id = LibFlute::FecScheme::RaptorQ, .max_source_block_length = 100};
+
+  auto received = run_transfer("239.255.0.3", 18093, 4244, fec_oti, payload);
+  ASSERT_NE(received, nullptr);
+  EXPECT_EQ(received->meta().fec_oti.encoding_id, LibFlute::FecScheme::RaptorQ);
+  EXPECT_GT(received->meta().fec_oti.nof_source_blocks, 0u);
   ASSERT_EQ(received->length(), payload.size());
   EXPECT_EQ(std::string(received->buffer(), received->length()), payload);
 }
