@@ -39,8 +39,11 @@ function(add_flute_test_executable target_name test_source test_prefix)
 
   target_include_directories(${target_name} PRIVATE ${PROJECT_SOURCE_DIR}/include)
 
+  # The tests bind fixed UDP ports and join multicast groups on the loopback interface, so two of them
+  # running at the same time (ctest -j) fail on each other; the lock makes ctest run them one at a time.
   gtest_discover_tests(${target_name}
           TEST_PREFIX ${test_prefix}
+          PROPERTIES RESOURCE_LOCK flute_udp_ports
   )
 endfunction()
 
